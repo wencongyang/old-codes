@@ -275,6 +275,45 @@ xen_swiotlb_free_coherent(struct device *hwdev, size_t size, void *vaddr,
 }
 EXPORT_SYMBOL_GPL(xen_swiotlb_free_coherent);
 
+static bool
+check_contiguous_region(unsigned long vstart, unsigned long order)
+{
+	dma_addr_t prev_ma = xen_virt_to_bus((void *)vstart);
+	dma_addr_t next_ma;
+	unsigned long i;
+
+	for (i = 1; i < (1UL << order); i++) {
+		next_ma = xen_virt_to_bus((void *)(vstart + i * PAGE_SIZE));
+		if (next_ma != prev_ma + PAGE_SIZE)
+			return false;
+		prev_ma = next_ma;
+	}
+	return true;
+}
+
+static bool
+xen_swiotlb_check_exchange_memory(phys_addr_t paddr, unsigned int length)
+{
+	if (range_straddles_page_boundary(paddr, length)) {
+		unsigned long vstart = (unsigned long)__va(paddr & PAGE_MASK);
+		int order = get_order(length + (paddr & ~PAGE_MASK));
+		if (!check_contiguous_region(vstart, order)) {
+			unsigned long buf;
+			buf = __get_free_pages(GFP_KERNEL, order);
+			memcpy((void *)buf, (void *)vstart,
+					PAGE_SIZE * (1 << order));
+			if (xen_create_contiguous_region(vstart, order,
+						fls64(paddr))) {
+				free_pages(buf, order);
+				return false;
+			}
+			memcpy((void *)vstart, (void *)buf,
+					PAGE_SIZE * (1 << order));
+			free_pages(buf, order);
+		}
+	}
+	return true;
+}
 
 /*
  * Map a single buffer of the indicated size for DMA in streaming mode.  The
@@ -289,15 +328,26 @@ dma_addr_t xen_swiotlb_map_page(struct device *dev, struct page *page,
 				struct dma_attrs *attrs)
 {
 	phys_addr_t phys = page_to_phys(page) + offset;
-	dma_addr_t dev_addr = xen_phys_to_bus(phys);
+	dma_addr_t dev_addr;
 	void *map;
 
 	BUG_ON(dir == DMA_NONE);
+
+	/*
+	 * While mapping a buffer, checking to cross page DMA buffer
+	 * is also needed. If the guest DMA buffer crosses page
+	 * boundary, Xen should exchange contiguous memory for it.
+	 * Besides, it is needed to backup the original page contents
+	 * and copy it back after memory exchange is done.
+	 */
+	if (!xen_swiotlb_check_exchange_memory(phys, size))
+		return DMA_ERROR_CODE;
 	/*
 	 * If the address happens to be in the device's DMA window,
 	 * we can safely return the device addr and not worry about bounce
 	 * buffering it.
 	 */
+	dev_addr = xen_phys_to_bus(phys);
 	if (dma_capable(dev, dev_addr, size) &&
 	    !range_straddles_page_boundary(phys, size) && !swiotlb_force)
 		return dev_addr;
@@ -439,7 +489,19 @@ xen_swiotlb_map_sg_attrs(struct device *hwdev, struct scatterlist *sgl,
 
 	for_each_sg(sgl, sg, nelems, i) {
 		phys_addr_t paddr = sg_phys(sg);
-		dma_addr_t dev_addr = xen_phys_to_bus(paddr);
+		dma_addr_t dev_addr;
+
+		/*
+		 * While mapping a buffer, checking to cross page DMA buffer
+		 * is also needed. If the guest DMA buffer crosses page
+		 * boundary, Xen should exchange contiguous memory for it.
+		 * Besides, it is needed to backup the original page contents
+		 * and copy it back after memory exchange is done.
+		 */
+		if (!xen_swiotlb_check_exchange_memory(paddr, sg->length))
+			return 0;
+
+		dev_addr = xen_phys_to_bus(paddr);
 
 		if (swiotlb_force ||
 		    !dma_capable(hwdev, dev_addr, sg->length) ||
