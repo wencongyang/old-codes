@@ -144,7 +144,7 @@ static void __br_forward(const struct net_bridge_port *to, struct sk_buff *skb)
 	if (is_block)
 		return;
 
-	while ( (skb_block == dequeue()) ) {
+	while ( (skb_block = dequeue()) ) {
 		if (skb_warn_if_lro(skb_block)) {
 			kfree_skb(skb_block);
 			continue;
