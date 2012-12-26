@@ -395,7 +395,8 @@ gopts.var('vfb', val="vnc=1,sdl=1,vncunused=1,vncdisplay=N,vnclisten=ADDR,displa
           Monitor adds a backend for the stubdom monitor.""")
 
 gopts.var('vif', val="type=TYPE,mac=MAC,bridge=BRIDGE,ip=IPADDR,script=SCRIPT," + \
-          "backend=DOM,vifname=NAME,rate=RATE,model=MODEL,accel=ACCEL",
+          "backend=DOM,vifname=NAME,rate=RATE,model=MODEL,accel=ACCEL," + \
+          "colo_mode=COLO_MODE",
           fn=append_value, default=[],
           use="""Add a network interface with the given MAC address and bridge.
           The vif is configured by calling the given configuration script.
@@ -411,6 +412,7 @@ gopts.var('vif', val="type=TYPE,mac=MAC,bridge=BRIDGE,ip=IPADDR,script=SCRIPT," 
           If model is not specified the default model is used.
           If accel is not specified an accelerator plugin module is not used.
           This option may be repeated to add more than one vif.
+          If colo_mode is specified, tcp packet will be fixed for colo.
           Specifying vifs will increase the number of interfaces as needed.""")
 
 gopts.var('vif2', val="front_mac=MAC,back_mac=MAC,backend=DOM,pdev=PDEV,max_bypasses=N,bridge=BRIDGE,filter_mac=<0|1>,front_filter_mac=<0|1>",
@@ -1049,7 +1051,7 @@ def configure_vifs(config_devs, vals):
         def f(k):
             if k not in ['backend', 'bridge', 'ip', 'mac', 'script', 'type',
                          'vifname', 'rate', 'model', 'accel',
-                         'policy', 'label']:
+                         'policy', 'label', 'colo_mode']:
                 err('Invalid vif option: ' + k)
 
             config_vif.append([k, d[k]])
