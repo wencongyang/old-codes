@@ -1395,6 +1395,31 @@ static unsigned xen_netbk_tx_build_gops(struct xen_netbk *netbk)
 	return gop - netbk->tx_copy_ops;
 }
 
+static void colo_fix_tcp_packet(struct sk_buff *skb)
+{
+	struct iphdr *iph = (void *)skb->data;
+	struct tcphdr *tcph;
+	uint16_t window, new_window;
+	uint16_t check, delta;
+
+	if (iph->protocol != IPPROTO_TCP)
+		/* not tcp packet, do nothing */
+		return;
+
+	tcph = (void *)((char *)iph + iph->ihl * 4);
+	window = ntohs(tcph->window);
+	if (window >=0x100)
+		new_window = window & 0x100;
+	else
+		new_window = 1 << (fls(window) - 1);
+
+	if (unlikely(new_window < sizeof(struct tcphdr) + MAX_TCP_OPTION_SPACE))
+		return;
+	delta = window - new_window;
+	tcph->window = htons(new_window);
+	tcph->check = htons(ntohs(tcph->check) + delta);
+}
+
 static void xen_netbk_tx_submit(struct xen_netbk *netbk)
 {
 	struct gnttab_copy *gop = netbk->tx_copy_ops;
@@ -1450,6 +1475,9 @@ static void xen_netbk_tx_submit(struct xen_netbk *netbk)
 
 		skb->dev      = vif->dev;
 		skb->protocol = eth_type_trans(skb, skb->dev);
+
+		if (vif->colo_mode && skb->protocol == htons(ETH_P_IP))
+			colo_fix_tcp_packet(skb);
 
 		if (checksum_setup(vif, skb)) {
 			netdev_dbg(vif->dev,
