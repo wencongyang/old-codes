@@ -197,6 +197,7 @@ static void backend_create_xenvif(struct backend_info *be)
 {
 	int err;
 	long handle;
+	int colo_mode;
 	struct xenbus_device *dev = be->dev;
 
 	if (be->vif != NULL)
@@ -208,6 +209,11 @@ static void backend_create_xenvif(struct backend_info *be)
 		return;
 	}
 
+	err = xenbus_scanf(XBT_NIL, dev->nodename, "colo_mode", "%i",
+			   &colo_mode);
+	if (err != 1)
+		colo_mode = 0;
+
 	be->vif = xenvif_alloc(&dev->dev, dev->otherend_id, handle);
 	if (IS_ERR(be->vif)) {
 		err = PTR_ERR(be->vif);
@@ -215,6 +221,7 @@ static void backend_create_xenvif(struct backend_info *be)
 		xenbus_dev_fatal(dev, err, "creating interface");
 		return;
 	}
+	be->vif->colo_mode = !!colo_mode;
 
 	kobject_uevent(&dev->dev.kobj, KOBJ_ONLINE);
 }

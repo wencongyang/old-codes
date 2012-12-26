@@ -76,6 +76,7 @@ struct xenvif {
 
 	/* Internal feature information. */
 	u8 can_queue:1;	    /* can queue packets for receiver? */
+	u8 colo_mode:1;	    /* fix tcp packet for colo? */
 
 	/*
 	 * Allow xenvif_start_xmit() to peek ahead in the rx request
