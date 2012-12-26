@@ -94,6 +94,11 @@ def parseRate(ratestr):
     return "%lu,%lu" % (bytes_per_interval, interval_usecs)
 
 
+def parseColoMode(colo_mode):
+    if colo_mode == '1' or colo_mode == 'on':
+        return '1'
+    return '0'
+
 class NetifController(DevController):
     """Network interface controller. Handles all network devices for a domain.
     """
@@ -115,6 +120,7 @@ class NetifController(DevController):
         model   = config.get('model')
         accel   = config.get('accel')
         sec_lab = config.get('security_label')
+        colo_mode=config.get('colo_mode')
 
         if not mac:
             raise VmError("MAC address not specified or generated.")
@@ -141,6 +147,8 @@ class NetifController(DevController):
             back['accel'] = accel
         if sec_lab:
             back['security_label'] = sec_lab
+        if colo_mode:
+            back['colo_mode'] = parseColoMode(colo_mode)
 
         back['handle'] = "%i" % devid
         back['script'] = os.path.join(xoptions.network_script_dir, script)
@@ -187,7 +195,7 @@ class NetifController(DevController):
 
         for x in ( 'script', 'ip', 'bridge', 'mac',
                    'type', 'vifname', 'rate', 'uuid', 'model', 'accel',
-                   'security_label'):
+                   'security_label', 'colo_mode'):
             if transaction is None:
                 y = self.readBackend(devid, x)
             else:
