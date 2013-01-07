@@ -781,6 +781,10 @@ void xen_netbk_schedule_xenvif(struct xenvif *vif)
 	unsigned long flags;
 	struct xen_netbk *netbk = vif->netbk;
 
+	if (unlikely(!netbk))
+		/* vif is disconnected */
+		return;
+
 	if (__on_net_schedule_list(vif))
 		goto kick;
 

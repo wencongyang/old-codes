@@ -391,6 +391,10 @@ void xenvif_disconnect_suspend(struct xenvif *vif)
 		xenvif_put(vif);
 	}
 
+	atomic_dec(&vif->refcnt);
+	wait_event(vif->waiting_to_free, atomic_read(&vif->refcnt) == 0);
+	atomic_inc(&vif->refcnt);
+
 	if (vif->irq) {
 		unbind_from_irqhandler(vif->irq, vif);
 		vif->irq = 0;
