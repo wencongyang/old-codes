@@ -860,9 +860,31 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
  * number of good random numbers, suitable for seeding TCP sequence
  * numbers, etc.
  */
+
+#define HA_RANDOM
+
+unsigned long count = 0x1;
 void get_random_bytes(void *buf, int nbytes)
 {
+#ifndef HA_RANDOM
 	extract_entropy(&nonblocking_pool, buf, nbytes, 0, 0);
+#else
+	int i=0;
+	char *_b = buf;
+	unsigned long _c = count++;
+	for (i = 0; i < nbytes; i++)
+	{
+		if (i < (sizeof(unsigned int)/sizeof(char)))
+		{
+			*((char*)_b) = ( _c  & 0xff);
+		}
+		else
+			*((char *)_b) = 0;
+		_b++;
+		_c = (_c >> 8);
+	}
+//	printk("get random bytes count %lx\n", count);
+#endif
 }
 
 EXPORT_SYMBOL(get_random_bytes);
@@ -1385,7 +1407,8 @@ static __u32 twothirdsMD4Transform (__u32 const buf[4], __u32 const in[12])
 #undef K3
 
 /* This should not be decreased so low that ISNs wrap too fast. */
-#define REKEY_INTERVAL (300 * HZ)
+//#define REKEY_INTERVAL (300 * HZ)
+#define REKEY_INTERVAL (30000 * HZ)
 /*
  * Bit layout of the tcp sequence numbers (before adding current time):
  * bit 24-31: increased after every key exchange
@@ -1413,7 +1436,7 @@ static __u32 twothirdsMD4Transform (__u32 const buf[4], __u32 const in[12])
 static struct keydata {
 	__u32 count; /* already shifted to the final position */
 	__u32 secret[12];
-} ____cacheline_aligned ip_keydata[2];
+} ____cacheline_aligned ip_keydata[2], hack_keydata;
 
 static unsigned int ip_cnt;
 
@@ -1481,7 +1504,7 @@ __u32 secure_tcpv6_sequence_number(__u32 *saddr, __u32 *daddr,
 	seq += keyptr->count;
 
 	do_gettimeofday(&tv);
-	seq += tv.tv_usec + tv.tv_sec * 1000000;
+	//seq += tv.tv_usec + tv.tv_sec * 1000000;
 
 	return seq;
 }
@@ -1533,7 +1556,7 @@ __u32 secure_tcp_sequence_number(__u32 saddr, __u32 daddr,
 	hash[3]=keyptr->secret[11];
 
 	seq = half_md4_transform(hash, keyptr->secret) & HASH_MASK;
-	seq += keyptr->count;
+	//seq += keyptr->count;
 	/*
 	 *	As close as possible to RFC 793, which
 	 *	suggests using a 250 kHz clock.
@@ -1543,7 +1566,7 @@ __u32 secure_tcp_sequence_number(__u32 saddr, __u32 daddr,
 	 *	(Networks are faster now - should this be increased?)
 	 */
 	do_gettimeofday(&tv);
-	seq += tv.tv_usec + tv.tv_sec * 1000000;
+	//seq += tv.tv_usec + tv.tv_sec * 1000000;
 #if 0
 	printk("init_seq(%lx, %lx, %d, %d) = %d\n",
 	       saddr, daddr, sport, dport, seq);
@@ -1607,7 +1630,7 @@ u64 secure_dccp_sequence_number(__u32 saddr, __u32 daddr,
 	seq |= ((u64)keyptr->count) << (32 - HASH_BITS);
 
 	do_gettimeofday(&tv);
-	seq += tv.tv_usec + tv.tv_sec * 1000000;
+	//seq += tv.tv_usec + tv.tv_sec * 1000000;
 	seq &= (1ull << 48) - 1;
 #if 0
 	printk("dccp init_seq(%lx, %lx, %d, %d) = %d\n",
@@ -1636,7 +1659,8 @@ unsigned int get_random_int(void)
 	 * drain on it), and uses halfMD4Transform within the second. We
 	 * also mix it with jiffies and the PID:
 	 */
-	return secure_ip_id(current->pid + jiffies);
+	//return secure_ip_id(current->pid + jiffies);
+	return secure_ip_id(current->pid);
 }
 
 /*
