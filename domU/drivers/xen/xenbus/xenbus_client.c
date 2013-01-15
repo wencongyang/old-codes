@@ -55,6 +55,9 @@ const char *xenbus_strstate(enum xenbus_state state)
 		[ XenbusStateClosed	  ] = "Closed",
 		[ XenbusStateReconfiguring ] = "Reconfiguring",
 		[ XenbusStateReconfigured ] = "Reconfigured",
+		[ XenbusStateSuspended ] = "Suspended",
+		[ XenbusStateSuspendCanceled ] = "SuspendCanceled",
+		[ XenbusStateSuspendDone ] = "SuspendDone",
 	};
 	return (state < ARRAY_SIZE(name)) ? name[state] : "INVALID";
 }
@@ -70,6 +73,7 @@ int xenbus_watch_path(struct xenbus_device *dev, const char *path,
 	watch->node = path;
 	watch->callback = callback;
 
+	printk("yewei: xenbus watch path %s\n", path);
 	err = register_xenbus_watch(watch);
 
 	if (err) {
@@ -90,6 +94,7 @@ int xenbus_watch_path2(struct xenbus_device *dev, const char *path,
 {
 	int err;
 	char *state = kasprintf(GFP_NOIO | __GFP_HIGH, "%s/%s", path, path2);
+	printk("yewei: state is %s\n", state);
 	if (!state) {
 		xenbus_dev_fatal(dev, -ENOMEM, "allocating path for watch");
 		return -ENOMEM;
@@ -130,12 +135,16 @@ int xenbus_switch_state(struct xenbus_device *dev, enum xenbus_state state)
 	if (err != 1)
 		return 0;
 
+	printk("yewei: read dev->name=%s.\n", dev->nodename);
+
 	err = xenbus_printf(XBT_NIL, dev->nodename, "state", "%d", state);
 	if (err) {
 		if (state != XenbusStateClosing) /* Avoid looping */
 			xenbus_dev_fatal(dev, err, "writing new state");
 		return err;
 	}
+	
+	printk("yewei: end state changed.\n");
 
 	dev->state = state;
 
@@ -278,8 +287,10 @@ enum xenbus_state xenbus_read_driver_state(const char *path)
 {
 	int result;
 
-	if (xenbus_scanf(XBT_NIL, path, "state", "%d", &result) != 1)
+	if (xenbus_scanf(XBT_NIL, path, "state", "%d", &result) != 1) {
 		result = XenbusStateUnknown;
+		printk("yewei: xenbus read state %s error!\n", path);
+	}
 
 	return result;
 }
