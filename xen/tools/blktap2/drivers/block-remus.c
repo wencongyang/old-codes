@@ -66,7 +66,11 @@
 #define REMUS_CONNRETRY_TIMEOUT 10
 
 #define RPRINTF(_f, _a...) syslog (LOG_DEBUG, "remus: " _f, ## _a)
-
+//mixiang
+#include <stdio.h>
+//extern int my_write(char*, int);
+//extern int my_write2(char*, unsigned int, unsigned long long);
+//
 enum tdremus_mode {
 	mode_invalid = 0,
 	mode_unprotected,
@@ -162,6 +166,7 @@ struct tdremus_state {
 
 	/* ramdisk data*/
 	struct ramdisk ramdisk;
+	struct ramdisk ramdisk_local;
 
 	/* mode methods */
 	enum tdremus_mode mode;
@@ -269,7 +274,7 @@ create_write_request(struct tdremus_state *state, td_sector_t sec, int secs, cha
 
 	vreq->submitting = 1;
 	INIT_LIST_HEAD(&vreq->next);
-	tapdisk_vbd_move_request(treq.private, &device_vbd->pending_requests);
+	//tapdisk_vbd_move_request(treq.private, &device_vbd->pending_requests);
 
 	/* TODO:
 	 * we should probably leave it up to the caller to forward the request */
@@ -591,7 +596,12 @@ static int ramdisk_start(td_driver_t *driver)
 	s->ramdisk.sector_size = driver->info.sector_size;
 	s->ramdisk.h = create_hashtable(RAMDISK_HASHSIZE, uint64_hash,
 					rd_hash_equal);
-
+	s->ramdisk.prev = NULL;
+//mixiang
+	s->ramdisk_local.sector_size = driver->info.sector_size;
+	s->ramdisk_local.h = create_hashtable(RAMDISK_HASHSIZE, uint64_hash,
+					rd_hash_equal);
+//
 	DPRINTF("Ramdisk started, %zu bytes/sector\n", s->ramdisk.sector_size);
 
 	return 0;
@@ -796,6 +806,7 @@ static int primary_blocking_connect(struct tdremus_state *state)
 static void primary_queue_read(td_driver_t *driver, td_request_t treq)
 {
 	/* just pass read through */
+	//my_write2("primary read", treq.secs, treq.sec);
 	td_forward_request(treq);
 }
 
@@ -817,6 +828,7 @@ static void primary_queue_write(td_driver_t *driver, td_request_t treq)
 	// RPRINTF("write: stream_fd.fd: %d\n", s->stream_fd.fd);
 
 	/* -1 means we haven't connected yet, -2 means the connection was lost */
+	//my_write2("primary write", treq.secs, treq.sec);
 	if(s->stream_fd.fd == -1) {
 		RPRINTF("connecting to backup...\n");
 		primary_blocking_connect(s);
@@ -1039,8 +1051,14 @@ static void remus_server_accept(event_id_t id, char mode, void* private)
 }
 
 /* returns -2 if EADDRNOTAVAIL */
+//mixiang
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+//
 static int remus_bind(struct tdremus_state* s)
 {
+	char buf[100];
 //  struct sockaddr_in sa;
 	int opt;
 	int rc = -1;
@@ -1053,6 +1071,10 @@ static int remus_bind(struct tdremus_state* s)
 	if (setsockopt(s->server_fd.fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
 		RPRINTF("Error setting REUSEADDR on %d: %d\n", s->server_fd.fd, errno);
 
+//mixiang
+	sprintf(buf, "mixiang:bindsocket=%u", s->sa.sin_addr.s_addr);
+	//my_write(buf, strlen(buf));
+//
 	if (bind(s->server_fd.fd, (struct sockaddr *)&s->sa, sizeof(s->sa)) < 0) {
 		RPRINTF("could not bind server socket %d to %s:%d: %d %s\n", s->server_fd.fd,
 			inet_ntoa(s->sa.sin_addr), ntohs(s->sa.sin_port), errno, strerror(errno));
@@ -1113,7 +1135,18 @@ void backup_queue_read(td_driver_t *driver, td_request_t treq)
 	td_complete_request(treq, -EBUSY);
 #else
 	/* what exactly is the race that requires the response above? */
-	td_forward_request(treq);
+//mixiang
+	if(ramdisk_read(&s->ramdisk_local, treq.sec, treq.secs, treq.buf) == 0)
+	{
+		//my_write2("mixiang: slave_read from ramdisk:", treq.secs, treq.sec);	
+		td_complete_request(treq, 0);
+	}	
+	else
+	{
+		//my_write2("mixiang: slave_read from disk:", treq.secs, treq.sec);
+		td_forward_request(treq);
+	}
+//
 #endif
 }
 
@@ -1127,16 +1160,22 @@ void backup_queue_write(td_driver_t *driver, td_request_t treq)
 	 * handle the write
 	 */
 
-	switch_mode(driver, mode_unprotected);
+//	switch_mode(driver, mode_unprotected);
 	/* TODO: call the appropriate write function rather than return EBUSY */
-	td_complete_request(treq, -EBUSY);
+//	td_complete_request(treq, -EBUSY);
+//mixiang
+	if(ramdisk_write(&s->ramdisk_local, treq.sec, treq.secs, treq.buf) < 0)
+	{
+		//my_write("mixiang: slave_write ramdisk error\n", 35);
+		return;
+	}
+	//my_write2("mixiang: slave_write ramdisk:", treq.secs, treq.sec);
+	td_complete_request(treq, 0);
 }
-
 static int backup_start(td_driver_t *driver)
 {
 	struct tdremus_state *s = (struct tdremus_state *)driver->data;
 	int fd;
-
 	if (ramdisk_start(driver) < 0)
 		return -1;
 
@@ -1200,14 +1239,16 @@ static int server_do_sreq(td_driver_t *driver)
 
 /* at this point, the server can start applying the most recent
  * ramdisk. */
+int slave_commit_master(td_driver_t *driver);
 static int server_do_creq(td_driver_t *driver)
 {
 	struct tdremus_state *s = (struct tdremus_state *)driver->data;
 
 	// RPRINTF("committing buffer\n");
 
-	ramdisk_start_flush(driver);
-
+	//ramdisk_start_flush(driver);
+//mixiang
+	slave_commit_master(driver);	
 	/* XXX this message should not be sent until flush completes! */
 	if (write(s->stream_fd.fd, TDREMUS_DONE, strlen(TDREMUS_DONE)) != 4)
 		return -1;
@@ -1250,7 +1291,6 @@ static void remus_server_event(event_id_t id, char mode, void *private)
 }
 
 /* unprotected */
-
 void unprotected_queue_read(td_driver_t *driver, td_request_t treq)
 {
 	struct tdremus_state *s = (struct tdremus_state *)driver->data;
@@ -1672,3 +1712,20 @@ struct tap_disk tapdisk_remus = {
 	.td_validate_parent = tdremus_validate_parent,
 	.td_debug           = NULL,
 };
+//mixiang
+int slave_commit_master(td_driver_t *driver)//commit ramdisk which stores master's WRITE to slaver's disk
+{
+	struct tdremus_state *s = (struct tdremus_state *)driver->data;
+	hashtable_destroy(s->ramdisk_local.h, 1);//free slave's local ramdisk
+	s->ramdisk_local.h = create_hashtable(RAMDISK_HASHSIZE, uint64_hash, rd_hash_equal);
+	if (!hashtable_count(s->ramdisk.h)) {
+		//my_write("mixiang: slave_commit_master:nothing to flush\n", 47);
+		return 0;
+	}
+	while(s->ramdisk.prev)//wait until prev ramdisk is flushed 
+		sleep(500);
+	s->ramdisk.prev = s->ramdisk.h;
+	s->ramdisk.h = create_hashtable(RAMDISK_HASHSIZE, uint64_hash, rd_hash_equal);
+	return ramdisk_flush(driver, s);
+}
+
