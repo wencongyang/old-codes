@@ -31,7 +31,7 @@ SUBDIRS-$(LIBXENAPI_BINDINGS) += libxen
 
 # do not recurse in to a dir we are about to delete
 ifneq "$(MAKECMDGOALS)" "distclean"
-SUBDIRS-$(CONFIG_IOEMU) += ioemu-dir
+#SUBDIRS-$(CONFIG_IOEMU) += ioemu-dir
 endif
 
 SUBDIRS-y += xenpmd
