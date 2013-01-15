@@ -55,6 +55,9 @@ const char *xenbus_strstate(enum xenbus_state state)
 		[ XenbusStateClosed	  ] = "Closed",
 		[ XenbusStateReconfiguring ] = "Reconfiguring",
 		[ XenbusStateReconfigured ] = "Reconfigured",
+		[ XenbusStateSuspended ] = "Suspended",
+		[ XenbusStateSuspendCanceled ] = "SuspendCanceled",
+		[ XenbusStateSuspendDone ] = "SuspendDone",
 	};
 	return (state < ARRAY_SIZE(name)) ? name[state] : "INVALID";
 }
@@ -278,8 +281,10 @@ enum xenbus_state xenbus_read_driver_state(const char *path)
 {
 	int result;
 
-	if (xenbus_scanf(XBT_NIL, path, "state", "%d", &result) != 1)
+	if (xenbus_scanf(XBT_NIL, path, "state", "%d", &result) != 1) {
 		result = XenbusStateUnknown;
+		printk("yewei: xenbus read state %s error!\n", path);
+	}
 
 	return result;
 }

@@ -63,7 +63,13 @@ enum xenbus_state {
      */
     XenbusStateReconfiguring = 7,
 
-    XenbusStateReconfigured  = 8
+    XenbusStateReconfigured  = 8,
+
+    XenbusStateSuspended = 9,
+
+    XenbusStateSuspendCanceled =10,
+
+    XenbusStateSuspendDone = 11
 };
 typedef enum xenbus_state XenbusState;
 
