@@ -25,6 +25,14 @@
 
 #include <stdlib.h>
 #include <unistd.h>
+#include <syscall.h>
+#include <sys/time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <string.h>
+#include <inttypes.h>
 
 #include "xg_private.h"
 #include "xg_save_restore.h"
@@ -32,6 +40,15 @@
 
 #include <xen/hvm/ioreq.h>
 #include <xen/hvm/params.h>
+#include <xs.h>
+
+#define MEM_PAGES	(65536*2)
+//#define MEM_PAGES	384000
+//int MEM_PAGES;
+#define NR_wait_resume	312
+#define NR_reset_suspend_count 314
+//xen_pfn_t dirty_mfn[100000];
+//int dirty_err[100000];
 
 struct restore_ctx {
     unsigned long max_mfn; /* max mfn of the current host machine */
@@ -695,6 +712,8 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
 {
     int count, countpages, oldcount, i;
     void* ptmp;
+    //struct timeval time;
+    //FILE *fp = fopen("/root/yewei/4.txt", "at");
 
     if ( RDEXACT(fd, &count, sizeof(count)) )
     {
@@ -708,18 +727,26 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
     {
     case 0:
         // DPRINTF("Last batch read\n");
+	//fprintf(fp, "Last batch read\n");
+	//fclose(fp);
         return 0;
 
     case XC_SAVE_ID_ENABLE_VERIFY_MODE:
-        DPRINTF("Entering page verify mode\n");
+	//fprintf(fp, "XC_SAVE_ID_ENABLE_VERIFY_MODE\n");
+	//fclose(fp);
+        //DPRINTF("Entering page verify mode\n");
         buf->verify = 1;
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_VCPU_INFO:
+	//fprintf(fp, "XC_SAVE_ID_VCPU_INFO\n");
+	//fclose(fp);
         buf->new_ctxt_format = 1;
         if ( RDEXACT(fd, &buf->max_vcpu_id, sizeof(buf->max_vcpu_id)) ||
              buf->max_vcpu_id >= 64 || RDEXACT(fd, &buf->vcpumap,
                                                sizeof(uint64_t)) ) {
+	    //fprintf(fp, "Error when reading max_vcpu_id\n");
+	    //fflush(fp);
             PERROR("Error when reading max_vcpu_id");
             return -1;
         }
@@ -727,6 +754,8 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_HVM_IDENT_PT:
+	//fprintf(fp, "XC_SAVE_ID_HVM_IDENT_PT\n");
+	//fclose(fp);
         /* Skip padding 4 bytes then read the EPT identity PT location. */
         if ( RDEXACT(fd, &buf->identpt, sizeof(uint32_t)) ||
              RDEXACT(fd, &buf->identpt, sizeof(uint64_t)) )
@@ -738,6 +767,8 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_HVM_VM86_TSS:
+	//fprintf(fp, "XC_SAVE_ID_HVM_VM86_TSS\n");
+	//fclose(fp);
         /* Skip padding 4 bytes then read the vm86 TSS location. */
         if ( RDEXACT(fd, &buf->vm86_tss, sizeof(uint32_t)) ||
              RDEXACT(fd, &buf->vm86_tss, sizeof(uint64_t)) )
@@ -749,36 +780,63 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_TMEM:
-        DPRINTF("xc_domain_restore start tmem\n");
+    	//gettimeofday(&time, NULL);
+    	//fprintf(fp, "[%d.%d]begin xc_tmem_restore\n", (int)time.tv_sec, (int)time.tv_usec);
+        //fflush(fp);
+	//DPRINTF("xc_domain_restore start tmem\n");
         if ( xc_tmem_restore(xch, dom, fd) ) {
             PERROR("error reading/restoring tmem");
             return -1;
         }
+    	//gettimeofday(&time, NULL);
+    	//fprintf(fp, "[%d.%d]done\n", (int)time.tv_sec, (int)time.tv_usec);
+	//fflush(fp);
+	//fclose(fp);
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_TMEM_EXTRA:
+    	//gettimeofday(&time, NULL);
+    	//fprintf(fp, "[%d.%d]begin xc_tmem_tmem_extra\n", (int)time.tv_sec, (int)time.tv_usec);
+        //fflush(fp);
         if ( xc_tmem_restore_extra(xch, dom, fd) ) {
             PERROR("error reading/restoring tmem extra");
             return -1;
         }
+    	//gettimeofday(&time, NULL);
+    	//fprintf(fp, "[%d.%d]done\n", (int)time.tv_sec, (int)time.tv_usec);
+	//fflush(fp);
+	//fclose(fp);
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_TSC_INFO:
     {
         uint32_t tsc_mode, khz, incarn;
         uint64_t nsec;
+	//fprintf(fp, "XC_SAVE_ID_TSC_INFO\n");
+	//fclose(fp);
+    	//gettimeofday(&time, NULL);
+    	//fprintf(fp, "[%d.%d]begin tsc\n", (int)time.tv_sec, (int)time.tv_usec);
+	//fflush(fp);
         if ( RDEXACT(fd, &tsc_mode, sizeof(uint32_t)) ||
              RDEXACT(fd, &nsec, sizeof(uint64_t)) ||
              RDEXACT(fd, &khz, sizeof(uint32_t)) ||
              RDEXACT(fd, &incarn, sizeof(uint32_t)) ||
              xc_domain_set_tsc_info(xch, dom, tsc_mode, nsec, khz, incarn) ) {
+	    //fprintf(fp, "error reading/restore tsc info\n");
+	    //fflush(fp);
             PERROR("error reading/restoring tsc info");
             return -1;
         }
+    	//gettimeofday(&time, NULL);
+    	//fprintf(fp, "[%d.%d]done\n", (int)time.tv_sec, (int)time.tv_usec);
+	//fflush(fp);
+	//fclose(fp);
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
     }
 
     case XC_SAVE_ID_HVM_CONSOLE_PFN :
+	//fprintf(fp, "XC_SAVE_ID_HVM_CONSOLE_PFN\n");
+	//fclose(fp);
         /* Skip padding 4 bytes then read the console pfn location. */
         if ( RDEXACT(fd, &buf->console_pfn, sizeof(uint32_t)) ||
              RDEXACT(fd, &buf->console_pfn, sizeof(uint64_t)) )
@@ -790,11 +848,15 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_LAST_CHECKPOINT:
+	//fprintf(fp, "XC_SAVE_ID_LAST_CHECKPOINT\n");
+	//fclose(fp);
         ctx->last_checkpoint = 1;
         // DPRINTF("last checkpoint indication received");
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     case XC_SAVE_ID_HVM_ACPI_IOPORTS_LOCATION:
+	//fprintf(fp, "XC_SAVE_ID_HVM_ACPI_IOPORTS_LOCATION\n");
+	//fclose(fp);
         /* Skip padding 4 bytes then read the acpi ioport location. */
         if ( RDEXACT(fd, &buf->acpi_ioport_location, sizeof(uint32_t)) ||
              RDEXACT(fd, &buf->acpi_ioport_location, sizeof(uint64_t)) )
@@ -805,6 +867,7 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         return pagebuf_get_one(xch, ctx, buf, fd, dom);
 
     default:
+	//fprintf(fp, "batch size = %d\n", count);
         if ( (count > MAX_BATCH_SIZE) || (count < 0) ) {
             ERROR("Max batch size exceeded (%d). Giving up.", count);
             errno = EMSGSIZE;
@@ -828,7 +891,9 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         buf->pfn_types = ptmp;
     }
     if ( RDEXACT(fd, buf->pfn_types + oldcount, count * sizeof(*(buf->pfn_types)))) {
-        PERROR("Error when reading region pfn types");
+        //fprintf(fp, "Error when reading redion pfn types\n");
+	//fflush(fp);
+	PERROR("Error when reading region pfn types");
         return -1;
     }
 
@@ -855,10 +920,13 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
         buf->pages = ptmp;
     }
     if ( RDEXACT(fd, buf->pages + oldcount * PAGE_SIZE, countpages * PAGE_SIZE) ) {
+	//fprintf(fp, "Error when reading pages\n");
+	//fflush(fp);
         PERROR("Error when reading pages");
         return -1;
     }
 
+	//fclose(fp);
     return count;
 }
 
@@ -879,6 +947,35 @@ static int pagebuf_get(xc_interface *xch, struct restore_ctx *ctx,
     return rc;
 }
 
+#define BITS_PER_LONG (sizeof(unsigned long) * 8)
+#define BITS_TO_LONGS(bits) (((bits)+BITS_PER_LONG-1)/BITS_PER_LONG)
+#define BITMAP_SIZE   (BITS_TO_LONGS(dinfo->p2m_size) * sizeof(unsigned long))
+
+#define BITMAP_ENTRY(_nr,_bmap) \
+   ((volatile unsigned long *)(_bmap))[(_nr)/BITS_PER_LONG]
+
+#define BITMAP_SHIFT(_nr) ((_nr) % BITS_PER_LONG)
+
+#define ORDER_LONG (sizeof(unsigned long) == 4 ? 5 : 6)
+
+static inline int test_bit (int nr, volatile void * addr)
+{
+    return (BITMAP_ENTRY(nr, addr) >> BITMAP_SHIFT(nr)) & 1;
+}
+
+static inline void clear_bit (int nr, volatile void * addr)
+{
+    BITMAP_ENTRY(nr, addr) &= ~(1UL << BITMAP_SHIFT(nr));
+}
+
+static inline void set_bit ( int nr, volatile void * addr)
+{
+    BITMAP_ENTRY(nr, addr) |= (1UL << BITMAP_SHIFT(nr));
+}
+
+int first_time = 1;
+char* pagebase = NULL;
+DECLARE_HYPERCALL_BUFFER(unsigned long, to_send);
 static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
                        xen_pfn_t* region_mfn, unsigned long* pfn_type, int pae_extended_cr3,
                        unsigned int hvm, struct xc_mmu* mmu,
@@ -888,12 +985,12 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
     /* used by debug verify code */
     unsigned long buf[PAGE_SIZE/sizeof(unsigned long)];
     /* Our mapping of the current region (batch) */
-    char *region_base;
+    char *region_base = NULL;
     /* A temporary mapping, and a copy, of one frame of guest memory. */
     unsigned long *page = NULL;
     int nraces = 0;
     struct domain_info_context *dinfo = &ctx->dinfo;
-    int* pfn_err = NULL;
+    //int* pfn_err = NULL;
     int rc = -1;
 
     unsigned long mfn, pfn, pagetype;
@@ -937,6 +1034,7 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
         pfn      = pagebuf->pfn_types[i + curbatch] & ~XEN_DOMCTL_PFINFO_LTAB_MASK;
         pagetype = pagebuf->pfn_types[i + curbatch] &  XEN_DOMCTL_PFINFO_LTAB_MASK;
 
+	set_bit(pfn, to_send);
         if ( pagetype == XEN_DOMCTL_PFINFO_XTAB )
             region_mfn[i] = ~0UL; /* map will fail but we don't care */
         else 
@@ -954,18 +1052,6 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
         }
     }
 
-    /* Map relevant mfns */
-    pfn_err = calloc(j, sizeof(*pfn_err));
-    region_base = xc_map_foreign_bulk(
-        xch, dom, PROT_WRITE, region_mfn, pfn_err, j);
-
-    if ( region_base == NULL )
-    {
-        PERROR("map batch failed");
-        free(pfn_err);
-        return -1;
-    }
-
     for ( i = 0, curpage = -1; i < j; i++ )
     {
         pfn      = pagebuf->pfn_types[i + curbatch] & ~XEN_DOMCTL_PFINFO_LTAB_MASK;
@@ -974,12 +1060,6 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
         if ( pagetype == XEN_DOMCTL_PFINFO_XTAB )
             /* a bogus/unmapped page: skip it */
             continue;
-
-        if (pfn_err[i])
-        {
-            ERROR("unexpected PFN mapping failure");
-            goto err_mapped;
-        }
 
         ++curpage;
 
@@ -994,7 +1074,8 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
         mfn = ctx->p2m[pfn];
 
         /* In verify mode, we use a copy; otherwise we work in place */
-        page = pagebuf->verify ? (void *)buf : (region_base + i*PAGE_SIZE);
+        //page = pagebuf->verify ? (void *)buf : (region_base + i*PAGE_SIZE);
+	page = (unsigned long*)(pagebase + pfn * PAGE_SIZE);
 
         memcpy(page, pagebuf->pages + (curpage + curbatch) * PAGE_SIZE, PAGE_SIZE);
 
@@ -1038,7 +1119,7 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
 
         if ( pagebuf->verify )
         {
-            int res = memcmp(buf, (region_base + i*PAGE_SIZE), PAGE_SIZE);
+	    int res = memcmp(buf, (region_base + i*PAGE_SIZE), PAGE_SIZE);
             if ( res )
             {
                 int v;
@@ -1058,24 +1139,153 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
             }
         }
 
-        if ( !hvm &&
+        /*if ( !hvm &&
              xc_add_mmu_update(xch, mmu,
                                (((unsigned long long)mfn) << PAGE_SHIFT)
                                | MMU_MACHPHYS_UPDATE, pfn) )
         {
             PERROR("failed machpys update mfn=%lx pfn=%lx", mfn, pfn);
             goto err_mapped;
-        }
+        }*/
     } /* end of 'batch' for loop */
 
     rc = nraces;
 
   err_mapped:
-    munmap(region_base, j*PAGE_SIZE);
-    free(pfn_err);
 
     return rc;
 }
+
+static void *map_frame_list_list(xc_interface *xch, uint32_t dom,
+				struct domain_info_context *dinfo,
+				shared_info_any_t *shinfo)
+{
+	int count = 100;
+	void *p;
+	uint64_t fll = GET_FIELD(shinfo, arch.pfn_to_mfn_frame_list_list);
+
+	while ( count-- && (fll == 0) )
+	{
+		usleep(10000);
+		fll = GET_FIELD(shinfo, arch.pfn_to_mfn_frame_list_list);
+	}
+
+	if ( fll == 0 )
+	{
+		ERROR("Time out waiting for frame list updated.");
+		return NULL;
+	}
+
+	p = xc_map_foreign_range(xch, dom, PAGE_SIZE, PROT_READ, fll);
+	if ( p == NULL )
+		PERROR("Counldn't map p2m_frame_list_list (errno %d)", errno);
+	
+	return p;
+}
+
+static xen_pfn_t *map_p2m_table(xc_interface *xch,
+				uint32_t dom,
+				struct domain_info_context *dinfo,
+				shared_info_any_t *live_shinfo)
+{
+	/* Double and single indirect references to the live P2M table */
+	void *live_p2m_frame_list_list = NULL;
+	void *live_p2m_frame_list = NULL;
+
+	/* Copies of the above */
+	xen_pfn_t *p2m_frame_list_list = NULL;
+	xen_pfn_t *p2m_frame_list = NULL;
+
+	/* The mapping of the live p2m table itself */
+	xen_pfn_t *p2m = NULL;
+
+	int i, success = 0;
+
+	live_p2m_frame_list_list = map_frame_list_list(xch, dom, dinfo,
+							 live_shinfo);
+
+	if ( !live_p2m_frame_list_list)
+		goto out;
+
+	/* Get a local copy of the live_P2M_frame_list_list*/
+	if ( !(p2m_frame_list_list = malloc(PAGE_SIZE)) )
+	{
+		PERROR("Counldn't allocate p2m_frame_list_list array");
+		goto out;
+	}
+	memcpy(p2m_frame_list_list, live_p2m_frame_list_list, PAGE_SIZE);
+	
+	/* Canonicalize guest's unsigned long vs ours */
+	if ( dinfo->guest_width > sizeof(unsigned long) )
+		for ( i = 0; i < PAGE_SIZE/sizeof(unsigned long); i++)
+			if ( i < PAGE_SIZE/dinfo->guest_width )
+				p2m_frame_list_list[i] = ((uint64_t *)p2m_frame_list_list)[i];
+			else
+				p2m_frame_list_list[i] = 0;
+	else if ( dinfo->guest_width < sizeof(unsigned long) )
+		for ( i = PAGE_SIZE/sizeof(unsigned long) - 1; i >= 0; i-- )
+			p2m_frame_list_list[i] = ((uint32_t *)p2m_frame_list_list)[i];
+
+	live_p2m_frame_list = 
+		xc_map_foreign_pages(xch, dom, PROT_READ | PROT_WRITE,
+					p2m_frame_list_list,
+					P2M_FLL_ENTRIES);
+	if ( !live_p2m_frame_list )
+	{
+		PERROR("Counldn't map p2m_frame_list");
+		goto out;
+	}
+
+	/* Get a local copy of the live_P2M_frame_list */
+	if ( !(p2m_frame_list = malloc(P2M_TOOLS_FL_SIZE)) )
+	{
+		ERROR("counldn't allocate p2m_frame_list array");
+		goto out;
+	}
+	memset(p2m_frame_list, 0, P2M_TOOLS_FL_SIZE);
+	memcpy(p2m_frame_list, live_p2m_frame_list, P2M_GUEST_FL_SIZE);
+
+	munmap(live_p2m_frame_list, P2M_FLL_ENTRIES * PAGE_SIZE);
+	live_p2m_frame_list = NULL;
+
+	/* Canonicalize guest's unsigned long vs ours */
+	if ( dinfo->guest_width > sizeof(unsigned long) )
+		for ( i = 0; i < P2M_FL_ENTRIES; i++ )
+			p2m_frame_list[i] = ((uint64_t *)p2m_frame_list)[i];
+	else if ( dinfo->guest_width < sizeof(unsigned long) )
+		for ( i = P2M_FL_ENTRIES - 1; i >= 0; i-- )
+			p2m_frame_list[i] = ((uint32_t *)p2m_frame_list)[i];
+
+	p2m = xc_map_foreign_pages(xch, dom, PROT_READ | PROT_WRITE,
+					p2m_frame_list,
+					P2M_FL_ENTRIES);
+	if ( !p2m )
+	{
+		PERROR("Couldn't map p2m table");
+		goto out;
+	}
+
+	success = 1;
+	
+out:
+	if ( !success && p2m )
+		munmap(p2m, P2M_FLL_ENTRIES * PAGE_SIZE);
+
+	if ( live_p2m_frame_list_list )
+		munmap(live_p2m_frame_list_list, PAGE_SIZE);
+	
+	if ( live_p2m_frame_list )
+		munmap(live_p2m_frame_list, P2M_FLL_ENTRIES * PAGE_SIZE);
+
+	if ( p2m_frame_list_list )
+		free(p2m_frame_list_list);
+
+	if ( p2m_frame_list )
+		free(p2m_frame_list);
+
+	return success ? p2m : NULL;
+}
+
 
 int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       unsigned int store_evtchn, unsigned long *store_mfn,
@@ -1083,7 +1293,8 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       unsigned int hvm, unsigned int pae, int superpages)
 {
     DECLARE_DOMCTL;
-    int rc = 1, frc, i, j, n, m, pae_extended_cr3 = 0, ext_vcpucontext = 0;
+    int rc = 1, frc, i, j, n, m;
+    int pae_extended_cr3 = 0, ext_vcpucontext = 0;
     int vcpuextstate = 0;
     uint32_t vcpuextstate_size = 0;
     unsigned long mfn, pfn;
@@ -1105,15 +1316,20 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     /* A table containing the type of each PFN (/not/ MFN!). */
     unsigned long *pfn_type = NULL;
+    unsigned long *pfn_type_tmp = NULL;
+    int* pfn_err = NULL;
 
     /* A table of MFNs to map in the current region */
     xen_pfn_t *region_mfn = NULL;
 
     /* A copy of the pfn-to-mfn table frame list. */
     xen_pfn_t *p2m_frame_list = NULL;
+    xen_pfn_t *p2m_frame_list_temp = NULL;
     
     /* A temporary mapping of the guest's start_info page. */
     start_info_any_t *start_info;
+    
+    shared_info_any_t *live_shinfo = NULL;
 
     /* Our mapping of the current region (batch) */
     char *region_base;
@@ -1140,6 +1356,23 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     };
     static struct restore_ctx *ctx = &_ctx;
     struct domain_info_context *dinfo = &ctx->dinfo;
+    FILE *fp;
+    struct timeval time;
+    int size = 0;
+    char *pagebuff;
+    unsigned long pagetype;
+    char str[10];
+    int remote_port = -1;
+    int local_port = -1;
+    xc_evtchn *xce;
+    struct xs_handle *xsh;
+    DECLARE_HYPERCALL;
+
+    xc_shadow_op_stats_t stats;
+
+    fp = fopen("/root/yewei/1.txt", "at");
+    fprintf(fp, "start.\n");
+    fflush(fp);
 
     pagebuf_init(&pagebuf);
     memset(&tailbuf, 0, sizeof(tailbuf));
@@ -1147,6 +1380,18 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     /* For info only */
     ctx->nr_pfns = 0;
+    //ctx->completed = 1; // use timeout socket read
+    ctx->completed = 0; // use timeout socket read
+
+    // initilise fast suspend evtchn
+
+    xce = xc_evtchn_open(NULL, 0);
+    xsh = xs_daemon_open();
+    if (xce == NULL || xsh == NULL) {
+	fprintf(fp, "xc_evtchn_open error.\n");
+	fflush(fp);
+	//goto out;
+    }
 
     if ( superpages )
         return 1;
@@ -1165,15 +1410,37 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         goto out;
     }
 
+    /* Reserve the domid information in Hypervisor */    
+    hypercall.op = __HYPERVISOR_which_side_op;
+    hypercall.arg[0] = (unsigned long)dom;
+
+    do_xen_hypercall(xch, &hypercall);
+
+    syscall(NR_reset_suspend_count);
+    	
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%d.%d]pre p2m point\n", (int)time.tv_sec, (int)time.tv_usec);
+    fflush(fp);
     if ( RDEXACT(io_fd, &dinfo->p2m_size, sizeof(unsigned long)) )
     {
-        PERROR("read: p2m_size");
-        goto out;
+       	PERROR("read: p2m_size");
+	goto out;
     }
+
+    size = dinfo->p2m_size * PAGE_SIZE;
+    pagebase = (char*)malloc(size);
+    pfn_type = calloc(dinfo->p2m_size, sizeof(unsigned long));
+
+    if (pagebase == NULL || pfn_type == NULL) {
+	fprintf(fp, "cannot map pagebase or pfn_type\n");
+	fflush(fp);
+	goto out;
+    }
+
     DPRINTF("xc_domain_restore start: p2m_size = %lx\n", dinfo->p2m_size);
 
     if ( !get_platform_info(xch, dom,
-                            &ctx->max_mfn, &ctx->hvirt_start, &ctx->pt_levels, &dinfo->guest_width) )
+                        &ctx->max_mfn, &ctx->hvirt_start, &ctx->pt_levels, &dinfo->guest_width) )
     {
         ERROR("Unable to get platform info.");
         return 1;
@@ -1195,22 +1462,32 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         if ( !p2m_frame_list )
             goto out;
 
-        /* Now that we know the word size, tell Xen about it */
-        memset(&domctl, 0, sizeof(domctl));
-        domctl.domain = dom;
-        domctl.cmd    = XEN_DOMCTL_set_address_size;
-        domctl.u.address_size.size = dinfo->guest_width * 8;
-        frc = do_domctl(xch, &domctl);
-        if ( frc != 0 )
-        {
-            PERROR("Unable to set guest address size.");
-            goto out;
-        }
+    	if ( (p2m_frame_list_temp = malloc(P2M_TOOLS_FL_SIZE)) == NULL )
+	   	goto out;
+
+	if (first_time) {
+       		/* Now that we know the word size, tell Xen about it */
+        	memset(&domctl, 0, sizeof(domctl));
+        	domctl.domain = dom;
+        	domctl.cmd    = XEN_DOMCTL_set_address_size;
+        	domctl.u.address_size.size = dinfo->guest_width * 8;
+        	frc = do_domctl(xch, &domctl);
+        	if ( frc != 0 )
+       		{
+            		PERROR("Unable to set guest address size.");
+			gettimeofday(&time, NULL);
+			fprintf(fp, "[%d.%d]Unable to set guest address size,ret=%d\n", (int)time.tv_sec, (int)time.tv_usec, frc);
+			fflush(fp);
+            		goto out;
+        	}
+    	}
     }
 
     /* We want zeroed memory so use calloc rather than malloc. */
     ctx->p2m   = calloc(dinfo->p2m_size, sizeof(xen_pfn_t));
-    pfn_type   = calloc(dinfo->p2m_size, sizeof(unsigned long));
+    //pfn_type   = calloc(dinfo->p2m_size, sizeof(unsigned long));
+    pfn_type_tmp   = calloc(dinfo->p2m_size, sizeof(unsigned long));
+    pfn_err = calloc(dinfo->p2m_size, sizeof(*pfn_err));
 
     region_mfn = malloc(ROUNDUP(MAX_BATCH_SIZE * sizeof(xen_pfn_t), PAGE_SHIFT));
     ctx->p2m_batch = malloc(ROUNDUP(MAX_BATCH_SIZE * sizeof(xen_pfn_t), PAGE_SHIFT));
@@ -1238,15 +1515,43 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     }
     shared_info_frame = domctl.u.getdomaininfo.shared_info_frame;
 
-    /* Mark all PFNs as invalid; we allocate on demand */
-    for ( pfn = 0; pfn < dinfo->p2m_size; pfn++ )
-        ctx->p2m[pfn] = INVALID_P2M_ENTRY;
+    if ( !hvm )
+    {
+	live_shinfo = xc_map_foreign_range(xch, dom, PAGE_SIZE,
+						PROT_READ, shared_info_frame);
+	if ( !live_shinfo )
+	{
+		PERROR("Counldn't map live_shinfo");
+		goto out;
+	}
+    }
+
+    if (!first_time) {
+    	/* We should read the P2M table, because the VM once has run. */
+	if ( !(ctx->live_p2m = map_p2m_table(xch, dom, dinfo, live_shinfo)) )
+    	{
+       		PERROR("Couldn't map p2m table");
+       		fprintf(fp, "Couldn't map p2m table\n");
+		fflush(fp);
+       		goto out;
+   	}
+    	memcpy(ctx->p2m, ctx->live_p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
+    	munmap(ctx->live_p2m, P2M_FL_ENTRIES * PAGE_SIZE);
+	
+    }else {
+   	 /* Mark all PFNs as invalid; we allocate on demand */
+    	 for ( pfn = 0; pfn < dinfo->p2m_size; pfn++ )
+		ctx->p2m[pfn] = INVALID_P2M_ENTRY;
+    }
+
+    if ( live_shinfo )
+	munmap(live_shinfo, PAGE_SIZE);
 
     mmu = xc_alloc_mmu_updates(xch, dom);
     if ( mmu == NULL )
     {
-        PERROR("Could not initialise for MMU updates");
-        goto out;
+       	PERROR("Could not initialise for MMU updates");
+       	goto out;
     }
 
     xc_report_progress_start(xch, "Reloading memory pages", dinfo->p2m_size);
@@ -1258,7 +1563,24 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     prev_pc = 0;
 
     n = m = 0;
+
+    to_send = xc_hypercall_buffer_alloc_pages(xch, to_send, NRPAGES(BITMAP_SIZE));
+    if ( !to_send )
+    {
+	fprintf(fp, "Couldn't allocate to_send array");
+	fflush(fp);
+	goto out;
+    }
+    memset(to_send, 0xff, BITMAP_SIZE);
+
+    
+    if (ctx->completed)
+	goto next_checkpoint; 		
  loadpages:
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]Loadpages\n", time.tv_sec, time.tv_usec);
+    fflush(fp);
+	
     for ( ; ; )
     {
         int j, curbatch;
@@ -1268,6 +1590,9 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         if ( !ctx->completed ) {
             pagebuf.nr_physpages = pagebuf.nr_pages = 0;
             if ( pagebuf_get_one(xch, ctx, &pagebuf, io_fd, dom) < 0 ) {
+		gettimeofday(&time, NULL);
+		fprintf(fp, "[%d.%d]Error when reading batch\n", (int)time.tv_sec, (int)time.tv_usec);
+		fflush(fp);
                 PERROR("Error when reading batch");
                 goto out;
             }
@@ -1293,15 +1618,19 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         }
 
         /* break pagebuf into batches */
+	//fprintf(fp, "applying pages.\n");
+	fflush(fp);
         curbatch = 0;
         while ( curbatch < j ) {
             int brc;
-
             brc = apply_batch(xch, dom, ctx, region_mfn, pfn_type,
                               pae_extended_cr3, hvm, mmu, &pagebuf, curbatch);
-            if ( brc < 0 )
+            if ( brc < 0 ) {	
+		gettimeofday(&time, NULL);
+		fprintf(fp, "[%d.%d]error when apply_batch\n", (int)time.tv_sec, (int)time.tv_usec);
+		fflush(fp);
                 goto out;
-
+	    }
             nraces += brc;
 
             curbatch += MAX_BATCH_SIZE;
@@ -1322,21 +1651,26 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
             m = 0;
         }
     }
-
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]Exit from infinite for\n", time.tv_sec, time.tv_usec);
+    fflush(fp);
     /*
      * Ensure we flush all machphys updates before potential PAE-specific
      * reallocations below.
      */
-    if ( !hvm && xc_flush_mmu_updates(xch, mmu) )
-    {
-        PERROR("Error doing flush_mmu_updates()");
-        goto out;
-    }
+    //if ( !hvm && xc_flush_mmu_updates(xch, mmu) )
+    //{
+    //    PERROR("Error doing flush_mmu_updates()");
+    //    goto out;
+    //}
 
     // DPRINTF("Received all pages (%d races)\n", nraces);
 
     if ( !ctx->completed ) {
 
+	gettimeofday(&time, NULL);
+	fprintf(fp, "[%d.%d]!ctx->completed stands\n", (int)time.tv_sec, (int)time.tv_usec);
+	fflush(fp);
         if ( buffer_tail(xch, ctx, &tailbuf, io_fd, max_vcpu_id, vcpumap,
                          ext_vcpucontext, vcpuextstate, vcpuextstate_size) < 0 ) {
             ERROR ("error buffering image tail");
@@ -1365,28 +1699,61 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     if ( ctx->last_checkpoint )
     {
         // DPRINTF("Last checkpoint, finishing\n");
+	gettimeofday(&time, NULL);
+	fprintf(fp, "[%lu.%06lu]Last checkpoint\n", time.tv_sec, time.tv_usec);
+	fflush(fp);
+	
         goto finish;
     }
 
     // DPRINTF("Buffered checkpoint\n");
 
+next_checkpoint:
+
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]begin pagebuf_get.\n", 
+		time.tv_sec, time.tv_usec);
+
     if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
         PERROR("error when buffering batch, finishing");
+	gettimeofday(&time, NULL);
+	fprintf(fp, "[%d.%d]error when buffering batch\n", (int)time.tv_sec, (int)time.tv_usec);
+	fflush(fp);
         goto finish;
     }
+    
+    vcpumap = pagebuf.vcpumap;
+    max_vcpu_id = pagebuf.max_vcpu_id;
+    
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]transmit %d pages, begin buffer_tail.\n",
+		time.tv_sec, time.tv_usec, (int)pagebuf.nr_pages);
+    
     memset(&tmptail, 0, sizeof(tmptail));
     tmptail.ishvm = hvm;
     if ( buffer_tail(xch, ctx, &tmptail, io_fd, max_vcpu_id, vcpumap,
                      ext_vcpucontext, vcpuextstate, vcpuextstate_size) < 0 ) {
         ERROR ("error buffering image tail, finishing");
+	gettimeofday(&time, NULL);
+	fprintf(fp, "[%d.%d]error buffering image tail\n", (int)time.tv_sec, (int)time.tv_usec);
+	fflush(fp);
         goto finish;
     }
     tailbuf_free(&tailbuf);
     memcpy(&tailbuf, &tmptail, sizeof(tailbuf));
+    
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]end buffer_tail.\n", 
+		time.tv_sec, time.tv_usec);
 
     goto loadpages;
 
   finish:
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]Finish, ctx->pt_levels=%d, pae_extended_cr3=%d\n", 
+		time.tv_sec, time.tv_usec, ctx->pt_levels, pae_extended_cr3);
+    fflush(fp);
+    
     if ( hvm )
         goto finish_hvm;
 
@@ -1405,7 +1772,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         */
 
         int j, k;
-        
+      
         /* First pass: find all L3TABs current in > 4G mfns and get new mfns */
         for ( i = 0; i < dinfo->p2m_size; i++ )
         {
@@ -1498,16 +1865,71 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
             goto out;
         }
     }
+    /*
+     * copy memory from shared buffer into VM
+     */
+    memcpy(pfn_type_tmp, ctx->p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
+    
+    //for (pfn = 0; pfn < dinfo->p2m_size; pfn++ ) {
+if (1){
+    for (j = pfn = 0; pfn < MEM_PAGES; pfn++) {
+	if ( !test_bit(pfn, to_send) )
+		continue;
+	
+	pagetype = pfn_type[pfn] & XEN_DOMCTL_PFINFO_LTAB_MASK;
+		
+	if (pagetype == XEN_DOMCTL_PFINFO_XTAB)
+		// a bogus/unmapped page: skip it
+		continue;
+
+	mfn = ctx->p2m[pfn];
+	j++;
+	if (1) {
+		pagebuff = (char *)(pagebase + pfn * PAGE_SIZE);
+
+		//continue;
+		hypercall.op = __HYPERVISOR_mfncopy_op;
+		hypercall.arg[0] = (unsigned long)mfn;
+		hypercall.arg[1] = (unsigned long)pagebuff;
+
+		do_xen_hypercall(xch, &hypercall);
+	}
+
+	if ( !hvm &&
+		xc_add_mmu_update(xch, mmu,
+				(((unsigned long long)mfn) << PAGE_SHIFT)
+				| MMU_MACHPHYS_UPDATE, pfn) )
+	{
+		fprintf(fp, "coping back memory error!\n");
+		fflush(fp);
+		goto out;
+	}
+    }
+    /*
+     * Ensure we flush all machphys updates before potential PAE-specific
+     * reallocations below.
+     */
+    if ( !hvm && xc_flush_mmu_updates(xch, mmu) )
+    {
+        PERROR("Error doing flush_mmu_updates()");
+        goto out;
+    }
+}
 
     /*
      * Pin page tables. Do this after writing to them as otherwise Xen
      * will barf when doing the type-checking.
      */
+
     nr_pins = 0;
     for ( i = 0; i < dinfo->p2m_size; i++ )
     {
-        if ( (pfn_type[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 )
+        if ( (pfn_type[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 ) {
+	    //pagetype = pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK;
+	    //if (pagetype >= XEN_DOMCTL_PFINFO_L1TAB && pagetype <= XEN_DOMCTL_PFINFO_L4TAB)
+	    //	fprintf(fp, "pfn = %d, page table but not pinned.\n", i);
             continue;
+	}
 
         switch ( pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
         {
@@ -1533,7 +1955,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
         pin[nr_pins].arg1.mfn = ctx->p2m[i];
         nr_pins++;
-
+ 
         /* Batch full? Then flush. */
         if ( nr_pins == MAX_PIN_BATCH )
         {
@@ -1584,6 +2006,9 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         }
     }
 
+    fprintf(fp, "vcpu state start...\n");
+    fflush(fp);
+
     vcpup = tailbuf.u.pv.vcpubuf;
     for ( i = 0; i <= max_vcpu_id; i++ )
     {
@@ -1595,6 +2020,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         vcpup += (dinfo->guest_width == 8) ? sizeof(ctxt->x64) : sizeof(ctxt->x32);
 
         DPRINTF("read VCPU %d\n", i);
+	fprintf(fp, "read VCPU %d\n", i);
 
         if ( !new_ctxt_format )
             SET_FIELD(ctxt, flags, GET_FIELD(ctxt, flags) | VGCF_online);
@@ -1768,20 +2194,22 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     munmap(new_shared_info, PAGE_SIZE);
 
     /* Uncanonicalise the pfn-to-mfn table frame-number list. */
+    //fprintf(fp, "P2M_FL_ENTRIES=%lu, dinfo->p2m_size=%lu:\n", P2M_FL_ENTRIES, dinfo->p2m_size);
     for ( i = 0; i < P2M_FL_ENTRIES; i++ )
     {
         pfn = p2m_frame_list[i];
+	//fprintf(fp, "%ld ", pfn);
         if ( (pfn >= dinfo->p2m_size) || (pfn_type[pfn] != XEN_DOMCTL_PFINFO_NOTAB) )
         {
             ERROR("PFN-to-MFN frame number %i (%#lx) is bad", i, pfn);
             goto out;
         }
-        p2m_frame_list[i] = ctx->p2m[pfn];
+        p2m_frame_list_temp[i] = ctx->p2m[pfn];
     }
 
     /* Copy the P2M we've constructed to the 'live' P2M */
     if ( !(ctx->live_p2m = xc_map_foreign_pages(xch, dom, PROT_WRITE,
-                                           p2m_frame_list, P2M_FL_ENTRIES)) )
+                                           p2m_frame_list_temp, P2M_FL_ENTRIES)) )
     {
         PERROR("Couldn't map p2m table");
         goto out;
@@ -1795,13 +2223,177 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     else if ( dinfo->guest_width < sizeof (xen_pfn_t) )
         for ( i = 0; i < dinfo->p2m_size; i++ )   
             ((uint32_t *)ctx->live_p2m)[i] = ctx->p2m[i];
-    else
+    else {
         memcpy(ctx->live_p2m, ctx->p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
+    }
     munmap(ctx->live_p2m, P2M_FL_ENTRIES * PAGE_SIZE);
 
     DPRINTF("Domain ready to be built.\n");
+
     rc = 0;
-    goto out;
+
+    // output the store-mfn & console-mfn	 	
+    printf("store-mfn %li\n", *store_mfn);
+    printf("console-mfn %li\n", *console_mfn);
+    	
+	/* Enable dirty-log */
+  	if ( xc_shadow_control(xch, dom,
+			XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY,
+			NULL, 0, NULL, 0, NULL) < 0 )
+    	{
+		frc = xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_OFF,
+			NULL, 0, NULL, 0, NULL);
+		if ( frc >= 0 )
+		{
+			frc = xc_shadow_control(xch, dom,
+					XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY,
+					NULL, 0, NULL, 0, NULL);
+		}
+		if ( frc < 0 )
+		{
+			fprintf(fp, "Couldn't enable shadow mode (rc %d) (err %s)\n", frc, strerror(errno) );
+			fflush(fp);
+			goto out;
+		}
+	}
+    // notify python code checkpoint finish
+    printf("finish\n");
+    fflush(stdout);
+    
+    // wait domain resume, then connect the suspend evtchn
+    scanf("%s", str);
+    while (1) {
+    	frc = syscall(NR_wait_resume);
+	if (frc == 0)break;
+    }
+
+    if (first_time) {
+	sleep(10);
+    	remote_port = xs_suspend_evtchn_port(dom);
+    	if (remote_port < 0) {
+		fprintf(fp, "get evtchn port error.\n");
+		fflush(fp);
+    	}
+
+	fprintf(fp, "dom=%d, remote_port=%d.\n", dom, remote_port);
+
+    	local_port = xc_suspend_evtchn_init(xch, xce, dom, remote_port);
+   	 if (local_port < 0) {
+		fprintf(fp, "evtchn init error.\n");
+		fflush(fp);
+   	 }
+    }
+
+    printf("resume\n");
+    fflush(stdout);
+
+    fprintf(fp, "waiting for suspend...\n");
+    fflush(fp);
+    scanf("%s", str);
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]read suspend?=%s.\n", 
+		time.tv_sec, time.tv_usec, str);
+    fflush(fp);
+
+    if ( strcmp(str, "suspend") ) goto out;
+    //if ( !strcmp(str, "EOF") )goto out;
+    //if ( !strcmp(str, "exception") )goto out;
+   
+    // notify the suspend evtchn
+    frc = xc_evtchn_notify(xce, local_port);
+    if (frc < 0) {
+	fprintf(fp, "failed to notify suspend request channel.\n");
+	fflush(fp);
+    }
+
+    fprintf(fp, "waiting suspend done.\n");
+    fflush(fp);
+    frc = xc_await_suspend(xch, xce, local_port);
+    if (frc < 0) {
+	fprintf(fp, "suspend failed");
+	fflush(fp);
+    }
+
+    printf("suspend\n");
+    fflush(stdout); 
+
+    fprintf(fp, "waiting for start...\n");
+    fflush(fp);
+    scanf("%s", str);
+	
+    fprintf(fp, "receive1: %s\n", str);
+    fflush(fp);
+
+    if ( !strcmp(str, "EOF") )goto out;
+    if ( !strcmp(str, "exception") )goto out;
+    // start
+    scanf("%s", str);
+    fprintf(fp, "receive2: %s\n", str);
+    fflush(fp);
+    store_evtchn = atoi(str);
+    scanf("%s", str);
+    fprintf(fp, "receive3: %s\n", str);
+    fflush(fp);
+    console_evtchn = atoi(str);
+
+    // get dirty pages
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]begin get dirty-log.\n", 
+		time.tv_sec, time.tv_usec);
+    memset(to_send, 0x0, BITMAP_SIZE);
+    if ( xc_shadow_control(xch, dom,
+			XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
+			dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
+    {
+	fprintf(fp, "Error flushing shadow PT\n");
+	fflush(fp);
+	goto out;
+    }
+    for (i = j = 0; i < MEM_PAGES; i++) {
+	if ( !test_bit(i, to_send) )
+		continue;
+	j++;
+    }
+	
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]end get dirty-log.\n", 
+		time.tv_sec, time.tv_usec);
+    fprintf(fp, "local dirty page=%d.\n", j);
+    /*fprintf(fp, "dirty pages:\n");
+    for (pfn = 0; pfn < 65536; pfn++) {
+	if ( test_bit(pfn, to_send ) )
+		fprintf(fp, "%ld ", pfn);
+    }
+    fprintf(fp, "\n");*/
+    if ( xc_shadow_control(xch, dom,
+			XEN_DOMCTL_SHADOW_OP_OFF,
+			NULL, 0, NULL, 0, NULL) < 0 )
+    {
+	fprintf(fp, "Warning - couldn't disable shadow mode\n");
+	fflush(fp);
+	goto out;
+    }
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]end off dirty-log.\n", 
+		time.tv_sec, time.tv_usec);
+	
+    // reset memory
+    hypercall.op = __HYPERVISOR_reset_memory_op;
+    hypercall.arg[0] = (unsigned long)dom;
+
+    do_xen_hypercall(xch, &hypercall);
+    
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]end reset memory.\n", 
+		time.tv_sec, time.tv_usec);
+    
+    //goto loadpages;
+    first_time = 0;
+    goto next_checkpoint;
+
+    //goto out;
+    // ctx->completed = 0;
+    //goto next_checkpoint;
 
   finish_hvm:
     /* Dump the QEMU state to a state file for QEMU to load */
@@ -1861,14 +2453,22 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     rc = 0;
 
  out:
-    if ( (rc != 0) && (dom != 0) )
-        xc_domain_destroy(xch, dom);
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%d.%d]Out\n", (int)time.tv_sec, (int)time.tv_usec);
+    fflush(fp);
+    fclose(fp);
+    xc_evtchn_close(xce);
+    xs_daemon_close(xsh);
+
     xc_hypercall_buffer_free(xch, ctxt);
     free(mmu);
     free(ctx->p2m);
-    free(pfn_type);
+    //free(pfn_type);
+    free(pfn_err);
     tailbuf_free(&tailbuf);
 
+    free(pfn_type);
+    free(pagebase);
     /* discard cache for save file  */
     discard_file_cache(xch, io_fd, 1 /*flush*/);
 
