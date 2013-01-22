@@ -126,6 +126,7 @@ extern unsigned long nr_uninterruptible(void);
 extern unsigned long nr_active(void);
 extern unsigned long nr_iowait(void);
 extern unsigned long weighted_cpuload(const int cpu);
+extern unsigned long get_ms(void);
 
 
 /*
