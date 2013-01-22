@@ -11,6 +11,14 @@ import re
 import string
 import threading
 import fcntl
+import time
+import sys
+import datetime
+import popen2
+sys.path.append(os.getcwd()+"/python/xen/remus/")
+sys.path.append(os.getcwd()+"/source/xen-unstable/tools/python/xen/remus/")
+#print sys.path
+import util 
 from struct import pack, unpack, calcsize
 
 from xen.util.xpopen import xPopen3
@@ -23,6 +31,7 @@ from xen.xend.XendLogging import log
 from xen.xend.XendConfig import XendConfig
 from xen.xend.XendConstants import *
 from xen.xend import XendNode
+from xen.xend.xenstore.xsutil import ResumeDomain
 
 SIGNATURE = "LinuxGuestRecord"
 QEMU_SIGNATURE = "QemuDeviceModelRecord"
@@ -306,55 +315,248 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
 
         handler = RestoreInputHandler()
 
-        forkHelper(cmd, fd, handler.handler, True)
+	# create a process for major checkpointing
+	# the new process will wait
+    	child = xPopen3(cmd, True, -1, [fd])
+	pipe_out = child.fromchild
+	pipe_in = child.tochild
 
-        # We don't want to pass this fd to any other children -- we 
-        # might need to recover the disk space that backs it.
-        try:
-            flags = fcntl.fcntl(fd, fcntl.F_GETFD)
-            flags |= fcntl.FD_CLOEXEC
-            fcntl.fcntl(fd, fcntl.F_SETFD, flags)
-        except:
-            pass
+	running = True
+	firstTime = True
+	vnif = 'vif%s.0' % dominfo.domid
+	while running:
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]enter forkHelper", nt)
+        	#forkHelper(cmd, fd, handler.handler, True)
+		# notify chekcpoint
+		pipe_in.write("start")
+		pipe_in.write("\n")
+		store_port_str = '%d' % store_port
+		pipe_in.write(store_port_str)
+		pipe_in.write("\n")
+		console_port_str = '%d' % console_port
+		pipe_in.write(console_port_str)
+		pipe_in.write("\n")
+		pipe_in.flush()
 
-        if handler.store_mfn is None:
-            raise XendError('Could not read store MFN')
+		# wait for finish
+		while 1:
+			line = pipe_out.readline()
+        		if line == "finish\n":
+				break
+			if line == "error\n":
+				raise XendError('checkpoint error');
+	
+			m = re.match(r"^(store-mfn) (\d+)$", line)
+       			if m:
+            			handler.store_mfn = int(m.group(2))
+       			else:
+           			m = re.match(r"^(console-mfn) (\d+)$", line)
+            			if m:
+               				handler.console_mfn = int(m.group(2))
 
-        if not is_hvm and handler.console_mfn is None:
-            raise XendError('Could not read console MFN')        
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]leave forkHelper", nt)
+        	# We don't want to pass this fd to any other children -- we 
+        	# might need to recover the disk space that backs it.
+        	#try:
+            	#	flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+            	#	flags |= fcntl.FD_CLOEXEC
+            	#	fcntl.fcntl(fd, fcntl.F_SETFD, flags)
+        	#except:
+            	#	pass
 
-        restore_image.setCpuid()
+        	if handler.store_mfn is None:
+            		raise XendError('Could not read store MFN')
 
-        # xc_restore will wait for source to close connection
+        	if not is_hvm and handler.console_mfn is None:
+            		raise XendError('Could not read console MFN')        
+
+        	restore_image.setCpuid()
+		
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]setCpuid done", nt)
+
+        	# xc_restore will wait for source to close connection
         
-        dominfo.completeRestore(handler.store_mfn, handler.console_mfn)
+      		dominfo.completeRestore(handler.store_mfn, handler.console_mfn, firstTime)
+		
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]completeRestore done", nt)
 
-        #
-        # We shouldn't hold the domains_lock over a waitForDevices
-        # As this function sometime gets called holding this lock,
-        # we must release it and re-acquire it appropriately
-        #
-        from xen.xend import XendDomain
+        	#
+        	# We shouldn't hold the domains_lock over a waitForDevices
+        	# As this function sometime gets called holding this lock,
+        	# we must release it and re-acquire it appropriately
+        	#
+        	from xen.xend import XendDomain
 
-        lock = True;
-        try:
-            XendDomain.instance().domains_lock.release()
-        except:
-            lock = False;
+        	lock = True;
+        	try:
+            		XendDomain.instance().domains_lock.release()
+        	except:
+            		lock = False;
+		
+		#if firstTime == False:
+		#	break
+ 
+		# notify master side VM resume...
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]writing gotoresume to master", nt)
+		
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]enter domain resume", nt)
+			
+        	if firstTime:
+        		try:
+				log.debug("yewei-log-time:[%s]enter waitForDevices.", nt)
+            			dominfo.waitForDevices() # Wait for backends to set up
+				log.debug("yewei-log-time:[%s]leave waitForDevices.", nt)
+        		finally:
+            			if lock:
+                			XendDomain.instance().domains_lock.acquire()
 
-        try:
-            dominfo.waitForDevices() # Wait for backends to set up
-        finally:
-            if lock:
-                XendDomain.instance().domains_lock.acquire()
+            		dominfo.unpause()
+		else:
+			ret = xc.domain_resume(dominfo.domid, 2)
+			ResumeDomain(dominfo.domid)
 
-        if not paused:
-            dominfo.unpause()
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]leave domain resume & wait network connect", nt)
+		
+		# waiting for network connected
+		#while True:
+		while False:
+			state = util.runcmd('xenstore read /local/domain/0/backend/vif/%s/0/state' % dominfo.domid)
+			#log.debug("yewei-log: in, state=%s", state)
+			if state.strip('\n') == "4":
+				break
+ 		#time.sleep(1);
+		pipe_in.write("resume")
+		pipe_in.write("\n")
+		pipe_in.flush()
+		line = pipe_out.readline()	
+	
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]done network connect", nt)
+		
+		# setup the network environment
+		if firstTime == True:
+		#if 1 == 0:
+			util.runcmd('ifconfig eth0 promisc')
+		
+			util.runcmd('tc qdisc add dev eth0 ingress')
+			util.runcmd('tc filter add dev eth0 parent ffff: '
+				'protocol ip prio 10 u32 match u32 0 0 flowid 1:2 '
+				'action mirred egress redirect dev %s' % vnif)
+			util.runcmd('tc filter add dev eth0 parent ffff: '
+				'protocol arp prio 11 u32 match u32 0 0 flowid 1:2 '
+				'action mirred egress redirect dev %s' % vnif)
 
+			util.runcmd('tc qdisc add dev %s ingress' % vnif)
+			util.runcmd('tc filter add dev %s parent ffff: '
+				'protocol ip prio 10 u32 match u32 0 0 flowid 1:2 '
+				'action mirred egress redirect dev eth0' % vnif)
+			util.runcmd('tc filter add dev %s parent ffff: '
+				'protocol arp prio 11 u32 match u32 0 0 flowid 1:2 '
+				'action mirred egress redirect dev eth0' % vnif)
+			
+		# notify master side VM resumed
+		write_exact(fd, "resume\n", "failed to write resume done"); 
+		
+		#pipe_in.write("resume")
+		#pipe_in.write("\n")
+		#pipe_in.flush()
+		
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]finish!", nt)
+
+		iscontinue = read_exact(fd, 8,
+        		"failed to read continue flag")
+    		if iscontinue != "continue":
+			log.debug("yewei-log-time: receive is not continue, %s", iscontinue)
+        		running = False;
+			break
+		log.debug("yewei-log-time: receive %s", iscontinue);	
+
+	
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]==========start!============", nt)
+
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]enter domain suspend", nt)
+		
+		#dominfo.shutdown('suspend')
+		pipe_in.write("suspend")
+		pipe_in.write("\n")
+		pipe_in.flush()
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]write suspend done", nt)
+		# consider move waitForSuspend() to a later point!!!
+		#dominfo.waitForSuspend()
+		line = pipe_out.readline()
+		log.debug("yewei-log-time: waitforsuspend return of %s", line)
+		
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]leave domain suspend", nt)
+
+		#break
+
+		# notify master side suspend done.
+		write_exact(fd, "suspend\n", "failed to write suspend done")
+
+		isstart = read_exact(fd, 5,
+        		"failed to read start flag")
+    		if isstart != "start":
+			log.debug("yewei-log-time: receive is not start")
+        		running = False;
+			break
+
+		log.debug("yewei-log-time: receive %s", isstart);	
+
+	
+		# xenstore port and console port should reallocated due to evtchn reset.	
+		dominfo._createChannels(store_port, console_port)
+    		store_port   = dominfo.getStorePort()
+    		console_port = dominfo.getConsolePort()
+
+		#cmd = map(str, [xen.util.auxbin.pathTo(XC_RESTORE),
+                 #  	     	fd, dominfo.getDomid(),
+                  #      	store_port, console_port, int(is_hvm), pae, apic, superpages])
+    		
+		#running = False;
+		firstTime = False
+        	log.debug("yewei: [xc_restore]: %s", string.join(cmd))
+
+	#util.runcmd('tc filter del dev eth1 parent ffff: protocol ip prio 10 u32')
+	#util.runcmd('tc filter del dev eth1 parent ffff: protocol arp prio 11 u32')
+	#util.runcmd('tc qdisc del dev eth1 ingress')
+
+	#util.runcmd('tc filter del dev %s parent ffff: protocol ip prio 10 u32' % vnif)
+	#util.runcmd('tc filter del dev %s parent ffff: protocol arp prio 11 u32' % vnif)
+	#util.runcmd('tc qdisc del dev %s ingress' % vnif)	
+
+	#util.runcmd('brctl addif eth0 %s' % vnif)
+
+	pipe_in.write("EOF")
+	pipe_in.write("\n")
+	pipe_in.flush()
         return dominfo
     except Exception, exn:
+
+	#util.runcmd('tc filter del dev eth1 parent ffff: protocol ip prio 10 u32')
+	#util.runcmd('tc filter del dev eth1 parent ffff: protocol arp prio 11 u32')
+	#util.runcmd('tc qdisc del dev eth1 ingress')
+
+	#util.runcmd('tc filter del dev %s parent ffff: protocol ip prio 10 u32' % vnif)
+	#util.runcmd('tc filter del dev %s parent ffff: protocol arp prio 11 u32' % vnif)
+	#util.runcmd('tc qdisc del dev %s ingress' % vnif)	
+	
         dominfo.destroy()
         log.exception(exn)
+	pipe_in.write("exception")
+	pipe_in.write("\n")
+	pipe_in.flush()
         raise exn
 
 
