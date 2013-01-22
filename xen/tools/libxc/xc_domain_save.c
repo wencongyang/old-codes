@@ -24,7 +24,13 @@
 #include <time.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <syscall.h>
 #include <sys/time.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <asm/ioctl.h>
 
 #include "xc_private.h"
 #include "xc_dom.h"
@@ -33,6 +39,14 @@
 
 #include <xen/hvm/params.h>
 #include "xc_e820.h"
+
+#define COMP_IOC_MAGIC		'k'
+#define COMP_IOCTWAIT		_IO(COMP_IOC_MAGIC, 0)
+#define COMP_IOCTSUSPEND	_IO(COMP_IOC_MAGIC, 1)
+#define COMP_IOCTRESUME		_IO(COMP_IOC_MAGIC, 2)
+#define NR_wait_resume		312
+#define NR_vif_block		313
+#define NR_reset_suspend_count	314
 
 /*
 ** Default values for important tuning parameters. Can override by passing
@@ -43,6 +57,8 @@
 */
 #define DEF_MAX_ITERS   29   /* limit us to 30 times round loop   */
 #define DEF_MAX_FACTOR   3   /* never send more than 3x p2m_size  */
+//#define FAILOVER
+#define NET_FW
 
 struct save_ctx {
     unsigned long hvirt_start; /* virtual starting address of the hypervisor */
@@ -896,6 +912,63 @@ static int save_tsc_info(xc_interface *xch, uint32_t dom, int io_fd)
     return 0;
 }
 
+#ifdef NET_FW
+static void start_input_network(void)
+{
+	pid_t pid;
+
+	pid = vfork();
+	if (pid > 0) { // father wait child exit
+		wait(NULL);
+		return;
+	}
+
+	execl("/root/yewei/source/pure/code/HA_fw_runtime.sh", "HA_fw_runtime.sh", "input", NULL);
+}
+#endif
+#ifdef FAILOVER
+static void failover(void)
+{
+	pid_t pid;
+
+	pid = vfork();
+	if (pid > 0) {
+		wait(NULL);
+		return;
+	}
+	
+	execl("/root/yewei/source/pure/code/failover_master.sh", "failover_master.sh", NULL);
+}
+#endif
+
+#ifdef NET_FW
+static void install_fw_network(void)
+{
+	pid_t pid;
+
+	pid = vfork();
+	if (pid > 0) { // father wait child exit
+		wait(NULL);
+		return;
+	}
+
+	execl("/root/yewei/source/pure/code/HA_fw_runtime.sh", "HA_fw_runtime.sh", "install", NULL);
+}
+#endif
+/*static void uninstall_fw_network(void)
+{
+	pid_t pid;
+
+	pid = vfork();
+	if (pid > 0) { // father wait child exit
+		wait(NULL);
+		return;
+	}
+
+	execl("/root/yewei/source/pure/code/HA_fw_runtime.sh", "HA_fw_runtime.sh", "uninstall", NULL);
+}
+*/
+
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
                    struct save_callbacks* callbacks, int hvm)
@@ -966,6 +1039,18 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     struct domain_info_context *dinfo = &ctx->dinfo;
 
     int completed = 0;
+    int first_time = 1;
+
+    char sig_buf[20];
+    int dev_fd=0;
+    int err;
+    struct timeval tv, stv;
+    fd_set rfds;
+    int want_exit = 0;
+
+
+    syscall(NR_reset_suspend_count);
+    syscall(NR_vif_block, 0);
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -1524,6 +1609,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     ERROR("Domain appears not to have suspended");
                     goto out;
                 }
+		callbacks->flush_disk(callbacks->data);
 
                 DPRINTF("SUSPEND shinfo %08lx\n", info.shared_info_frame);
                 if ( (tmem_saved > 0) &&
@@ -1644,8 +1730,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         }
     }
 
-    if ( !callbacks->checkpoint )
-    {
+    //if ( !callbacks->checkpoint )
+    //{
         /*
          * If this is not a checkpointed save then this must be the first and
          * last checkpoint.
@@ -1656,7 +1742,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             PERROR("Error when writing last checkpoint chunk");
             goto out;
         }
-    }
+    //}
 
     /* Zero terminate */
     i = 0;
@@ -1898,24 +1984,105 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
  out:
     completed = 1;
-
-    if ( !rc && callbacks->postcopy )
-        callbacks->postcopy(callbacks->data);
-
+   
+    printf("begin flush sockets.\n");
+ 
     /* Flush last write and discard cache for file. */
     if ( outbuf_flush(xch, &ob, io_fd) < 0 ) {
         PERROR("Error when flushing output buffer");
         rc = 1;
     }
 
-    discard_file_cache(xch, io_fd, 1 /* flush */);
+    discard_file_cache(xch, io_fd, 1);
 
-    /* checkpoint_cb can spend arbitrarily long in between rounds */
-    if (!rc && callbacks->checkpoint &&
-        callbacks->checkpoint(callbacks->data) > 0)
-    {
+ resume:
+    if ( !rc && callbacks->postcopy )
+        callbacks->postcopy(callbacks->data);
+
+    if (want_exit)
+	goto sigintr;
+    
+    /* wait VM resume from suspend, and vnif connects */
+    //TODO
+    gettimeofday(&tv, NULL);
+    	frc = syscall(NR_wait_resume);
+   
+    /* wait slaver finish resume */
+    read(io_fd, sig_buf, 7);
+    sig_buf[7] = 0;
+    printf("received from slaver: str=%s\n", sig_buf);
+    
+    /* forward network */
+    // COMMENTS: For manually raise ck. 
+#ifdef NET_FW
+    if(first_time) {
+	install_fw_network();
+    	start_input_network();
+    } else {
+	syscall(NR_vif_block, 0);
+    }     
+#endif
+
+    // COMMENTS: For manually raise ck.
+#ifdef NET_FW
+    if (!first_time) {
+    	// notify compare module checkpoint finish
+    	printf("notify checkpoint finish.\n");
+    	ioctl(dev_fd, COMP_IOCTRESUME);
+	printf("done\n");
+    }
+#endif
+
+    callbacks->checkpoint(callbacks->data);
+    
+    // COMMENTS: For manually raise ck.
+#ifdef NET_FW
+    if (first_time) {
+	printf("open /dev/HA_compare done.\n");
+	dev_fd = open("/dev/HA_compare", O_RDWR);
+	if (dev_fd < 0) {
+		printf("open /dev/HA_compare failed, check whether load compare module.\n");
+		return 1;
+	}
+    }	
+#endif
+	/* wait for a new chekcpoint */
+
+start_ck:
+	printf("wait for new checkpoint.\n");
+#ifdef NET_FW
+		err = ioctl(dev_fd, COMP_IOCTWAIT);
+#else
+		printf("pause:");
+		scanf("%d", &err);
+#endif
+#ifdef FAILOVER
+#ifdef NET_FW
+	if (err < 0) {
+		failover();
+		printf("failover.\n");
+		scanf("%d", &err);
+		goto start_ck;
+	}
+#endif
+#endif
+
+ 	gettimeofday(&tv, NULL);
+  	printf("TIME: checkpoint start at %lu.%06lu\n", (unsigned long)tv.tv_sec,
+         (unsigned long)tv.tv_usec);
+
         /* reset stats timer */
         print_stats(xch, dom, 0, &stats, 0);
+	
+	//stop_input_network();
+	syscall(NR_vif_block, 1);
+	
+	/* notify to continue checkpoint */ 
+	if ( write_exact(io_fd, "continue", 8) )
+	{
+		PERROR("write: continue");
+		goto out;
+	}
 
         rc = 1;
         /* last_iter = 1; */
@@ -1923,7 +2090,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                                io_fd, dom, &info) )
         {
             ERROR("Domain appears not to have suspended");
-            goto out;
+            goto sigintr;
         }
         DPRINTF("SUSPEND shinfo %08lx\n", info.shared_info_frame);
         print_stats(xch, dom, 0, &stats, 1);
@@ -1935,8 +2102,55 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             PERROR("Error flushing shadow PT");
         }
 
+	/* wait slaver side suspend done */
+	while (1) {
+		tv.tv_sec = 100;
+		tv.tv_usec = 0;
+
+		FD_ZERO(&rfds);
+		FD_SET(io_fd, &rfds);
+		err = select(io_fd + 1, &rfds, NULL, NULL, &tv);
+		if ( err == -1 && errno == EINTR )
+			continue;
+		if ( !FD_ISSET(io_fd, &rfds) ) {
+			printf("Timeout to notify slaver.\n");
+			rc = 0;
+			want_exit = 1;
+			goto resume;
+		}
+		
+		read(io_fd, sig_buf, 8);
+		sig_buf[8] = 0;
+		printf("received from slaver: str=%s\n", sig_buf);
+		break;
+        }
+
+	if (sig_buf[0] == 'r')
+		goto start_ck;
+
+ 	gettimeofday(&tv, NULL);
+	printf("receive at %lu.%06lu.\n", (unsigned long)tv.tv_sec,
+	 (unsigned long)tv.tv_usec);
+
+	// Notify the slaver to flush the disk.
+	printf("flush disk.\n");
+	callbacks->flush_disk(callbacks->data);
+
+	write_exact(io_fd, "start", 5);
+	
+	/* Notify compare module VMs are suspended. */
+	ioctl(dev_fd, COMP_IOCTSUSPEND);
+
+	/* Tell the xc_domain_restore routine this is not the first checkpoint */
+	first_time = 0;
         goto copypages;
-    }
+    //}
+    /* notify to stop checkpoint */
+sigintr:
+    write_exact(io_fd, "byebye!!", 8);
+    close(dev_fd);
+    // COMMENTS: For manually raise ck.
+    //uninstall_fw_network();
 
     if ( tmem_saved != 0 && live )
         xc_tmem_save_done(xch, dom);
@@ -1967,6 +2181,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     free(pfn_batch);
     free(pfn_err);
     free(to_fix);
+   close(dev_fd);
 
     DPRINTF("Save exit rc=%d\n",rc);
 
