@@ -113,6 +113,8 @@ void tcp_unhash(struct sock *sk)
 
 static inline __u32 tcp_v4_init_sequence(struct sock *sk, struct sk_buff *skb)
 {
+	return 0x12345678;
+
 	return secure_tcp_sequence_number(skb->nh.iph->daddr,
 					  skb->nh.iph->saddr,
 					  skb->h.th->dest,
@@ -250,7 +252,8 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 							   inet->sport,
 							   usin->sin_port);
 
-	inet->id = tp->write_seq ^ jiffies;
+	//inet->id = tp->write_seq ^ jiffies;
+	inet->id = tp->write_seq ^ 0x123456;
 
 	err = tcp_connect(sk);
 	rt = NULL;
@@ -916,7 +919,8 @@ struct sock *tcp_v4_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
 	inet_csk(newsk)->icsk_ext_hdr_len = 0;
 	if (newinet->opt)
 		inet_csk(newsk)->icsk_ext_hdr_len = newinet->opt->optlen;
-	newinet->id = newtp->write_seq ^ jiffies;
+	//newinet->id = newtp->write_seq ^ jiffies;
+	newinet->id = newtp->write_seq ^ 0x123456;
 
 	tcp_mtup_init(newsk);
 	tcp_sync_mss(newsk, dst_mtu(dst));
