@@ -2393,6 +2393,31 @@ error:
     rcu_unlock_domain(d);
     return ret;
 }
+int do_rdwt_data_op(XEN_GUEST_HANDLE(rdwt_data_t) arg)
+{
+	static rdwt_data_t save;
+	rdwt_data_t data;
+	if ( copy_from_guest(&data, arg, 1) ) {
+		printk("yewei: rdwt data failed.\n");
+		return -1;
+	}
+
+	if (data.flag == 0) { //read
+		copy_to_guest(arg, &save, 1);
+	} else { //write
+		//memcpy(&save, &data, sizeof(rdwt_data_t));
+		//printk("yewei: tx=%d, rx=%d.\n", save.tx_ref, save.rx_ref);
+		if (data.vnif_evtchn) {
+			save.rx_ref = data.rx_ref;
+			save.tx_ref = data.tx_ref;
+			save.vnif_evtchn = data.vnif_evtchn;
+		} else if (data.vbd_evtchn) {
+			save.vbd_ref = data.vbd_ref;
+			save.vbd_evtchn = data.vbd_evtchn;
+		}
+	}
+	return 0;
+}
 
 void arch_dump_domain_info(struct domain *d)
 {
