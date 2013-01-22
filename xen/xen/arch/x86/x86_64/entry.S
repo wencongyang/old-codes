@@ -689,6 +689,11 @@ ENTRY(hypercall_table)
         .quad do_domctl
         .quad do_kexec_op
         .quad do_tmem_op
+	.quad do_mfncopy_op
+	.quad do_which_side_op
+	.quad do_ni_hypercall
+	.quad do_reset_memory_op
+	.quad do_rdwt_data_op
         .rept __HYPERVISOR_arch_0-((.-hypercall_table)/8)
         .quad do_ni_hypercall
         .endr
@@ -737,6 +742,11 @@ ENTRY(hypercall_args_table)
         .byte 1 /* do_domctl            */
         .byte 2 /* do_kexec             */
         .byte 1 /* do_tmem_op           */
+	.byte 2 /* do_mfncopy_op	*/
+	.byte 1 /* do_which_side_op	*/
+	.byte 1 /* do_dump_pageframe_info */
+	.byte 1 /* do_reset_memory_op	*/
+	.byte 1 /* do_rdwt_data_op	*/
         .rept __HYPERVISOR_arch_0-(.-hypercall_args_table)
         .byte 0 /* do_ni_hypercall      */
         .endr

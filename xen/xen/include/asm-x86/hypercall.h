@@ -105,6 +105,18 @@ extern int
 do_kexec(
     unsigned long op, unsigned arg1, XEN_GUEST_HANDLE(void) uarg);
 
+extern int
+do_mfncopy_op(
+	unsigned long mfn, unsigned long pagebuff);
+
+extern int
+do_which_side_op(
+	unsigned long is_set);
+
+extern int
+do_rdwt_data_op(
+    XEN_GUEST_HANDLE(rdwt_data_t) arg);
+
 #ifdef __x86_64__
 
 extern long
