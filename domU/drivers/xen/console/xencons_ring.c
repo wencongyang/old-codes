@@ -49,6 +49,8 @@
 #include <xen/interface/io/console.h>
 
 static int xencons_irq;
+extern int HA_xencons_evtchn;
+extern int HA_xencons_irq;
 
 static inline struct xencons_interface *xencons_interface(void)
 {
@@ -130,6 +132,8 @@ int xencons_ring_init(void)
 	}
 
 	xencons_irq = irq;
+	HA_xencons_irq = irq;
+	HA_xencons_evtchn = xen_start_info->console.domU.evtchn;
 
 	/* In case we have in-flight data after save/restore... */
 	notify_daemon();
