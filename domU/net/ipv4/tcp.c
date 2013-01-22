@@ -448,9 +448,13 @@ int tcp_ioctl(struct sock *sk, int cmd, unsigned long arg)
 	return put_user(answ, (int __user *)arg);
 }
 
+#define HA_REMOVE_PSH
+
 static inline void tcp_mark_push(struct tcp_sock *tp, struct sk_buff *skb)
 {
+#ifndef HA_REMOVE_PSH
 	TCP_SKB_CB(skb)->flags |= TCPCB_FLAG_PSH;
+#endif
 	tp->pushed_seq = tp->write_seq;
 }
 
@@ -838,8 +842,8 @@ new_segment:
 wait_for_sndbuf:
 			set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 wait_for_memory:
-			if (copied)
-				tcp_push(sk, tp, flags & ~MSG_MORE, mss_now, TCP_NAGLE_PUSH);
+			//if (copied)
+			//	tcp_push(sk, tp, flags & ~MSG_MORE, mss_now, TCP_NAGLE_PUSH);
 
 			if ((err = sk_stream_wait_memory(sk, &timeo)) != 0)
 				goto do_error;
