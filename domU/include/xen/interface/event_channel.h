@@ -231,6 +231,14 @@ struct evtchn_reset {
 };
 typedef struct evtchn_reset evtchn_reset_t;
 
+#define EVTCHNOP_select_reset	11
+struct evtchn_select_reset {
+    /* IN parameters. */
+    int port_no[10];
+    int len;
+};
+typedef struct evtchn_select_reset evtchn_select_reset_t;
+
 /*
  * Argument to event_channel_op_compat() hypercall. Superceded by new
  * event_channel_op() hypercall since 0x00030202.
