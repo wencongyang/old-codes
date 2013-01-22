@@ -34,6 +34,7 @@ import os
 import stat
 import shutil
 import traceback
+import datetime
 from types import StringTypes
 
 import xen.lowlevel.xc
@@ -2021,13 +2022,15 @@ class XendDomainInfo:
         # If set at the end of this method, a restart is required, with the
         # given reason.  This restart has to be done out of the scope of
         # refresh_shutdown_lock.
+	nt = datetime.datetime.now()
+	log.debug("yewei-log-time:[%s] in refreshShutdown", nt)
         restart_reason = None
 
         self.refresh_shutdown_lock.acquire()
         try:
             if xeninfo is None:
-                xeninfo = dom_get(self.domid)
-                if xeninfo is None:
+		xeninfo = dom_get(self.domid)
+		if xeninfo is None:
                     # The domain no longer exists.  This will occur if we have
                     # scheduled a timer to check for shutdown timeouts and the
                     # shutdown succeeded.  It will also occur if someone
@@ -3005,22 +3008,37 @@ class XendDomainInfo:
     # TODO: recategorise - called from XendCheckpoint
     # 
 
-    def completeRestore(self, store_mfn, console_mfn):
+    def completeRestore(self, store_mfn, console_mfn, first_time=True):
 
-        log.debug("XendDomainInfo.completeRestore")
+        #log.debug("XendDomainInfo.completeRestore")
 
         self.store_mfn = store_mfn
         self.console_mfn = console_mfn
 
-        self._introduceDomain()
-        self.image = image.create(self, self.info)
-        if self.image:
-            self.image.createDeviceModel(True)
-        self._storeDomDetails()
-        self._registerWatches()
-        self.refreshShutdown()
+	if first_time:
+		self._introduceDomain()
 
-        log.debug("XendDomainInfo.completeRestore done")
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]_introduceDomain done", nt)
+        
+	#self.image = image.create(self, self.info)
+	#if self.image:
+        #    self.image.createDeviceModel(True)
+
+	if first_time:
+	#if True:
+		self._storeDomDetails()
+	
+		nt = datetime.datetime.now()
+		log.debug("yewei-log-time:[%s]_storeDomDetails done", nt)
+	
+	#self._registerWatches()
+	
+	#nt = datetime.datetime.now()
+	#log.debug("yewei-log-time:[%s]_registerWatches done", nt)
+        #self.refreshShutdown()
+
+        #log.debug("XendDomainInfo.completeRestore done")
 
 
     def _endRestore(self):
@@ -3180,11 +3198,17 @@ class XendDomainInfo:
     # Channels for xenstore and console
     # 
 
-    def _createChannels(self):
+    def _createChannels(self, store=-1, console=-1):
         """Create the channels to the domain.
         """
-        self.store_port = self._createChannel()
-        self.console_port = self._createChannel()
+	if store == -1:
+        	self.store_port = self._createChannel()
+	else:
+		self.store_port = store
+        if console == -1:
+		self.console_port = self._createChannel()
+	else:
+		self.console_port = console
 
 
     def _createChannel(self):
