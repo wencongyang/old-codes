@@ -94,6 +94,10 @@ DEFINE_XEN_GUEST_HANDLE(xen_pfn_t);
 #define __HYPERVISOR_kexec_op             37
 #define __HYPERVISOR_tmem_op              38
 #define __HYPERVISOR_xc_reserved_op       39 /* reserved for XenClient */
+#define __HYPERVISOR_which_side_op	  40
+#define __HYPERVISOR_dump_pageframe_info_po 41
+#define __HYPERVISOR_reset_memory_op	  42
+#define __HYPERVISOR_rdwt_data_op	  43
 
 /* Architecture-specific hypercall definitions. */
 #define __HYPERVISOR_arch_0               48
