@@ -24,6 +24,7 @@ main(int argc, char **argv)
     int io_fd, ret;
     int superpages;
     unsigned long store_mfn, console_mfn;
+    char str[10];
 
     if ( (argc != 8) && (argc != 9) )
         errx(1, "usage: %s iofd domid store_evtchn "
@@ -45,16 +46,25 @@ main(int argc, char **argv)
     else
 	    superpages = 0;
 
+	scanf("%s", str);
+	
+	if ( !strcmp(str, "EOF") ) return 0;
+	// start
+	scanf("%s", str);
+	store_evtchn = atoi(str);
+	scanf("%s", str);
+	console_evtchn = atoi(str);
+
     ret = xc_domain_restore(xch, io_fd, domid, store_evtchn, &store_mfn,
                             console_evtchn, &console_mfn, hvm, pae, superpages);
 
-    if ( ret == 0 )
-    {
-	printf("store-mfn %li\n", store_mfn);
-        if ( !hvm )
-            printf("console-mfn %li\n", console_mfn);
-	fflush(stdout);
-    }
+   	 if ( ret == 0 )
+    	 {
+		fflush(stdout);
+    	} else {
+		printf("error\n");
+		fflush(stdout);
+	}
 
     xc_interface_close(xch);
 
