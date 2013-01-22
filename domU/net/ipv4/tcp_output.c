@@ -226,6 +226,8 @@ void tcp_select_initial_window(int __space, __u32 mss,
 	(*window_clamp) = min(65535U << (*rcv_wscale), *window_clamp);
 }
 
+#define HA_COARSE_WINDOW
+
 /* Chose a new window to advertise, update state in tcp_sock for the
  * socket, and return result with RFC1323 scaling applied.  The return
  * value can be stuffed directly into th->window for an outgoing
@@ -236,6 +238,7 @@ static u16 tcp_select_window(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 	u32 cur_win = tcp_receive_window(tp);
 	u32 new_win = __tcp_select_window(sk);
+	int bits;
 
 	/* Never shrink the offered window */
 	if(new_win < cur_win) {
@@ -265,8 +268,22 @@ static u16 tcp_select_window(struct sock *sk)
 	/* If we advertise zero window, disable fast path. */
 	if (new_win == 0)
 		tp->pred_flags = 0;
-
+#ifdef HA_COARSE_WINDOW
+	//if ( new_win > 255) {
+	//	return new_win & ~(0xff);
+	//}
+	
+	for (bits = 15; bits >=0; bits--)
+		if (new_win & (1<<bits)) break;
+	if (bits < 0)
+		return 0;
+	else {
+		//return (new_win >> (bits-1)) << (bits-1);
+		return (u16)(1<<bits);
+	}
+#else
 	return new_win;
+#endif
 }
 
 static void tcp_build_and_update_options(__u32 *ptr, struct tcp_sock *tp,
@@ -1485,6 +1502,7 @@ u32 __tcp_select_window(struct sock *sk)
 	int free_space = tcp_space(sk);
 	int full_space = min_t(int, tp->window_clamp, tcp_full_space(sk));
 	int window;
+	//int bits;
 
 	if (mss > full_space)
 		mss = full_space; 
@@ -1530,6 +1548,15 @@ u32 __tcp_select_window(struct sock *sk)
 	}
 
 	return window;
+	/*for(bits = 30; bits >= 0; bits--) {
+		if (window & (1U<<bits))
+			break;
+	}
+	if (bits >= 0)
+		return (u32)(1U<<bits);
+	else
+		return 0;
+	*/
 }
 
 /* Attempt to collapse two adjacent SKB's during retransmission. */
@@ -1914,11 +1941,11 @@ void tcp_send_fin(struct sock *sk)
 	 */
 	mss_now = tcp_current_mss(sk, 1);
 
-	if (sk->sk_send_head != NULL) {
-		TCP_SKB_CB(skb)->flags |= TCPCB_FLAG_FIN;
-		TCP_SKB_CB(skb)->end_seq++;
-		tp->write_seq++;
-	} else {
+	//if (sk->sk_send_head != NULL) {
+	//	TCP_SKB_CB(skb)->flags |= TCPCB_FLAG_FIN;
+	//	TCP_SKB_CB(skb)->end_seq++;
+	//	tp->write_seq++;
+	//} else {
 		/* Socket is locked, keep trying until memory is available. */
 		for (;;) {
 			skb = alloc_skb_fclone(MAX_TCP_HEADER, GFP_KERNEL);
@@ -1940,7 +1967,7 @@ void tcp_send_fin(struct sock *sk)
 		TCP_SKB_CB(skb)->seq = tp->write_seq;
 		TCP_SKB_CB(skb)->end_seq = TCP_SKB_CB(skb)->seq + 1;
 		tcp_queue_skb(sk, skb);
-	}
+	//}
 	__tcp_push_pending_frames(sk, tp, mss_now, TCP_NAGLE_OFF);
 }
 
