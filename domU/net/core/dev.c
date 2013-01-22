@@ -155,6 +155,7 @@
  *		0009	Localtalk
  *		86DD	IPv6
  */
+extern int HA_block_xmit;
 
 static DEFINE_SPINLOCK(ptype_lock);
 static struct list_head ptype_base[16];	/* 16 way hashed list */
@@ -1538,9 +1539,9 @@ gso:
 		q = dev->qdisc;
 		if (q->enqueue) {
 			rc = q->enqueue(skb, q);
-			qdisc_run(dev);
+			if (!HA_block_xmit)
+				qdisc_run(dev);
 			spin_unlock(&dev->queue_lock);
-
 			rc = rc == NET_XMIT_BYPASS ? NET_XMIT_SUCCESS : rc;
 			goto out;
 		}
