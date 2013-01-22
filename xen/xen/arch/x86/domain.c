@@ -58,6 +58,9 @@
 #include <compat/vcpu.h>
 #endif
 
+unsigned long long reserve_mfn[2];
+int time = 0;
+
 DEFINE_PER_CPU(struct vcpu *, curr_vcpu);
 DEFINE_PER_CPU(unsigned long, cr4);
 
@@ -779,13 +782,15 @@ int arch_set_info_guest(
         rc = (int)set_gdt(v, gdt_frames, c.cmp->gdt_ents);
     }
 #endif
-    if ( rc != 0 )
+    if ( rc != 0 ) {
+	printk("yewei: set_gdt error.\n");
         return rc;
+    }
 
     if ( !compat )
     {
         cr3_pfn = gmfn_to_mfn(d, xen_cr3_to_pfn(c.nat->ctrlreg[3]));
-
+	printk("yewei: cr3 mfn=%lx\n", cr3_pfn);
         if ( !mfn_valid(cr3_pfn) ||
              (paging_mode_refcounts(d)
               ? !get_page(mfn_to_page(cr3_pfn), d)
@@ -802,7 +807,7 @@ int arch_set_info_guest(
         if ( c.nat->ctrlreg[1] )
         {
             cr3_pfn = gmfn_to_mfn(d, xen_cr3_to_pfn(c.nat->ctrlreg[1]));
-
+	    printk("yewei: user cr3 mfn=%lx\n", cr3_pfn);
             if ( !mfn_valid(cr3_pfn) ||
                  (paging_mode_refcounts(d)
                   ? !get_page(mfn_to_page(cr3_pfn), d)
@@ -896,6 +901,7 @@ unmap_vcpu_info(struct vcpu *v)
     v->vcpu_info = &dummy_vcpu_info;
     v->arch.vcpu_info_mfn = INVALID_MFN;
 
+    printk("yewei: vcpu info mfn = %lx\n", mfn);
     put_page_and_type(mfn_to_page(mfn));
 }
 
@@ -1776,6 +1782,7 @@ static int relinquish_memory(
             page_list_add(page, list);
             set_bit(_PGT_pinned, &page->u.inuse.type_info);
             put_page(page);
+	    printk("yewei: error put_page_and_type_preemptible.\n");
             goto out;
         default:
             BUG();
@@ -1824,6 +1831,7 @@ static int relinquish_memory(
                     page->u.inuse.type_info |= PGT_partial;
                     if ( x & PGT_partial )
                         put_page(page);
+		    printk("yewei: error free_page_type.\n");
                     goto out;
                 default:
                     BUG();
@@ -1856,6 +1864,118 @@ static int relinquish_memory(
     return ret;
 }
 
+static int relinquish_memory2(
+    struct domain *d, struct page_list_head *list, unsigned long type)
+{
+    struct page_info  *page;
+    unsigned long     x, y;
+    int               ret = 0;
+
+    /* Use a recursive lock, as we may enter 'free_domheap_page'. */
+    spin_lock_recursive(&d->page_alloc_lock);
+
+    while ( (page = page_list_remove_head(list)) )
+    {
+        /* Grab a reference to the page so it won't disappear from under us. */
+        if ( unlikely(!get_page(page, d)) )
+        {
+            /* Couldn't get a reference -- someone is freeing this page. */
+            page_list_add_tail(page, &d->arch.relmem_list);
+	    printk("yewei: error get_page.\n");
+            continue;
+        }
+
+        if ( test_and_clear_bit(_PGT_pinned, &page->u.inuse.type_info) )
+            ret = put_page_and_type_preemptible(page, 0);
+        switch ( ret )
+        {
+        case 0:
+            break;
+        case -EAGAIN:
+        case -EINTR:
+            ret = -EAGAIN;
+            page_list_add(page, list);
+            set_bit(_PGT_pinned, &page->u.inuse.type_info);
+            put_page(page);
+	    printk("yewei: error put_page_and_type_preemptible.\n");
+            goto out;
+        default:
+            BUG();
+        }
+
+        clear_superpage_mark(page);
+
+        //if ( test_and_clear_bit(_PGC_allocated, &page->count_info) )
+        //    put_page(page);
+
+        /*
+         * Forcibly invalidate top-most, still valid page tables at this point
+         * to break circular 'linear page table' references as well as clean up
+         * partially validated pages. This is okay because MMU structures are
+         * not shared across domains and this domain is now dead. Thus top-most
+         * valid tables are not in use so a non-zero count means circular
+         * reference or partially validated.
+         */
+        y = page->u.inuse.type_info;
+        for ( ; ; )
+        {
+            x = y;
+            if ( likely((x & PGT_type_mask) != type) ||
+                 likely(!(x & (PGT_validated|PGT_partial))) )
+                break;
+
+            y = cmpxchg(&page->u.inuse.type_info, x,
+                        x & ~(PGT_validated|PGT_partial));
+            if ( likely(y == x) )
+            {
+                /* No need for atomic update of type_info here: noone else updates it. */
+                switch ( ret = free_page_type(page, x, 0) )
+                {
+                case 0:
+                    break;
+                case -EINTR:
+                    page_list_add(page, list);
+                    page->u.inuse.type_info |= PGT_validated;
+                    if ( x & PGT_partial )
+                        put_page(page);
+                    put_page(page);
+                    ret = -EAGAIN;
+		    printk("yewei: error free_page_type.\n");
+                    goto out;
+                case -EAGAIN:
+                    page_list_add(page, list);
+                    page->u.inuse.type_info |= PGT_partial;
+                    if ( x & PGT_partial )
+                        put_page(page);
+		    printk("yewei: error free_page_type.\n");
+                    goto out;
+                default:
+                    BUG();
+                }
+                if ( x & PGT_partial )
+                {
+                    page->u.inuse.type_info--;
+                    put_page(page);
+                }
+                break;
+            }
+        }
+	/* type count is zero, so it is safe to reset page type */
+	//page->u.inuse.type_info = PGT_writable_page | PGT_validated;
+
+        /* Put the page on the list and /then/ potentially free it. */
+        page_list_add_tail(page, &d->arch.relmem_list);
+        put_page(page);
+    }
+
+    /* list is empty at this point. */
+    page_list_move(list, &d->arch.relmem_list);
+
+ out:
+    spin_unlock_recursive(&d->page_alloc_lock);
+    return ret;
+}
+
 static void vcpu_destroy_pagetables(struct vcpu *v)
 {
     struct domain *d = v->domain;
@@ -1864,6 +1984,7 @@ static void vcpu_destroy_pagetables(struct vcpu *v)
 #ifdef __x86_64__
     if ( is_pv_32on64_vcpu(v) )
     {
+	printk("yewei: pv 32 on 64.\n");
         pfn = l4e_get_pfn(*(l4_pgentry_t *)
                           __va(pagetable_get_paddr(v->arch.guest_table)));
 
@@ -1885,18 +2006,25 @@ static void vcpu_destroy_pagetables(struct vcpu *v)
 #endif
 
     pfn = pagetable_get_pfn(v->arch.guest_table);
+    printk("yewei: pagetable pfn = %lx, mfn = %p\n", pfn, _p(gmfn_to_mfn(d, pfn)));
+
     if ( pfn != 0 )
     {
-        if ( paging_mode_refcounts(d) )
+        if ( paging_mode_refcounts(d) ) {
+	    printk("put_page.\n");
             put_page(mfn_to_page(pfn));
-        else
+	}
+        else {
+	    printk("put_page_and_type.\n");
             put_page_and_type(mfn_to_page(pfn));
+	}
         v->arch.guest_table = pagetable_null();
     }
 
 #ifdef __x86_64__
     /* Drop ref to guest_table_user (from MMUEXT_NEW_USER_BASEPTR) */
     pfn = pagetable_get_pfn(v->arch.guest_table_user);
+    printk("yewei: pagetable user pfn = %lx, mfn = %p\n", pfn, _p(gmfn_to_mfn(d, pfn)));
     if ( pfn != 0 )
     {
         if ( !is_pv_32bit_vcpu(v) )
@@ -1994,6 +2122,276 @@ int domain_relinquish_resources(struct domain *d)
         hvm_domain_relinquish_resources(d);
 
     return 0;
+}
+
+int do_reset_memory_op(unsigned long domid)
+{
+    int ret=0;
+    struct vcpu *v;
+    struct domain *d;
+    struct page_info *page;
+
+    if (domid == DOMID_SELF)
+	d = rcu_lock_current_domain();
+    else {
+	d = rcu_lock_domain_by_id(domid);
+	if (d == NULL) {
+		printk("yewei: do_reset_memory...cannot find the domain %lu\n", domid);
+		return -1;
+	}
+    }    
+
+    BUG_ON(!cpus_empty(d->domain_dirty_cpumask));
+    domain_pause(d);
+
+    switch ( d->arch.relmem )
+    {
+    case RELMEM_not_started:
+        /* Tear down paging-assistance stuff. */
+        //paging_teardown(d);
+	//printk("yewei: teardown done.\n");
+	//return 0;
+
+        for_each_vcpu ( d, v )
+        {
+            /* Drop the in-use references to page-table bases. */
+            vcpu_destroy_pagetables(v);
+
+            /*
+             * Relinquish GDT mappings. No need for explicit unmapping of the
+             * LDT as it automatically gets squashed with the guest mappings.
+             */
+            destroy_gdt(v);
+
+            unmap_vcpu_info(v);
+	    /*for try*/ v->is_initialised = 0;
+        }
+	printk("yewei: free vcpu.\n");
+
+        if ( d->arch.pirq_eoi_map != NULL )
+        {
+            unmap_domain_page_global(d->arch.pirq_eoi_map);
+            put_page_and_type(mfn_to_page(d->arch.pirq_eoi_map_mfn));
+            d->arch.pirq_eoi_map = NULL;
+        }
+	printk("yewei: free eoi map.\n");
+
+        d->arch.relmem = RELMEM_xen;
+        /* fallthrough */
+	if (time > 0) 
+		break;
+        /* Relinquish every page of memory. */
+
+    case RELMEM_xen:
+        ret = relinquish_memory2(d, &d->xenpage_list, ~0UL);
+	printk("yewei: RELMEM_xen done. ret=%d\n", ret);
+        if ( ret )
+            goto error;
+#if CONFIG_PAGING_LEVELS >= 4
+        d->arch.relmem = RELMEM_l4;
+        /* fallthrough */
+
+    case RELMEM_l4:
+        ret = relinquish_memory2(d, &d->page_list, PGT_l4_page_table);
+	printk("yewei: RELMEM_l4 done. ret=%d\n", ret);
+        if ( ret )
+            goto error;
+#endif
+#if CONFIG_PAGING_LEVELS >= 3
+        d->arch.relmem = RELMEM_l3;
+        /* fallthrough */
+
+    case RELMEM_l3:
+        ret = relinquish_memory2(d, &d->page_list, PGT_l3_page_table);
+	printk("yewei: RELMEM_l3 done. ret=%d\n", ret);
+        if ( ret )
+            goto error;
+#endif
+        d->arch.relmem = RELMEM_l2;
+        /* fallthrough */
+
+    case RELMEM_l2:
+        ret = relinquish_memory2(d, &d->page_list, PGT_l2_page_table);
+	printk("yewei: RELMEM_l2 done. ret=%d\n", ret);
+        if ( ret )
+            goto error;
+        d->arch.relmem = RELMEM_done;
+        /* fallthrough */
+
+    case RELMEM_done:
+        break;
+    default:
+        BUG();
+    }
+    if ( is_hvm_domain(d) )
+        hvm_domain_relinquish_resources(d);
+
+    if (time > 0) { 
+    	spin_lock(&d->page_alloc_lock);
+    	page_list_for_each ( page, &d->page_list )
+    	{
+		/*if ( ((page->u.inuse.type_info & PGT_type_mask) != PGT_writable_page)
+			|| ((page->u.inuse.type_info & PGT_count_mask) != 0) 
+			|| ((page->count_info & PGT_count_mask) !=0)) {
+        		printk("    DomPage %p: caf=%08lx, taf=%" PRtype_info "\n",
+               			_p(page_to_mfn(page)),
+               			page->count_info, page->u.inuse.type_info);
+			//flag++;
+			//if (flag > 50)break;
+		}*/
+		//if ((page->u.inuse.type_info & PGT_count_mask) == 0)continue;
+		//if (page->count_info != 0x8000000000000001UL || page->u.inuse.type_info != 0x7400000000000000UL)
+       	 //	printk("    DomPage %p: caf=%08lx, taf=%" PRtype_info "\n",
+       	 //       		_p(page_to_mfn(page)), page->count_info, page->u.inuse.type_info);
+	
+		if ((unsigned long long)_p(page_to_mfn(page)) == reserve_mfn[0] 
+			|| (unsigned long long)_p(page_to_mfn(page)) == reserve_mfn[1]) {	
+			page->count_info = 0x8000000000000002UL;
+			page->u.inuse.type_info = 0x7400000000000001UL;	
+		} else {
+			page->count_info = 0x8000000000000001UL;
+			page->u.inuse.type_info = 0x7400000000000000UL;
+		}
+	}
+    	spin_unlock(&d->page_alloc_lock);
+	flush_tlb_all();
+    }
+    time++;
+
+    d->arch.relmem = RELMEM_not_started;
+
+    domain_unpause(d);
+    rcu_unlock_domain(d);
+
+    return 0;
+
+error:
+    domain_unpause(d);
+    rcu_unlock_domain(d);
+    return ret;
+}
+
+int do_reset_memory_op_bak(unsigned long domid)
+{
+    int ret=0;
+    struct vcpu *v;
+    struct domain *d;
+    struct page_info *page;
+
+    if (domid == DOMID_SELF)
+	d = rcu_lock_current_domain();
+    else {
+	d = rcu_lock_domain_by_id(domid);
+	if (d == NULL) {
+		printk("yewei: do_reset_memory...cannot find the domain %lu\n", domid);
+		return -1;
+	}
+    }    
+
+    BUG_ON(!cpus_empty(d->domain_dirty_cpumask));
+    domain_pause(d);
+
+    switch ( d->arch.relmem )
+    {
+    case RELMEM_not_started:
+        /* Tear down paging-assistance stuff. */
+        //paging_teardown(d);
+	//printk("yewei: teardown done.\n");
+	//return 0;
+
+        for_each_vcpu ( d, v )
+        {
+            /* Drop the in-use references to page-table bases. */
+            vcpu_destroy_pagetables(v);
+
+            /*
+             * Relinquish GDT mappings. No need for explicit unmapping of the
+             * LDT as it automatically gets squashed with the guest mappings.
+             */
+            destroy_gdt(v);
+
+            unmap_vcpu_info(v);
+	    /*for try*/ v->is_initialised = 0;
+        }
+	printk("yewei: free vcpu.\n");
+
+        if ( d->arch.pirq_eoi_map != NULL )
+        {
+            unmap_domain_page_global(d->arch.pirq_eoi_map);
+            put_page_and_type(mfn_to_page(d->arch.pirq_eoi_map_mfn));
+            d->arch.pirq_eoi_map = NULL;
+        }
+	printk("yewei: free eoi map.\n");
+
+        d->arch.relmem = RELMEM_xen;
+        /* fallthrough */
+
+        /* Relinquish every page of memory. */
+	page_list_for_each ( page, &d->xenpage_list )
+    	{
+        	printk("    XenPage %p: caf=%08lx, taf=%" PRtype_info "\n",
+              		 _p(page_to_mfn(page)),
+               	page->count_info, page->u.inuse.type_info);
+    	}
+	printk("=================================\n");
+
+    case RELMEM_xen:
+        ret = relinquish_memory2(d, &d->xenpage_list, ~0UL);
+	printk("yewei: RELMEM_xen done. ret=%d\n", ret);
+        if ( ret )
+            goto error;
+#if CONFIG_PAGING_LEVELS >= 4
+        d->arch.relmem = RELMEM_l4;
+        /* fallthrough */
+
+    case RELMEM_l4:
+        ret = relinquish_memory2(d, &d->page_list, PGT_l4_page_table);
+	printk("yewei: RELMEM_l4 done. ret=%d\n", ret);
+        if ( ret )
+            goto error;
+#endif
+#if CONFIG_PAGING_LEVELS >= 3
+        d->arch.relmem = RELMEM_l3;
+        /* fallthrough */
+
+    case RELMEM_l3:
+        ret = relinquish_memory2(d, &d->page_list, PGT_l3_page_table);
+	printk("yewei: RELMEM_l3 done. ret=%d\n", ret);
+        if ( ret )
+            goto error;
+#endif
+        d->arch.relmem = RELMEM_l2;
+        /* fallthrough */
+
+    case RELMEM_l2:
+        ret = relinquish_memory2(d, &d->page_list, PGT_l2_page_table);
+	printk("yewei: RELMEM_l2 done. ret=%d\n", ret);
+        if ( ret )
+            goto error;
+        d->arch.relmem = RELMEM_done;
+        /* fallthrough */
+
+    case RELMEM_done:
+        break;
+
+    default:
+        BUG();
+    }
+
+    if ( is_hvm_domain(d) )
+        hvm_domain_relinquish_resources(d);
+    
+    d->arch.relmem = RELMEM_not_started;
+
+    domain_unpause(d);
+    rcu_unlock_domain(d);
+
+    return 0;
+
+error:
+    domain_unpause(d);
+    rcu_unlock_domain(d);
+    return ret;
 }
 
 void arch_dump_domain_info(struct domain *d)
