@@ -1915,11 +1915,11 @@ void tcp_send_fin(struct sock *sk)
 	 */
 	mss_now = tcp_current_mss(sk, 1);
 
-	if (sk->sk_send_head != NULL) {
-		TCP_SKB_CB(skb)->flags |= TCPCB_FLAG_FIN;
-		TCP_SKB_CB(skb)->end_seq++;
-		tp->write_seq++;
-	} else {
+	//if (sk->sk_send_head != NULL) {
+	//	TCP_SKB_CB(skb)->flags |= TCPCB_FLAG_FIN;
+	//	TCP_SKB_CB(skb)->end_seq++;
+	//	tp->write_seq++;
+	//} else {
 		/* Socket is locked, keep trying until memory is available. */
 		for (;;) {
 			skb = alloc_skb_fclone(MAX_TCP_HEADER, GFP_KERNEL);
@@ -1941,7 +1941,7 @@ void tcp_send_fin(struct sock *sk)
 		TCP_SKB_CB(skb)->seq = tp->write_seq;
 		TCP_SKB_CB(skb)->end_seq = TCP_SKB_CB(skb)->seq + 1;
 		tcp_queue_skb(sk, skb);
-	}
+	//}
 	__tcp_push_pending_frames(sk, tp, mss_now, TCP_NAGLE_OFF);
 }
 
