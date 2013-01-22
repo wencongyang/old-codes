@@ -33,6 +33,11 @@ static int suspend_cancelled;
 /* Can we leave APs online when we suspend? */
 static int fast_suspend;
 
+extern int HA_suspend_evtchn;
+extern int HA_suspend_irq;
+extern int HA_first_time;
+extern int HA_dom_id;
+
 static void __shutdown_handler(void *unused);
 static DECLARE_WORK(shutdown_work, __shutdown_handler, NULL);
 
@@ -91,7 +96,7 @@ static int xen_suspend(void *__unused)
 			printk(KERN_ERR "Xen suspend failed (%d)\n", err);
 			goto fail;
 		}
-		if (!suspend_cancelled)
+		if (!suspend_cancelled && HA_first_time)
 			setup_suspend_evtchn();
 		old_state = cmpxchg(
 			&shutting_down, SHUTDOWN_RESUMING, SHUTDOWN_INVALID);
@@ -145,6 +150,7 @@ static void __shutdown_handler(void *unused)
 {
 	int err;
 
+	printk("[%lu]yewei: In shutdown handler, create kernel thread.\n", jiffies);
 	err = kernel_thread((shutting_down == SHUTDOWN_SUSPEND) ?
 			    xen_suspend : shutdown_process,
 			    NULL, CLONE_FS | CLONE_FILES);
@@ -257,18 +263,28 @@ static int setup_suspend_evtchn(void)
 	int port;
 	char portstr[16];
 
+	printk("SUSPEND EVTCHN:\n");
+	printk("old irq=%d.\n", irq);
 	if (irq > 0)
 		unbind_from_irqhandler(irq, NULL);
 
-	irq = bind_listening_port_to_irqhandler(0, suspend_int, 0, "suspend",
-						NULL);
+	if (HA_dom_id > 0)
+		irq = bind_listening_port_to_irqhandler(0|0x8000UL, suspend_int, 0, "suspend",
+							NULL);
+	else
+		irq = bind_listening_port_to_irqhandler(0, suspend_int, 0, "suspend",
+							NULL);
+	printk("new irq=%d.\n", irq);
 	if (irq <= 0)
 		return -1;
 
 	port = irq_to_evtchn_port(irq);
-	printk(KERN_INFO "suspend: event channel %d\n", port);
+	printk(KERN_INFO "suspend: event channel %d, irq %d\n", port, irq);
 	sprintf(portstr, "%d", port);
 	xenbus_write(XBT_NIL, "device/suspend", "event-channel", portstr);
+
+	HA_suspend_evtchn = port;
+	HA_suspend_irq = irq;
 
 	return 0;
 }

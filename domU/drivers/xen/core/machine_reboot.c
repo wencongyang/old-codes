@@ -20,6 +20,28 @@
 
 #if defined(__i386__) || defined(__x86_64__)
 
+int HA_dom_id = -1; /*The original dom id on slaver, -1 if on master*/
+int HA_first_time; /*Whether this is the first time resume on Slaver*/
+int HA_suspend_evtchn = -1;
+int HA_suspend_irq = -1;
+int HA_xencons_evtchn = -1;
+int HA_xencons_irq = -1;
+int HA_xenbus_evtchn = -1;
+int HA_fast_evtchn = -1;
+int HA_fast_irq = -1;
+int HA_fast_vbd_evtchn = -1;
+int HA_fast_vbd_irq = -1;
+int HA_xenbus_irq = -1;
+int HA_have_check = 0;
+int HA_block_xmit = 0;
+unsigned int timer_int_count = 0;
+
+extern unsigned long long sched_clock(void);
+unsigned long get_ms(void)
+{
+	return sched_clock() / 1000000;
+}
+
 /*
  * Power off function, if any
  */
@@ -52,6 +74,16 @@ void machine_power_off(void)
 	HYPERVISOR_shutdown(SHUTDOWN_poweroff);
 }
 
+static void set_slaver(void)
+{
+	HYPERVISOR_which_side_op(1);
+}
+
+int is_slaver(void)
+{
+	return HYPERVISOR_which_side_op(0);
+}
+
 static void pre_suspend(void)
 {
 	HYPERVISOR_shared_info = (shared_info_t *)empty_zero_page;
@@ -61,6 +93,31 @@ static void pre_suspend(void)
 	xen_start_info->store_mfn = mfn_to_pfn(xen_start_info->store_mfn);
 	xen_start_info->console.domU.mfn =
 		mfn_to_pfn(xen_start_info->console.domU.mfn);
+}
+
+static void dump_evtch2irq()
+{
+	printk("type\t\tevtchn\tirq\n");
+	printk("suspend\t\t%d\t%d\n", HA_suspend_evtchn, HA_suspend_irq);
+	printk("xencons\t\t%d\t%d\n", HA_xencons_evtchn, HA_xencons_irq);
+	printk("xenbus\t\t%d\t%d\n", HA_xenbus_evtchn, HA_xenbus_irq);
+	printk("vnif\t\t%d\t%d\n", HA_fast_evtchn, HA_fast_irq);
+	printk("vbd\t\t%d\t%d\n", HA_fast_vbd_evtchn, HA_fast_vbd_irq);
+}
+
+static void reset_evtchns(void)
+{
+	struct evtchn_select_reset evtrt;
+
+	evtrt.port_no[0] = HA_suspend_evtchn;
+	evtrt.port_no[1] = HA_xencons_evtchn;
+	evtrt.port_no[2] = HA_xenbus_evtchn;
+	evtrt.port_no[3] = HA_fast_evtchn;
+	evtrt.port_no[4] = HA_fast_vbd_evtchn;
+	evtrt.len = 5;
+	
+	if (HYPERVISOR_event_channel_op(EVTCHNOP_select_reset, &evtrt) != 0)
+		printk("evtchn reset error!\n");
 }
 
 static void post_suspend(int suspend_cancelled)
@@ -134,6 +191,15 @@ static int take_machine_down(void *_suspend)
 	struct suspend *suspend = _suspend;
 	int suspend_cancelled, err;
 	extern void time_resume(void);
+	gnttab_dump_gnttab_t dump;
+	int ret;
+
+	dump.dom = DOMID_SELF;
+	//gnttab_dump.dom = 1;
+	//HYPERVISOR_grant_table_op(GNTTABOP_dump_gnttab, &dump, 1);
+	//HA_block_xmit = 1;	
+	//fb_disconnect();
+	//HYPERVISOR_grant_table_op(GNTTABOP_dump_gnttab, &dump, 1);
 
 	if (suspend->fast_suspend) {
 		BUG_ON(!irqs_disabled());
@@ -141,16 +207,21 @@ static int take_machine_down(void *_suspend)
 		BUG_ON(irqs_disabled());
 
 		for (;;) {
+			printk("[%lums]yewei:smp_suspend...\n", get_ms());
 			err = smp_suspend();
+			printk("[%lums]yewei:smp_suspend done...\n", get_ms());
 			if (err)
 				return err;
 
+			printk("[%lums]yewei:xenbus suspend...\n", get_ms());
 			xenbus_suspend();
+			printk("[%lums]yewei:xenbus suspend done\n", get_ms());
 			preempt_disable();
 
 			if (num_online_cpus() == 1)
 				break;
 
+			printk("[%lu]yewei:cancel smp_suspend\n", jiffies);
 			preempt_enable();
 			xenbus_suspend_cancel();
 		}
@@ -160,6 +231,18 @@ static int take_machine_down(void *_suspend)
 
 	mm_pin_all();
 	gnttab_suspend();
+	//pre_suspend();
+	//printk("yewei: pre_suspend done.\n");
+	/*Only slaver side should reset all event channels.*/
+	//if (is_slaver()) {
+	dump_evtch2irq();
+	if (HA_dom_id > 0) {
+		reset_evtchns();
+		printk("[%lums]yewei: reset event channels done.\n", get_ms());
+	}
+
+	printk("yewei: xenbuss event: channel=%d, irq=%d.\n", HA_xenbus_evtchn, HA_xenbus_irq);
+
 	pre_suspend();
 
 	/*
@@ -167,12 +250,44 @@ static int take_machine_down(void *_suspend)
 	 * merely checkpointed, and 0 if it is resuming in a new domain.
 	 */
 	suspend_cancelled = HYPERVISOR_suspend(virt_to_mfn(xen_start_info));
+	ret = suspend_cancelled;
+	HA_have_check++;
+	//printk("[%lums]ret from suspend: %d\n",get_ms(), ret);
 
-	suspend->resume_notifier(suspend_cancelled);
+	HA_dom_id = is_slaver(); // -1 if on master, otherwise return the dom id
+
+	if ( HA_dom_id > 0 ) { // slaver side
+		HA_first_time = (suspend_cancelled == 0);
+		suspend_cancelled = 0;
+	}
+	/*if (suspend_cancelled == 0) {
+		printk("yewei: set slaver.\n");
+		set_slaver();
+	}*/
+	
+	/*if (suspend_cancelled == 2) {
+		suspend_cancelled = 0;
+		//reset_evtchns();
+		//printk("[%lu]yewei: reset event channels done.\n", jiffies);
+		//BUG();
+	}*/
+
+	//if( ret == 2 )
+	//	BUG();
+	//printk("yewei: return from suspend\n");
+	//suspend->resume_notifier(suspend_cancelled);
+	//printk("yewei: notifier done.\n");
 	post_suspend(suspend_cancelled);
+	suspend->resume_notifier(suspend_cancelled);
+	printk("yewei: HA_dom_id=%d, HA_first_time=%d\n", HA_dom_id, HA_first_time);
+	printk("yewei: xenbus event: channel=%d, irq=%d.\n", HA_xenbus_evtchn, HA_xenbus_irq);
 	gnttab_resume();
-	if (!suspend_cancelled) {
+	//if( ret == 2 )
+	//	BUG();
+	if (!suspend_cancelled ) {
+		printk("[%lums]yewei: irq_resume...\n", get_ms());
 		irq_resume();
+		printk("[%lums]yewei: irq_resume done\n", get_ms());
 #ifdef __x86_64__
 		/*
 		 * Older versions of Xen do not save/restore the user %cr3.
@@ -185,11 +300,16 @@ static int take_machine_down(void *_suspend)
 #endif
 	}
 	time_resume();
+	//printk("[%lu, %lu]yewei: time resume done, timer_int_count=%u\n", jiffies, get_ms(), timer_int_count);
 
+	timer_int_count = 1;
 	if (!suspend->fast_suspend)
 		local_irq_enable();
+	timer_int_count = 0;
 
-	return suspend_cancelled;
+	//printk("[%lu, %lu]yewei: irq enable done, timer_int_count=%u\n", jiffies, get_ms(), timer_int_count);
+	//return suspend_cancelled;
+	return ret;
 }
 
 int __xen_suspend(int fast_suspend, void (*resume_notifier)(int))
@@ -208,35 +328,68 @@ int __xen_suspend(int fast_suspend, void (*resume_notifier)(int))
 	}
 #endif
 
+	printk("\n\n=============checkpoint===============.\n");
+
 	/* If we are definitely UP then 'slow mode' is actually faster. */
 	if (num_possible_cpus() == 1)
 		fast_suspend = 0;
 
 	suspend.fast_suspend = fast_suspend;
+	//suspend.fast_suspend = 0;
 	suspend.resume_notifier = resume_notifier;
 
+	HA_block_xmit = 1;
+	printk("[%lums]fb_disconnect begin.\n", get_ms());	
+	fb_disconnect();
+	printk("[%lums]fb_disconnect end.\n", get_ms());	
+	//fast_suspend = 0;
 	if (fast_suspend) {
+		printk("fast suspend\n");
 		xenbus_suspend();
 		err = stop_machine_run(take_machine_down, &suspend, 0);
 		if (err < 0)
 			xenbus_suspend_cancel();
 	} else {
+		printk("normal suspend\n");
 		err = take_machine_down(&suspend);
 	}
 
 	if (err < 0)
 		return err;
 
-	suspend_cancelled = err;
-	if (!suspend_cancelled) {
-		xencons_resume();
+	printk("[%lums]yewei: return fron take machine down.\n", get_ms());
+	//suspend_cancelled = err;
+	//if (!suspend_cancelled) { // first checkpoint on slave
+	if ( HA_first_time && HA_dom_id > 0) { // first checkpoint on slave
+		//xencons_resume();
 		xenbus_resume();
-	} else {
-		xenbus_suspend_cancel();
+	//} else if (suspend_cancelled == 1) { // on master
+	} else if (HA_dom_id == -1) { // on master
+		//xenbus_suspend_cancel();
+		xs_suspend_cancel();
+		printk("[%lu]fb_connect begin\n", get_ms());
+		fb_connect();
+		printk("[%lu]fb_connect end\n", get_ms());
+		//xenbus_resume();
+	} else { // second and later checkpoint on slave
+		//xencons_resume();
+		//printk("[%lu]yewei: xencons resume.\n", jiffies);
+		//xb_init_comms();
+		//printk("[%lu]yewei: xb_init_comms.\n", jiffies);
+		xs_resume();
+		printk("[%lums]yewei: fb connect begin.\n", get_ms());
+		fb_connect();
+		printk("[%lums]yewei: fb connect end.\n", get_ms());
 	}
 
+	//printk("[%lums] smp_resume...\n", get_ms());
 	if (!fast_suspend)
 		smp_resume();
+	//printk("[%lums] smp_resume done\n", get_ms());
+
+	/* Rearrage the irqs */
+	if (HA_first_time && HA_dom_id > 0)
+		xencons_resume();
 
 	return 0;
 }
