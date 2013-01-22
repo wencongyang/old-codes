@@ -47,6 +47,20 @@
 #include <asm/hypervisor.h>
 #include <linux/mc146818rtc.h> /* RTC_IRQ */
 
+extern int HA_first_time;
+extern int HA_suspend_evtchn;
+extern int HA_suspend_irq;
+extern int HA_xencons_evtchn;
+extern int HA_xencons_irq;
+extern int HA_xenbus_evtchn;
+extern int HA_xenbus_irq;
+extern int HA_fast_irq;
+extern int HA_fast_evtchn;
+extern int HA_fast_vbd_irq;
+extern int HA_fast_vbd_evtchn;
+extern int HA_dom_id;
+static void reserve_evtchn_for_suspend();
+
 /*
  * This lock protects updates to the following mapping and reference-count
  * arrays. The lock does not need to be acquired to read the mapping tables.
@@ -142,7 +156,7 @@ static void bind_evtchn_to_cpu(unsigned int chn, unsigned int cpu)
 	shared_info_t *s = HYPERVISOR_shared_info;
 	int irq = evtchn_to_irq[chn];
 
-	BUG_ON(!test_bit(chn, s->evtchn_mask));
+	//BUG_ON(!test_bit(chn, s->evtchn_mask));
 
 	if (irq != -1)
 		set_native_irq_info(irq, cpumask_of_cpu(cpu));
@@ -382,6 +396,8 @@ static int bind_local_port_to_irq(unsigned int local_port)
 {
 	int irq;
 
+	//printk("yewei: local_port=%u\n", local_port);
+	//printk("yewei: to irq-->%d\n", evtchn_to_irq[local_port]);
 	spin_lock(&irq_mapping_update_lock);
 
 	BUG_ON(evtchn_to_irq[local_port] != -1);
@@ -394,6 +410,10 @@ static int bind_local_port_to_irq(unsigned int local_port)
 	}
 
 	evtchn_to_irq[local_port] = irq;
+	printk("yewei: local_port=%u ---> irq=%d\n", local_port, irq);
+	if (local_port == HA_suspend_evtchn-1) 
+		reserve_evtchn_for_suspend();
+	//printk("yewei: local_port=6 ---> irq=%d\n", evtchn_to_irq[6]);
 	irq_info[irq] = mk_irq_info(IRQT_LOCAL_PORT, 0, local_port);
 	irq_bindcount[irq]++;
 
@@ -407,11 +427,19 @@ static int bind_listening_port_to_irq(unsigned int remote_domain)
 	struct evtchn_alloc_unbound alloc_unbound;
 	int err;
 
-	alloc_unbound.dom        = DOMID_SELF;
-	alloc_unbound.remote_dom = remote_domain;
+	if (remote_domain & 0x8000UL) {
+		// flag for allocating suspend evtchn.
+		alloc_unbound.port = HA_suspend_evtchn;
+		remote_domain = remote_domain & 0x7fffUL;
+		err = 0;
+	} else {
 
-	err = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound,
-					  &alloc_unbound);
+		alloc_unbound.dom        = DOMID_SELF;
+		alloc_unbound.remote_dom = remote_domain;
+
+		err = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound,
+						  &alloc_unbound);
+	}
 
 	return err ? : bind_local_port_to_irq(alloc_unbound.port);
 }
@@ -451,7 +479,9 @@ static int bind_virq_to_irq(unsigned int virq, unsigned int cpu)
 
 		evtchn_to_irq[evtchn] = irq;
 		irq_info[irq] = mk_irq_info(IRQT_VIRQ, virq, evtchn);
-
+		printk("yewei: local_port=%u ---> irq=%d\n", evtchn, irq);
+		if (evtchn == HA_suspend_evtchn-1) 
+			reserve_evtchn_for_suspend();
 		per_cpu(virq_to_irq, cpu)[virq] = irq;
 
 		bind_evtchn_to_cpu(evtchn, cpu);
@@ -483,7 +513,9 @@ static int bind_ipi_to_irq(unsigned int ipi, unsigned int cpu)
 
 		evtchn_to_irq[evtchn] = irq;
 		irq_info[irq] = mk_irq_info(IRQT_IPI, ipi, evtchn);
-
+		printk("yewei: local_port=%u ---> irq=%d\n", evtchn, irq);
+		if (evtchn == HA_suspend_evtchn-1) 
+			reserve_evtchn_for_suspend();
 		per_cpu(ipi_to_irq, cpu)[ipi] = irq;
 
 		bind_evtchn_to_cpu(evtchn, cpu);
@@ -946,6 +978,8 @@ void notify_remote_via_irq(int irq)
 
 	if (VALID_EVTCHN(evtchn))
 		notify_remote_via_evtchn(evtchn);
+	else
+		printk("\n^^^^^^^^^skb notify error^^^^^^^^^^^^\n");
 }
 EXPORT_SYMBOL_GPL(notify_remote_via_irq);
 
@@ -997,6 +1031,45 @@ void disable_all_local_evtchn(void)
 			synch_set_bit(i, &s->evtchn_mask[0]);
 }
 
+static void reserve_evtchn_for_suspend()
+{
+	struct evtchn_alloc_unbound alloc_unbound;
+	int err;
+
+	printk("%s.\n", __func__);
+	if (!HA_first_time || HA_dom_id < 0)
+		return;
+
+	alloc_unbound.dom        = DOMID_SELF;
+	alloc_unbound.remote_dom = 0;
+
+	err = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound,
+					  &alloc_unbound);
+
+	if (err || alloc_unbound.port != HA_suspend_evtchn) {
+		printk("Reserve wrong evtchn %d for suspend.\n", alloc_unbound.port);
+		BUG();
+	} else {
+		printk("Reserver evtchn for suspend Successfully.\n");
+	}
+}
+
+void abandon_one_evtchn()
+{
+	struct evtchn_alloc_unbound alloc_unbound;
+	int err;	
+
+	alloc_unbound.dom        = DOMID_SELF;
+	alloc_unbound.remote_dom = 0;
+
+	err = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound,
+					  &alloc_unbound);
+	if (err)
+		printk("Abandon one evtchn failed.\n");
+	else
+		printk("Abandon one evtchn successfully.\n");
+}
+
 static void restore_cpu_virqs(unsigned int cpu)
 {
 	struct evtchn_bind_virq bind_virq;
@@ -1015,9 +1088,14 @@ static void restore_cpu_virqs(unsigned int cpu)
 						&bind_virq) != 0)
 			BUG();
 		evtchn = bind_virq.port;
+		//printk("yewei: bind virq %d to port %d\n", virq, evtchn);
 
 		/* Record the new mapping. */
 		evtchn_to_irq[evtchn] = irq;
+		printk("yewei: local_port=%u ---> irq=%d\n", evtchn, irq);
+		if (evtchn == HA_suspend_evtchn-1) 
+			reserve_evtchn_for_suspend();
+
 		irq_info[irq] = mk_irq_info(IRQT_VIRQ, virq, evtchn);
 		bind_evtchn_to_cpu(evtchn, cpu);
 
@@ -1043,9 +1121,15 @@ static void restore_cpu_ipis(unsigned int cpu)
 						&bind_ipi) != 0)
 			BUG();
 		evtchn = bind_ipi.port;
+		//printk("yewei: bind ipi %d to port %d\n", ipi, evtchn);
 
 		/* Record the new mapping. */
 		evtchn_to_irq[evtchn] = irq;
+		printk("yewei: local_port=%u ---> irq=%d\n", evtchn, irq);
+		
+		if (evtchn == HA_suspend_evtchn-1) 
+			reserve_evtchn_for_suspend();
+		
 		irq_info[irq] = mk_irq_info(IRQT_IPI, ipi, evtchn);
 		bind_evtchn_to_cpu(evtchn, cpu);
 
@@ -1057,7 +1141,7 @@ static void restore_cpu_ipis(unsigned int cpu)
 
 void irq_resume(void)
 {
-	unsigned int cpu, irq, evtchn;
+	unsigned int cpu, irq, evtchn, ret;
 
 	init_evtchn_cpu_bindings();
 
@@ -1065,23 +1149,53 @@ void irq_resume(void)
 		struct physdev_pirq_eoi_gmfn eoi_gmfn;
 
 		eoi_gmfn.gmfn = virt_to_machine(pirq_needs_eoi) >> PAGE_SHIFT;
-		if (HYPERVISOR_physdev_op(PHYSDEVOP_pirq_eoi_gmfn, &eoi_gmfn))
-			BUG();
+		if (ret = HYPERVISOR_physdev_op(PHYSDEVOP_pirq_eoi_gmfn, &eoi_gmfn)) {
+			printk("yewei: HYPERVISOR ret = %d\n", ret);
+			printk("EINVAL=%d, EBUSY=%d, ENOSPC=%d\n", -EINVAL, -EBUSY, -ENOSPC);
+			//BUG();
+		}
 	}
 
 	/* New event-channel space is not 'live' yet. */
-	for (evtchn = 0; evtchn < NR_EVENT_CHANNELS; evtchn++)
-		mask_evtchn(evtchn);
+	for (evtchn = 0; evtchn < NR_EVENT_CHANNELS; evtchn++) {
+		if (!HA_first_time && evtchn == HA_suspend_evtchn)
+			unmask_evtchn(evtchn);
+		else if (!HA_first_time && evtchn == HA_xencons_evtchn)
+			unmask_evtchn(evtchn);
+		else if (!HA_first_time && evtchn == HA_xenbus_evtchn)
+			unmask_evtchn(evtchn);
+		else if (!HA_first_time && evtchn == HA_fast_evtchn)
+			unmask_evtchn(evtchn);
+		else if (!HA_first_time && evtchn == HA_fast_vbd_evtchn)
+			unmask_evtchn(evtchn);
+		else
+			mask_evtchn(evtchn);
+	}
 
 	/* Check that no PIRQs are still bound. */
 	for (irq = PIRQ_BASE; irq < (PIRQ_BASE + NR_PIRQS); irq++)
 		BUG_ON(irq_info[irq] != IRQ_UNBOUND);
 
+	printk("suspend irq=%d, evtchn=%d.\n", HA_suspend_irq, HA_suspend_evtchn);
+
 	/* No IRQ <-> event-channel mappings. */
-	for (irq = 0; irq < NR_IRQS; irq++)
+	for (irq = 0; irq < NR_IRQS; irq++) {
+		if (!HA_first_time && irq == HA_suspend_irq) continue;
+		if (!HA_first_time && irq == HA_xencons_irq) continue;
+		if (!HA_first_time && irq == HA_xenbus_irq) continue;
+		if (!HA_first_time && irq == HA_fast_irq) continue;
+		if (!HA_first_time && irq == HA_fast_vbd_irq) continue;
 		irq_info[irq] &= ~((1U << _EVTCHN_BITS) - 1);
-	for (evtchn = 0; evtchn < NR_EVENT_CHANNELS; evtchn++)
+	}
+
+	for (evtchn = 0; evtchn < NR_EVENT_CHANNELS; evtchn++) {
+		if (!HA_first_time && evtchn == HA_suspend_evtchn) continue;
+		if (!HA_first_time && evtchn == HA_xencons_evtchn) continue;
+		if (!HA_first_time && evtchn == HA_xenbus_evtchn) continue;
+		if (!HA_first_time && evtchn == HA_fast_evtchn) continue;
+		if (!HA_first_time && evtchn == HA_fast_vbd_evtchn) continue;
 		evtchn_to_irq[evtchn] = -1;
+	}
 
 	for_each_possible_cpu(cpu) {
 		restore_cpu_virqs(cpu);

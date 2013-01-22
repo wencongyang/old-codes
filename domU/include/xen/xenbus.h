@@ -103,6 +103,7 @@ struct xenbus_driver {
 	int (*remove)(struct xenbus_device *dev);
 	int (*suspend)(struct xenbus_device *dev);
 	int (*suspend_cancel)(struct xenbus_device *dev);
+	int (*early_resume)(struct xenbus_device *dev);
 	int (*resume)(struct xenbus_device *dev);
 	int (*uevent)(struct xenbus_device *, char **, int, char *, int);
 	struct device_driver driver;
@@ -162,6 +163,7 @@ void unregister_xenstore_notifier(struct notifier_block *nb);
 int register_xenbus_watch(struct xenbus_watch *watch);
 void unregister_xenbus_watch(struct xenbus_watch *watch);
 void xs_suspend(void);
+void xs_suspend_slaver(void);
 void xs_resume(void);
 void xs_suspend_cancel(void);
 
@@ -172,6 +174,8 @@ void *xenbus_dev_request_and_reply(struct xsd_sockmsg *msg);
 void xenbus_suspend(void);
 void xenbus_resume(void);
 void xenbus_suspend_cancel(void);
+void fb_disconnect(void);
+void fb_connect(void);
 
 #define XENBUS_IS_ERR_READ(str) ({			\
 	if (!IS_ERR(str) && strlen(str) == 0) {		\

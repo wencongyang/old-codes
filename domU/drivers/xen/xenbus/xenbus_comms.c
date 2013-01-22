@@ -48,6 +48,8 @@
 #endif
 
 static int xenbus_irq;
+extern int HA_xenbus_evtchn;
+extern int HA_xenbus_irq;
 
 extern void xenbus_probe(void *);
 static DECLARE_WORK(probe_work, xenbus_probe, NULL);
@@ -126,14 +128,17 @@ int xb_write(const void *data, unsigned len)
 			xb_waitq,
 			(intf->req_prod - intf->req_cons) !=
 			XENSTORE_RING_SIZE);
-		if (rc < 0)
+		if (rc < 0) {
+			printk("yewei: wait event error!\n");
 			return rc;
+		}
 
 		/* Read indexes, then verify. */
 		cons = intf->req_cons;
 		prod = intf->req_prod;
 		if (!check_indexes(cons, prod)) {
 			intf->req_cons = intf->req_prod = 0;
+			printk("yewei: check indexes error!\n");
 			return -EIO;
 		}
 
@@ -251,6 +256,8 @@ int xb_init_comms(void)
 	}
 
 	xenbus_irq = err;
+	HA_xenbus_irq = err;
+	HA_xenbus_evtchn = xen_store_evtchn;
 
 	return 0;
 }
