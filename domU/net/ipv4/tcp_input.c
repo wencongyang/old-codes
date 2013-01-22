@@ -3620,12 +3620,18 @@ static inline void tcp_data_snd_check(struct sock *sk, struct tcp_sock *tp)
 	tcp_check_space(sk);
 }
 
+#define HA_IMM_ACK
+
 /*
  * Check if sending an ack is needed.
  */
 static void __tcp_ack_snd_check(struct sock *sk, int ofo_possible)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
+
+#ifdef HA_IMM_ACK
+	tcp_send_ack(sk);
+#else
 
 	    /* More than one full frame received... */
 	if (((tp->rcv_nxt - tp->rcv_wup) > inet_csk(sk)->icsk_ack.rcv_mss
@@ -3644,6 +3650,7 @@ static void __tcp_ack_snd_check(struct sock *sk, int ofo_possible)
 		/* Else, send delayed ack. */
 		tcp_send_delayed_ack(sk);
 	}
+#endif
 }
 
 static inline void tcp_ack_snd_check(struct sock *sk)
