@@ -37,6 +37,8 @@ class Cfg(object):
                           help='run without net buffering (benchmark option)')
         parser.add_option('', '--timer', dest='timer', action='store_true',
                           help='force pause at checkpoint interval (experimental)')
+        parser.add_option('', '--colo', dest='colo', action='store_true',
+                          help='use colo checkpointing (experimental)')
         self.parser = parser
 
     def usage(self):
@@ -52,6 +54,10 @@ class Cfg(object):
         if opts.nonet:
             self.netbuffer = False
         if opts.timer:
+            self.timer = True
+        if opts.colo:
+            self.interval = 0
+            self.netbuffer = False
             self.timer = True
 
         if not args:
