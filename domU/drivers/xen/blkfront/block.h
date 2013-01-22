@@ -106,6 +106,7 @@ struct blkfront_info
 	blkif_front_ring_t ring;
 	struct scatterlist sg[BLKIF_MAX_SEGMENTS_PER_REQUEST];
 	unsigned int irq;
+	unsigned int fast;
 	struct xlbd_major_info *mi;
 	request_queue_t *rq;
 	struct work_struct work;
