@@ -63,6 +63,16 @@
 #include <asm/uaccess.h>
 #include <xen/interface/grant_table.h>
 #include <xen/gnttab.h>
+#include <asm/hypervisor.h>
+
+extern int HA_have_check;
+extern int HA_dom_id;
+extern int HA_first_time;
+extern int HA_fast_irq;
+extern int HA_fast_evtchn;
+extern int HA_block_xmit;
+static void __otherend_changed_handler(void *unused);
+static struct work_struct otherend_changed_work;
 
 struct netfront_cb {
 	struct page *page;
@@ -70,7 +80,7 @@ struct netfront_cb {
 };
 
 #define NETFRONT_SKB_CB(skb)	((struct netfront_cb *)((skb)->cb))
-
+extern unsigned long get_ms(void);
 #include "netfront.h"
 
 /*
@@ -96,9 +106,12 @@ static const int MODPARM_rx_flip = 0;
 
 /* If we don't have GSO, fake things up so that we never try to use it. */
 #if defined(NETIF_F_GSO)
-#define HAVE_GSO			1
-#define HAVE_TSO			1 /* TSO is a subset of GSO */
-#define HAVE_CSUM_OFFLOAD		1
+//#define HAVE_GSO			1
+//#define HAVE_TSO			1 /* TSO is a subset of GSO */
+//#define HAVE_CSUM_OFFLOAD		1
+#define HAVE_GSO			0
+#define HAVE_TSO			0 /* TSO is a subset of GSO */
+#define HAVE_CSUM_OFFLOAD		0
 static inline void dev_disable_gso_features(struct net_device *dev)
 {
 	/* Turn off all GSO bits except ROBUST. */
@@ -107,7 +120,7 @@ static inline void dev_disable_gso_features(struct net_device *dev)
 }
 #elif defined(NETIF_F_TSO)
 #define HAVE_GSO		       0
-#define HAVE_TSO                       1
+#define HAVE_TSO                       0
 
 /* Some older kernels cannot cope with incorrect checksums,
  * particularly in netfilter. I'm not sure there is 100% correlation
@@ -224,6 +237,7 @@ static void network_alloc_rx_buffers(struct net_device *);
 static void send_fake_arp(struct net_device *);
 
 static irqreturn_t netif_int(int irq, void *dev_id, struct pt_regs *ptregs);
+static irqreturn_t netif_otherend_changed(int irq, void *dev_id, struct pt_regs *ptregs);
 
 #ifdef CONFIG_SYSFS
 static int xennet_sysfs_addif(struct net_device *netdev);
@@ -274,6 +288,9 @@ static int __devinit netfront_probe(struct xenbus_device *dev,
 		       __FUNCTION__, err);
 		goto fail;
 	}
+
+	printk("yewei: INIT_WORK.\n");
+	INIT_WORK(&otherend_changed_work, __otherend_changed_handler, dev);
 
 	return 0;
 
@@ -337,6 +354,17 @@ static int netfront_resume(struct xenbus_device *dev)
 	return 0;
 }
 
+static int netfront_early_resume(struct xenbus_device *dev)
+{
+	struct netfront_info *info = dev->dev.driver_data;
+
+	DPRINTK("%s\n", dev->nodename);
+	if (info->irq)
+		unbind_from_irqhandler(info->irq, info->netdev);
+	info->irq = 0;
+	return 0;
+}
+
 static int xen_net_read_mac(struct xenbus_device *dev, u8 mac[])
 {
 	char *s, *e, *macstr;
@@ -357,6 +385,17 @@ static int xen_net_read_mac(struct xenbus_device *dev, u8 mac[])
 
 	kfree(macstr);
 	return 0;
+}
+
+static void save_ringref_to_xen(int rx, int tx, int evtchn)
+{
+	struct rdwt_data arg;
+	arg.flag = 1;
+	arg.rx_ref = rx;
+	arg.tx_ref = tx;
+	arg.vnif_evtchn = evtchn;
+	arg.vbd_evtchn = 0;
+	HYPERVISOR_rdwt_data_op(&arg);
 }
 
 /* Common code used when first setting up, and when resuming. */
@@ -387,71 +426,89 @@ static int talk_to_backend(struct xenbus_device *dev,
 	netfront_accelerator_add_watch(info);
 
 again:
-	err = xenbus_transaction_start(&xbt);
-	if (err) {
-		xenbus_dev_fatal(dev, err, "starting transaction");
-		goto destroy_ring;
+	if (HA_have_check==1) {
+		err = xenbus_printf(XBT_NIL, dev->nodename,
+				    "fast-channel", "%u",
+				    irq_to_evtchn_port(info->fast));
+		if (err) {
+			printk("yewei: error writing fast-channel.\n");
+			goto destroy_ring;
+		}
 	}
 
-	err = xenbus_printf(xbt, dev->nodename, "tx-ring-ref","%u",
+	save_ringref_to_xen(info->rx_ring_ref, info->tx_ring_ref, irq_to_evtchn_port(info->irq));
+	printk("[%lums]Write ringref to xen: rx=%d, tx=%d, evtchn=%d.\n", get_ms(),
+			info->rx_ring_ref, info->tx_ring_ref, irq_to_evtchn_port(info->irq));
+
+	if (!HA_have_check || HA_dom_id > 0 && HA_first_time) {
+
+		err = xenbus_transaction_start(&xbt);
+		if (err) {
+			xenbus_dev_fatal(dev, err, "starting transaction");
+			goto destroy_ring;
+		}
+
+		err = xenbus_printf(xbt, dev->nodename, "tx-ring-ref","%u",
 			    info->tx_ring_ref);
-	if (err) {
-		message = "writing tx ring-ref";
-		goto abort_transaction;
-	}
-	err = xenbus_printf(xbt, dev->nodename, "rx-ring-ref","%u",
-			    info->rx_ring_ref);
-	if (err) {
-		message = "writing rx ring-ref";
-		goto abort_transaction;
-	}
-	err = xenbus_printf(xbt, dev->nodename,
-			    "event-channel", "%u",
-			    irq_to_evtchn_port(info->irq));
-	if (err) {
-		message = "writing event-channel";
-		goto abort_transaction;
-	}
+		if (err) {
+			message = "writing tx ring-ref";
+			goto abort_transaction;
+		}
+		err = xenbus_printf(xbt, dev->nodename, "rx-ring-ref","%u",
+				    info->rx_ring_ref);
+		if (err) {
+			message = "writing rx ring-ref";
+			goto abort_transaction;
+		}
 
-	err = xenbus_printf(xbt, dev->nodename, "request-rx-copy", "%u",
+		err = xenbus_printf(xbt, dev->nodename,
+				    "event-channel", "%u",
+				    irq_to_evtchn_port(info->irq));
+		if (err) {
+			message = "writing event-channel";
+			goto abort_transaction;
+		}
+
+		err = xenbus_printf(xbt, dev->nodename, "request-rx-copy", "%u",
 			    info->copying_receiver);
-	if (err) {
-		message = "writing request-rx-copy";
-		goto abort_transaction;
-	}
+		if (err) {
+			message = "writing request-rx-copy";
+			goto abort_transaction;
+		}
 
-	err = xenbus_printf(xbt, dev->nodename, "feature-rx-notify", "%d", 1);
-	if (err) {
-		message = "writing feature-rx-notify";
-		goto abort_transaction;
-	}
+		err = xenbus_printf(xbt, dev->nodename, "feature-rx-notify", "%d", 1);
+		if (err) {
+			message = "writing feature-rx-notify";
+			goto abort_transaction;
+		}
 
-	err = xenbus_printf(xbt, dev->nodename, "feature-no-csum-offload",
-			    "%d", !HAVE_CSUM_OFFLOAD);
-	if (err) {
-		message = "writing feature-no-csum-offload";
-		goto abort_transaction;
-	}
+		err = xenbus_printf(xbt, dev->nodename, "feature-no-csum-offload",
+				    "%d", !HAVE_CSUM_OFFLOAD);
+		if (err) {
+			message = "writing feature-no-csum-offload";
+			goto abort_transaction;
+		}
 
-	err = xenbus_printf(xbt, dev->nodename, "feature-sg", "%d", 1);
-	if (err) {
-		message = "writing feature-sg";
-		goto abort_transaction;
-	}
+		err = xenbus_printf(xbt, dev->nodename, "feature-sg", "%d", 0);
+		if (err) {
+			message = "writing feature-sg";
+			goto abort_transaction;
+		}
 
-	err = xenbus_printf(xbt, dev->nodename, "feature-gso-tcpv4", "%d",
-			    HAVE_TSO);
-	if (err) {
-		message = "writing feature-gso-tcpv4";
-		goto abort_transaction;
-	}
+		err = xenbus_printf(xbt, dev->nodename, "feature-gso-tcpv4", "%d",
+				    HAVE_TSO);
+		if (err) {
+			message = "writing feature-gso-tcpv4";
+			goto abort_transaction;
+		}
 
-	err = xenbus_transaction_end(xbt, 0);
-	if (err) {
-		if (err == -EAGAIN)
-			goto again;
-		xenbus_dev_fatal(dev, err, "completing transaction");
-		goto destroy_ring;
+		err = xenbus_transaction_end(xbt, 0);
+		if (err) {
+			if (err == -EAGAIN)
+				goto again;
+			xenbus_dev_fatal(dev, err, "completing transaction");
+			goto destroy_ring;
+		}
 	}
 
 	return 0;
@@ -519,6 +576,20 @@ static int setup_device(struct xenbus_device *dev, struct netfront_info *info)
 	if (err < 0)
 		goto fail;
 	info->irq = err;
+	printk("normal vnif irq=%d, evtchn=%d.\n", err, irq_to_evtchn_port(err));
+
+	if (HA_have_check==1) {
+		err = bind_listening_port_to_irqhandler(
+			dev->otherend_id, netif_otherend_changed, SA_SAMPLE_RANDOM,
+			dev->nodename, dev);
+
+		if (err < 0)
+			goto fail;
+		HA_fast_irq = info->fast = err;
+		HA_fast_evtchn = irq_to_evtchn_port(info->fast);
+		printk("vnif: remote_id=%d, fast_irq=%u, fast_evtchn=%u.\n",
+			dev->otherend_id, HA_fast_irq, HA_fast_evtchn);
+	}
 
 	return 0;
 
@@ -537,6 +608,7 @@ static void backend_changed(struct xenbus_device *dev,
 	struct net_device *netdev = np->netdev;
 
 	DPRINTK("%s\n", xenbus_strstate(backend_state));
+	printk("[%lu, %lu]yewei: net backend state changed to %s\n", jiffies, get_ms(), xenbus_strstate(backend_state));
 
 	switch (backend_state) {
 	case XenbusStateInitialising:
@@ -555,6 +627,7 @@ static void backend_changed(struct xenbus_device *dev,
 			break;
 		xenbus_switch_state(dev, XenbusStateConnected);
 		send_fake_arp(netdev);
+		HA_block_xmit = 0;
 		break;
 
 	case XenbusStateClosing:
@@ -971,6 +1044,7 @@ static int network_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		     (frags > 1 && !xennet_can_sg(dev)) ||
 		     netif_needs_gso(dev, skb))) {
 		spin_unlock_irq(&np->tx_lock);
+		printk("\n^^^^^^^^^^^^^^drop^^^^^^^^^^^^^^^^\n");
 		goto drop;
 	}
 
@@ -1073,6 +1147,38 @@ static irqreturn_t netif_int(int irq, void *dev_id, struct pt_regs *ptregs)
 	spin_unlock_irqrestore(&np->tx_lock, flags);
 
 	return IRQ_HANDLED;
+}
+
+static irqreturn_t netif_otherend_changed(int irq, void *dev_id, struct pt_regs *ptregs)
+{
+	printk("[%lums]yewei: vnif fast interrupt raised.\n", get_ms());
+	schedule_work(&otherend_changed_work);
+	return IRQ_HANDLED;
+}
+
+static void __otherend_changed_handler(void *unused)
+{
+	struct xenbus_device *dev = unused;
+	struct netfront_info *np = dev->dev.driver_data;
+	struct net_device *netdev = np->netdev;
+
+	printk("[%lu]vnif: fast changed, state=%d.\n", get_ms(), dev->state);
+
+	switch (dev->state) {
+	case XenbusStateSuspended:
+		dev->state = XenbusStateClosed;
+		complete(&dev->down);
+		break;
+
+	case XenbusStateInitialising:
+		if (network_connect(netdev) != 0)
+			break;
+		dev->state = XenbusStateConnected;
+		printk("[%lums]vnif: notify_remote_via_irq.\n", get_ms());
+		notify_remote_via_irq(np->fast);
+		HA_block_xmit = 0;
+		break;
+	}
 }
 
 static void xennet_move_rx_slot(struct netfront_info *np, struct sk_buff *skb,
@@ -1555,6 +1661,7 @@ static void netif_release_tx_bufs(struct netfront_info *np)
 		np->grant_tx_ref[i] = GRANT_INVALID_REF;
 		add_id_to_freelist(np->tx_skbs, i);
 		dev_kfree_skb_irq(skb);
+		printk("\n^^^^^^^^^^^^^^skb^^^^^^^^^^^^^^^\n");
 	}
 }
 
@@ -1790,14 +1897,21 @@ static int network_connect(struct net_device *dev)
 	netif_rx_request_t *req;
 	unsigned int feature_rx_copy, feature_rx_flip;
 
-	err = xenbus_scanf(XBT_NIL, np->xbdev->otherend,
-			   "feature-rx-copy", "%u", &feature_rx_copy);
-	if (err != 1)
-		feature_rx_copy = 0;
-	err = xenbus_scanf(XBT_NIL, np->xbdev->otherend,
-			   "feature-rx-flip", "%u", &feature_rx_flip);
-	if (err != 1)
-		feature_rx_flip = 1;
+	if (!HA_have_check) {
+		err = xenbus_scanf(XBT_NIL, np->xbdev->otherend,
+				   "feature-rx-copy", "%u", &feature_rx_copy);
+		if (err != 1)
+			feature_rx_copy = 0;
+		err = xenbus_scanf(XBT_NIL, np->xbdev->otherend,
+				   "feature-rx-flip", "%u", &feature_rx_flip);
+		if (err != 1)
+			feature_rx_flip = 1;
+	}
+
+	//temporary
+	feature_rx_copy = 1;
+	feature_rx_flip = 0;
+
 
 	/*
 	 * Copy packets on receive path if:
@@ -2156,8 +2270,8 @@ static struct notifier_block notifier_inetdev = {
 
 static void netif_release_rings(struct netfront_info *info)
 {
-	end_access(info->tx_ring_ref, info->tx.sring);
 	end_access(info->rx_ring_ref, info->rx.sring);
+	end_access(info->tx_ring_ref, info->tx.sring);
 	info->tx_ring_ref = GRANT_INVALID_REF;
 	info->rx_ring_ref = GRANT_INVALID_REF;
 	info->tx.sring = NULL;
@@ -2207,6 +2321,7 @@ static struct xenbus_driver netfront_driver = {
 	.suspend = netfront_suspend,
 	.suspend_cancel = netfront_suspend_cancel,
 	.resume = netfront_resume,
+	.early_resume = netfront_early_resume,
 	.otherend_changed = backend_changed,
 };
 
