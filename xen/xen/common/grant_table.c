@@ -2243,6 +2243,52 @@ gnttab_get_version(XEN_GUEST_HANDLE(gnttab_get_version_t uop))
         return 0;
 }
 
+static long
+gnttab_dump_gnttab(XEN_GUEST_HANDLE(gnttab_dump_gnttab_t uop))
+{
+    gnttab_dump_gnttab_t op;
+    struct domain *rd;
+    grant_ref_t ref;
+    struct active_grant_entry *act;
+
+    if ( copy_from_guest(&op, uop, 1) ) {
+	printk("yewei: copy_from_guest error!\n");
+	goto out;
+    }
+
+    if ( op.dom == DOMID_SELF )
+        rd = rcu_lock_current_domain();
+    else {
+        rd = rcu_lock_domain_by_id(op.dom);
+        if ( rd == NULL ) {
+  	    printk("yewei: cannot find domain %d\n", op.dom);
+	    goto out;
+        }
+    }
+    
+    spin_lock(&rd->grant_table->lock);
+
+    if ( rd->grant_table->gt_version == 0 ) {
+        printk("yewei: remote grant table not yet set up\n");
+	goto out1;
+    }
+
+    printk("\nyewei: dumping grant tables:\n");
+    for ( ref = 0; ref < nr_grant_entries(rd->grant_table); ref++) {
+        act = &active_entry(rd->grant_table, ref);
+
+        if ( act->pin ) {
+            printk("yewei: Grant gfn(%lx) to domain %d\n", act->gfn, act->domid);
+	}
+    }
+
+out1:
+    spin_unlock(&rd->grant_table->lock);
+    rcu_unlock_domain(rd);
+out:
+    return 0;	
+}
+
 long
 do_grant_table_op(
     unsigned int cmd, XEN_GUEST_HANDLE(void) uop, unsigned int count)
@@ -2360,6 +2406,10 @@ do_grant_table_op(
     {
         rc = gnttab_get_version(guest_handle_cast(uop, gnttab_get_version_t));
         break;
+    }
+    case GNTTABOP_dump_gnttab:
+    {
+	rc = gnttab_dump_gnttab(guest_handle_cast(uop, gnttab_dump_gnttab_t));
     }
     default:
         rc = -ENOSYS;
