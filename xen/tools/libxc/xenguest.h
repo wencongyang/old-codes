@@ -43,6 +43,9 @@ struct save_callbacks {
     /* Enable qemu-dm logging dirty pages to xen */
     int (*switch_qemu_logdirty)(int domid, unsigned enable, void *data); /* HVM only */
 
+    /* callback for flush disk */
+    int (*flush_disk)(void* data);
+
     /* to be provided as the last argument to each callback function */
     void* data;
 };

@@ -29,6 +29,7 @@ typedef struct {
 static int suspend_trampoline(void* data);
 static int postcopy_trampoline(void* data);
 static int checkpoint_trampoline(void* data);
+static int flushdisk_trampoline(void* data);
 
 static PyObject* Checkpoint_new(PyTypeObject* type, PyObject* args,
                                PyObject* kwargs)
@@ -154,6 +155,7 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   callbacks.suspend = suspend_trampoline;
   callbacks.postcopy = postcopy_trampoline;
   callbacks.checkpoint = checkpoint_trampoline;
+  callbacks.flush_disk = flushdisk_trampoline;
   callbacks.data = self;
 
   self->threadstate = PyEval_SaveThread();
@@ -285,6 +287,15 @@ static int suspend_trampoline(void* data)
       return 0;
     }
   }
+
+  return 1;
+}
+
+static int flushdisk_trampoline(void* data)
+{
+  CheckpointObject* self = (CheckpointObject*)data;
+
+  PyObject* result;
 
   if (!self->suspend_cb)
     return 1;
