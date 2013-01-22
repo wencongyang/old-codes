@@ -419,4 +419,17 @@ HYPERVISOR_tmem_op(
 	return _hypercall1(int, tmem_op, op);
 }
 
+static inline int __must_check
+HYPERVISOR_which_side_op(
+	unsigned long is_set)
+{
+	return _hypercall1(unsigned long, which_side_op, is_set);
+}
+
+static inline int __must_check
+HYPERVISOR_rdwt_data_op(
+	struct rdwt_data *arg)
+{
+	return _hypercall1(unsigned long, rdwt_data_op, arg);
+}
 #endif /* __HYPERCALL_H__ */

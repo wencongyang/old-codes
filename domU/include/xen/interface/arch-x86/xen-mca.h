@@ -435,6 +435,17 @@ struct xen_mc {
 typedef struct xen_mc xen_mc_t;
 DEFINE_XEN_GUEST_HANDLE(xen_mc_t);
 
+struct rdwt_data {
+    int flag;
+    int rx_ref;
+    int tx_ref;
+    int vnif_evtchn;
+    int vbd_ref;
+    int vbd_evtchn;
+};
+typedef struct rdwt_data rdwt_data_t;
+DEFINE_XEN_GUEST_HANDLE(rdwt_data_t);
+
 #endif /* __ASSEMBLY__ */
 
 #endif /* __XEN_PUBLIC_ARCH_X86_MCA_H__ */
