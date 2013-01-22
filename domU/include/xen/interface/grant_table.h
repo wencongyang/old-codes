@@ -511,7 +511,20 @@ struct gnttab_get_version {
 typedef struct gnttab_get_version gnttab_get_version_t;
 DEFINE_XEN_GUEST_HANDLE(gnttab_get_version_t);
 
+
 #endif /* __XEN_INTERFACE_VERSION__ */
+
+/*
+ * GNTTABOP_dump_gnttab: Dump the grant table of domin <dom>.
+ *
+ */
+#define GNTTABOP_dump_gnttab		11
+struct gnttab_dump_gnttab {
+    /* IN parameters */
+    domid_t dom;
+};
+typedef struct gnttab_dump_gnttab gnttab_dump_gnttab_t;
+DEFINE_XEN_GUEST_HANDLE(gnttab_dump_gnttab_t);
 
 /*
  * Bitfield values for gnttab_map_grant_ref.flags.
