@@ -1,0 +1,6 @@
+0x2e5e77fa	efx_dl_unregister_driver	drivers/net/sfc/sfc	EXPORT_SYMBOL
+0x4ac7afe9	efx_dl_schedule_reset	drivers/net/sfc/sfc	EXPORT_SYMBOL
+0xbb52ca8e	efx_dl_register_driver_api_ver_1	drivers/net/sfc/sfc	EXPORT_SYMBOL
+0x278552f6	efx_dl_register_callbacks	drivers/net/sfc/sfc	EXPORT_SYMBOL
+0xc4414515	efx_dl_get_nic	drivers/net/sfc/sfc	EXPORT_SYMBOL
+0x42cae6c4	efx_dl_unregister_callbacks	drivers/net/sfc/sfc	EXPORT_SYMBOL
