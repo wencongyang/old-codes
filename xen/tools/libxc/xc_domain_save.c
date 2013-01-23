@@ -1044,7 +1044,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     char sig_buf[20];
     int dev_fd=0;
     int err;
-    struct timeval tv, stv;
+    struct timeval tv;
     fd_set rfds;
     int want_exit = 0;
 

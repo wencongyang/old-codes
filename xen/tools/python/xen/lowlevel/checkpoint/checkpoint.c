@@ -268,8 +268,6 @@ static int suspend_trampoline(void* data)
 {
   CheckpointObject* self = (CheckpointObject*)data;
 
-  PyObject* result;
-
   /* call default suspend function, then python hook if available */
   if (self->armed) {
     if (checkpoint_wait(&self->cps) < 0) {
