@@ -443,23 +443,23 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
 		# setup the network environment
 		if firstTime == True:
 		#if 1 == 0:
-			util.runcmd('ifconfig eth0 promisc')
+			util.runcmd('ifconfig colo_tap0 promisc')
 		
-			util.runcmd('tc qdisc add dev eth0 ingress')
-			util.runcmd('tc filter add dev eth0 parent ffff: '
+			util.runcmd('tc qdisc add dev colo_tap0 ingress')
+			util.runcmd('tc filter add dev colo_tap0 parent ffff: '
 				'protocol ip prio 10 u32 match u32 0 0 flowid 1:2 '
 				'action mirred egress redirect dev %s' % vnif)
-			util.runcmd('tc filter add dev eth0 parent ffff: '
+			util.runcmd('tc filter add dev colo_tap0 parent ffff: '
 				'protocol arp prio 11 u32 match u32 0 0 flowid 1:2 '
 				'action mirred egress redirect dev %s' % vnif)
 
 			util.runcmd('tc qdisc add dev %s ingress' % vnif)
 			util.runcmd('tc filter add dev %s parent ffff: '
 				'protocol ip prio 10 u32 match u32 0 0 flowid 1:2 '
-				'action mirred egress redirect dev eth0' % vnif)
+				'action mirred egress redirect dev colo_tap0' % vnif)
 			util.runcmd('tc filter add dev %s parent ffff: '
 				'protocol arp prio 11 u32 match u32 0 0 flowid 1:2 '
-				'action mirred egress redirect dev eth0' % vnif)
+				'action mirred egress redirect dev colo_tap0' % vnif)
 			
 		# notify master side VM resumed
 		write_exact(fd, "resume\n", "failed to write resume done"); 
@@ -536,7 +536,7 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
 	#util.runcmd('tc filter del dev %s parent ffff: protocol arp prio 11 u32' % vnif)
 	#util.runcmd('tc qdisc del dev %s ingress' % vnif)	
 
-	#util.runcmd('brctl addif eth0 %s' % vnif)
+	#util.runcmd('brctl addif colo_tap0 %s' % vnif)
 
 	pipe_in.write("EOF")
 	pipe_in.write("\n")
