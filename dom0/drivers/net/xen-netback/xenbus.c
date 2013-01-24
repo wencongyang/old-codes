@@ -479,7 +479,7 @@ static int connect_rings(struct backend_info *be)
 	printk("COLO: Read ringref from xen: rx=%d, tx=%d, evtchn=%d.\n", 
 		rx_ring_ref, tx_ring_ref, evtchn);
 
-	if ( (which_side == -1 && suspended_count==1)		//master side
+	if ( (which_side == -1 && suspended_count==0)		//master side
 		|| (which_side > 0 && suspended_count==0) )	//slaver side
 	{
 
