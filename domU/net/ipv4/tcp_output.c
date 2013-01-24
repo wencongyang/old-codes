@@ -226,8 +226,6 @@ void tcp_select_initial_window(int __space, __u32 mss,
 	(*window_clamp) = min(65535U << (*rcv_wscale), *window_clamp);
 }
 
-#define HA_COARSE_WINDOW
-
 /* Chose a new window to advertise, update state in tcp_sock for the
  * socket, and return result with RFC1323 scaling applied.  The return
  * value can be stuffed directly into th->window for an outgoing
@@ -268,22 +266,8 @@ static u16 tcp_select_window(struct sock *sk)
 	/* If we advertise zero window, disable fast path. */
 	if (new_win == 0)
 		tp->pred_flags = 0;
-#ifdef HA_COARSE_WINDOW
-	//if ( new_win > 255) {
-	//	return new_win & ~(0xff);
-	//}
-	
-	for (bits = 15; bits >=0; bits--)
-		if (new_win & (1<<bits)) break;
-	if (bits < 0)
-		return 0;
-	else {
-		//return (new_win >> (bits-1)) << (bits-1);
-		return (u16)(1<<bits);
-	}
-#else
+
 	return new_win;
-#endif
 }
 
 static void tcp_build_and_update_options(__u32 *ptr, struct tcp_sock *tp,
