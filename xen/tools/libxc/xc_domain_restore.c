@@ -1326,6 +1326,12 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     xen_pfn_t *p2m_frame_list = NULL;
     xen_pfn_t *p2m_frame_list_temp = NULL;
     
+    /* A temporay mapping of the guest's p2m table(1 page) */
+    xen_pfn_t *live_p2m = NULL;
+
+    /* A copy of the pfn-to-mfn table(1 page) */
+    xen_pfn_t *p2m = NULL;
+
     /* A temporary mapping of the guest's start_info page. */
     start_info_any_t *start_info;
     
@@ -2195,6 +2201,7 @@ if (1){
 
     /* Uncanonicalise the pfn-to-mfn table frame-number list. */
     //fprintf(fp, "P2M_FL_ENTRIES=%lu, dinfo->p2m_size=%lu:\n", P2M_FL_ENTRIES, dinfo->p2m_size);
+    j = 0;
     for ( i = 0; i < P2M_FL_ENTRIES; i++ )
     {
         pfn = p2m_frame_list[i];
@@ -2204,29 +2211,53 @@ if (1){
             ERROR("PFN-to-MFN frame number %i (%#lx) is bad", i, pfn);
             goto out;
         }
-        p2m_frame_list_temp[i] = ctx->p2m[pfn];
+
+        if (!test_bit(pfn, to_send))
+            continue;
+
+        p2m_frame_list_temp[j++] = ctx->p2m[pfn];
     }
 
-    /* Copy the P2M we've constructed to the 'live' P2M */
-    if ( !(ctx->live_p2m = xc_map_foreign_pages(xch, dom, PROT_WRITE,
-                                           p2m_frame_list_temp, P2M_FL_ENTRIES)) )
+    if (j)
     {
-        PERROR("Couldn't map p2m table");
-        goto out;
-    }
+        /* Copy the P2M we've constructed to the 'live' P2M */
+        if ( !(ctx->live_p2m = xc_map_foreign_pages(xch, dom, PROT_WRITE,
+                                                    p2m_frame_list_temp, j)) )
+        {
+            PERROR("Couldn't map p2m table");
+            goto out;
+        }
 
-    /* If the domain we're restoring has a different word size to ours,
-     * we need to adjust the live_p2m assignment appropriately */
-    if ( dinfo->guest_width > sizeof (xen_pfn_t) )
-        for ( i = dinfo->p2m_size - 1; i >= 0; i-- )
-            ((int64_t *)ctx->live_p2m)[i] = (long)ctx->p2m[i];
-    else if ( dinfo->guest_width < sizeof (xen_pfn_t) )
-        for ( i = 0; i < dinfo->p2m_size; i++ )   
-            ((uint32_t *)ctx->live_p2m)[i] = ctx->p2m[i];
-    else {
-        memcpy(ctx->live_p2m, ctx->p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
+        j = 0;
+        for ( i = 0; i < P2M_FL_ENTRIES; i++ )
+        {
+            pfn = p2m_frame_list[i];
+            if (!test_bit(pfn, to_send))
+                continue;
+
+            live_p2m = (xen_pfn_t *)((char *)ctx->live_p2m + PAGE_SIZE * j++);
+            /* If the domain we're restoring has a different word size to ours,
+             * we need to adjust the live_p2m assignment appropriately */
+            if ( dinfo->guest_width > sizeof (xen_pfn_t) )
+            {
+                n = (i + 1) * FPP - 1;
+                for ( i = FPP - 1; i >= 0; i-- )
+                    ((uint64_t *)live_p2m)[i] = (long)ctx->p2m[n--];
+            }
+            else if ( dinfo->guest_width < sizeof (xen_pfn_t) )
+            {
+                n = i * FPP;
+                for ( i = 0; i < FPP; i++ )
+                    ((uint32_t *)live_p2m)[i] = ctx->p2m[n++];
+            }
+            else
+            {
+                p2m = (xen_pfn_t *)((char *)ctx->p2m + PAGE_SIZE * i);
+                memcpy(live_p2m, p2m, PAGE_SIZE);
+            }
+        }
+        munmap(ctx->live_p2m, j * PAGE_SIZE);
     }
-    munmap(ctx->live_p2m, P2M_FL_ENTRIES * PAGE_SIZE);
 
     DPRINTF("Domain ready to be built.\n");
 
