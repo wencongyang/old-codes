@@ -42,9 +42,6 @@
 #include <xen/hvm/params.h>
 #include <xs.h>
 
-#define MEM_PAGES	(65536*2)
-//#define MEM_PAGES	384000
-//int MEM_PAGES;
 #define NR_wait_resume	312
 #define NR_reset_suspend_count 314
 //xen_pfn_t dirty_mfn[100000];
@@ -1364,7 +1361,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     struct domain_info_context *dinfo = &ctx->dinfo;
     FILE *fp;
     struct timeval time;
-    int size = 0;
+    unsigned long size = 0;
     char *pagebuff;
     unsigned long pagetype;
     char str[10];
@@ -1375,6 +1372,9 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     DECLARE_HYPERCALL;
 
     xc_shadow_op_stats_t stats;
+
+    xc_dominfo_t info;
+    unsigned long max_mem_pfn;
 
     fp = fopen("/root/yewei/1.txt", "at");
     fprintf(fp, "start.\n");
@@ -1401,6 +1401,14 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     if ( superpages )
         return 1;
+
+    if ( xc_domain_getinfo(xch, dom, 1, &info) != 1 )
+    {
+        PERROR("Could not get domain info");
+        return 1;
+    }
+
+    max_mem_pfn = info.max_memkb >> (PAGE_SHIFT - 10);
 
     ctxt = xc_hypercall_buffer_alloc(xch, ctxt, sizeof(*ctxt));
 
@@ -1878,7 +1886,7 @@ next_checkpoint:
     
     //for (pfn = 0; pfn < dinfo->p2m_size; pfn++ ) {
 if (1){
-    for (j = pfn = 0; pfn < MEM_PAGES; pfn++) {
+    for (j = pfn = 0; pfn < max_mem_pfn; pfn++) {
 	if ( !test_bit(pfn, to_send) )
 		continue;
 	
@@ -2380,7 +2388,7 @@ if (1){
 	fflush(fp);
 	goto out;
     }
-    for (i = j = 0; i < MEM_PAGES; i++) {
+    for (i = j = 0; i < max_mem_pfn; i++) {
 	if ( !test_bit(i, to_send) )
 		continue;
 	j++;
