@@ -919,7 +919,7 @@ int xs_suspend_evtchn_port(int domid)
     xs_daemon_close(xs);
 
     if (!portstr || !plen)
-        return -1;
+        return 11;
 
     port = atoi(portstr);
     free(portstr);
