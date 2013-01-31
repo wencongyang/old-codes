@@ -393,6 +393,14 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
             		XendDomain.instance().domains_lock.release()
         	except:
             		lock = False;
+
+        	# notify master side finish done.
+         	write_exact(fd, "finish", "failed to write finish done")
+
+         	iscontinue = read_exact(fd, 6, "failed to read resume flag")
+         	if iscontinue != "resume":
+         	    running = False;
+         	    break
 		
 		#if firstTime == False:
 		#	break
