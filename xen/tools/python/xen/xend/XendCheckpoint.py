@@ -15,10 +15,7 @@ import time
 import sys
 import datetime
 import popen2
-sys.path.append(os.getcwd()+"/python/xen/remus/")
-sys.path.append(os.getcwd()+"/source/xen-unstable/tools/python/xen/remus/")
-#print sys.path
-import util 
+from xen.remus import util
 from struct import pack, unpack, calcsize
 
 from xen.util.xpopen import xPopen3
