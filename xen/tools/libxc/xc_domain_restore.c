@@ -1313,7 +1313,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     /* A table containing the type of each PFN (/not/ MFN!). */
     unsigned long *pfn_type = NULL;
-    unsigned long *pfn_type_tmp = NULL;
+    unsigned long *pfn_type_slaver = NULL;
     int* pfn_err = NULL;
 
     /* A table of MFNs to map in the current region */
@@ -1500,7 +1500,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     /* We want zeroed memory so use calloc rather than malloc. */
     ctx->p2m   = calloc(dinfo->p2m_size, sizeof(xen_pfn_t));
     //pfn_type   = calloc(dinfo->p2m_size, sizeof(unsigned long));
-    pfn_type_tmp   = calloc(dinfo->p2m_size, sizeof(unsigned long));
+    pfn_type_slaver   = calloc(dinfo->p2m_size, sizeof(unsigned long));
     pfn_err = calloc(dinfo->p2m_size, sizeof(*pfn_err));
 
     region_mfn = malloc(ROUNDUP(MAX_BATCH_SIZE * sizeof(xen_pfn_t), PAGE_SHIFT));
@@ -1882,7 +1882,7 @@ next_checkpoint:
     /*
      * copy memory from shared buffer into VM
      */
-    memcpy(pfn_type_tmp, ctx->p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
+    memcpy(pfn_type_slaver, ctx->p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
     
     //for (pfn = 0; pfn < dinfo->p2m_size; pfn++ ) {
 if (1){
