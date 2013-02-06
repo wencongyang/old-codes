@@ -1283,6 +1283,21 @@ out:
 	return success ? p2m : NULL;
 }
 
+static int update_pfn_type(xc_interface *xch, uint32_t dom, int count, xen_pfn_t *pfn_batch,
+			   xen_pfn_t *pfn_type_batch, xen_pfn_t *pfn_type)
+{
+    int k;
+
+    if ( xc_get_pfn_type_batch(xch, dom, count, pfn_type_batch) )
+    {
+	ERROR("xc_get_pfn_type_batch for slaver failed");
+	return -1;
+    }
+
+    for (k = 0; k < count; k++)
+	pfn_type[pfn_batch[k]] = pfn_type_batch[k] & XEN_DOMCTL_PFINFO_LTAB_MASK;
+    return 0;
+}
 
 int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       unsigned int store_evtchn, unsigned long *store_mfn,
@@ -1313,8 +1328,11 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     /* A table containing the type of each PFN (/not/ MFN!). */
     unsigned long *pfn_type = NULL;
-    unsigned long *pfn_type_slaver = NULL;
+    xen_pfn_t *pfn_type_slaver = NULL;
     int* pfn_err = NULL;
+
+    xen_pfn_t *pfn_batch_slaver = NULL;
+    xen_pfn_t *pfn_type_batch_slaver = NULL;
 
     /* A table of MFNs to map in the current region */
     xen_pfn_t *region_mfn = NULL;
@@ -1500,8 +1518,17 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     /* We want zeroed memory so use calloc rather than malloc. */
     ctx->p2m   = calloc(dinfo->p2m_size, sizeof(xen_pfn_t));
     //pfn_type   = calloc(dinfo->p2m_size, sizeof(unsigned long));
-    pfn_type_slaver   = calloc(dinfo->p2m_size, sizeof(unsigned long));
+    pfn_type_slaver   = calloc(dinfo->p2m_size, sizeof(xen_pfn_t));
     pfn_err = calloc(dinfo->p2m_size, sizeof(*pfn_err));
+    pfn_batch_slaver = calloc(MAX_BATCH_SIZE, sizeof(xen_pfn_t));
+    pfn_type_batch_slaver = calloc(MAX_BATCH_SIZE, sizeof(xen_pfn_t));
+
+    if ( !pfn_batch_slaver || !pfn_type_batch_slaver)
+    {
+	ERROR("memory alloc pfn_batch_slaver or pfn_type_batch_slaver failed");
+        errno = ENOMEM;
+        goto out;
+    }
 
     region_mfn = malloc(ROUNDUP(MAX_BATCH_SIZE * sizeof(xen_pfn_t), PAGE_SHIFT));
     ctx->p2m_batch = malloc(ROUNDUP(MAX_BATCH_SIZE * sizeof(xen_pfn_t), PAGE_SHIFT));
@@ -1882,7 +1909,7 @@ next_checkpoint:
     /*
      * copy memory from shared buffer into VM
      */
-    memcpy(pfn_type_slaver, ctx->p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
+    memcpy(pfn_type_slaver, pfn_type, dinfo->p2m_size * sizeof(xen_pfn_t));
     
     //for (pfn = 0; pfn < dinfo->p2m_size; pfn++ ) {
 if (1){
@@ -2415,6 +2442,25 @@ if (1){
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]end off dirty-log.\n", 
 		time.tv_sec, time.tv_usec);
+    j = 0;
+    for (i = 0; i < max_mem_pfn; i++) {
+	if ( !test_bit(i, to_send) )
+		continue;
+        pfn_batch_slaver[j] = i;
+	pfn_type_batch_slaver[j++] = ctx->p2m[i];
+	if (j == MAX_BATCH_SIZE)
+	{
+	    if (update_pfn_type(xch, dom, j, pfn_batch_slaver, pfn_type_batch_slaver, pfn_type_slaver))
+		goto out;
+	    j = 0;
+	}
+    }
+
+    if (j)
+    {
+	if (update_pfn_type(xch, dom, j, pfn_batch_slaver, pfn_type_batch_slaver, pfn_type_slaver))
+	    goto out;
+    }
 	
     // reset memory
     hypercall.op = __HYPERVISOR_reset_memory_op;
