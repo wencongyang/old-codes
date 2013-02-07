@@ -942,6 +942,7 @@ static inline int tcp_nagle_check(const struct tcp_sock *tp,
 {
 	return (skb->len < mss_now &&
 		((nonagle&TCP_NAGLE_CORK) ||
+		 (nonagle&TCP_NAGLE_AUTO_CORK) ||
 		 (!nonagle &&
 		  tp->packets_out &&
 		  tcp_minshall_check(tp))));
