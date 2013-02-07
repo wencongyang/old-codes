@@ -1925,7 +1925,7 @@ if (1){
 
 	mfn = ctx->p2m[pfn];
 	j++;
-	if (1) {
+	if (0) { /* mfncopy_op */
 		pagebuff = (char *)(pagebase + pfn * PAGE_SIZE);
 
 		//continue;
@@ -1934,6 +1934,22 @@ if (1){
 		hypercall.arg[1] = (unsigned long)pagebuff;
 
 		do_xen_hypercall(xch, &hypercall);
+	} else { /* foreign mmap */
+		int pfn_err = 0;
+		char *region_base_slaver;
+		xen_pfn_t region_mfn_slaver = mfn;
+
+		region_base_slaver = xc_map_foreign_bulk(xch, dom,
+			PROT_WRITE, &region_mfn_slaver, &pfn_err, 1);
+
+		if (!region_base_slaver || pfn_err) {
+			ERROR("laijs xc_map_foreign_bulk failed");
+			return -1;
+		}
+
+		pagebuff = (char *)(pagebase + pfn * PAGE_SIZE);
+		memcpy(region_base_slaver, pagebuff, PAGE_SIZE);
+		munmap(region_base_slaver, PAGE_SIZE);
 	}
 
 	if ( !hvm &&
