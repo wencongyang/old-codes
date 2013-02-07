@@ -1906,11 +1906,102 @@ next_checkpoint:
             goto out;
         }
     }
-    /*
-     * copy memory from shared buffer into VM
-     */
-    memcpy(pfn_type_slaver, pfn_type, dinfo->p2m_size * sizeof(xen_pfn_t));
-    
+
+    /* Step1: pin non-dirty L1 pagetables: ~to_send & mL1 (= ~to_send & sL1) */
+    nr_pins = 0;
+    for ( i = 0; i < dinfo->p2m_size; i++ )
+    {
+        switch ( pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
+        {
+        case XEN_DOMCTL_PFINFO_L1TAB:
+            if (pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LPINTAB) // don't pin already pined
+		continue;
+	    if (test_bit(i, to_send)) // don't pin dirty
+		continue;
+	    // here, it must also be L1 in slaver, otherwise it is dirty.(add test code ?) */
+
+            pin[nr_pins].cmd = MMUEXT_PIN_L1_TABLE;
+            break;
+
+        case XEN_DOMCTL_PFINFO_L2TAB:
+        case XEN_DOMCTL_PFINFO_L3TAB:
+        case XEN_DOMCTL_PFINFO_L4TAB:
+        default:
+            continue;
+        }
+
+        pin[nr_pins].arg1.mfn = ctx->p2m[i];
+        nr_pins++;
+ 
+        /* Batch full? Then flush. */
+        if ( nr_pins == MAX_PIN_BATCH )
+        {
+            if ( xc_mmuext_op(xch, pin, nr_pins, dom) < 0 )
+            {
+                PERROR("Failed to pin L1 batch of %d page tables", nr_pins);
+                goto out;
+            }
+            nr_pins = 0;
+        }
+    }
+
+    /* Flush final partial batch. */
+    if ( (nr_pins != 0) && (xc_mmuext_op(xch, pin, nr_pins, dom) < 0) )
+    {
+        PERROR("Failed to pin L1 batch of %d page tables", nr_pins);
+        goto out;
+    }
+
+    /* Step2: unpin pagetables execpt non-dirty L1: sL2 + sL3 + sL4 + (to_send & sL1) */
+    nr_pins = 0;
+    for ( i = 0; i < dinfo->p2m_size; i++ )
+    {
+        if ( (pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 ) {
+	    //pagetype = pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK;
+	    //if (pagetype >= XEN_DOMCTL_PFINFO_L1TAB && pagetype <= XEN_DOMCTL_PFINFO_L4TAB)
+	    //	fprintf(fp, "pfn = %d, page table but not pinned.\n", i);
+            continue;
+	}
+
+        switch ( pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
+        {
+        case XEN_DOMCTL_PFINFO_L1TAB:
+	    if (!test_bit(i, to_send)) // it is in (~to_send & mL1), keep it
+		continue;
+	    // fallthrough
+        case XEN_DOMCTL_PFINFO_L2TAB:
+        case XEN_DOMCTL_PFINFO_L3TAB:
+        case XEN_DOMCTL_PFINFO_L4TAB:
+            pin[nr_pins].cmd = MMUEXT_UNPIN_TABLE;
+            break;
+
+        default:
+            continue;
+        }
+
+        pin[nr_pins].arg1.mfn = ctx->p2m[i];
+        nr_pins++;
+ 
+        /* Batch full? Then flush. */
+        if ( nr_pins == MAX_PIN_BATCH )
+        {
+            if ( xc_mmuext_op(xch, pin, nr_pins, dom) < 0 )
+            {
+                PERROR("Failed to unpin batch of %d page tables", nr_pins);
+                goto out;
+            }
+            nr_pins = 0;
+        }
+    }
+
+    /* Flush final partial batch. */
+    if ( (nr_pins != 0) && (xc_mmuext_op(xch, pin, nr_pins, dom) < 0) )
+    {
+        PERROR("Failed to unpin batch of %d page tables", nr_pins);
+        goto out;
+    }
+
+    /* Step 3: copy dirty page */
     //for (pfn = 0; pfn < dinfo->p2m_size; pfn++ ) {
 if (1){
     for (j = pfn = 0; pfn < max_mem_pfn; pfn++) {
@@ -1973,6 +2064,7 @@ if (1){
     }
 }
 
+    /* Step 4: pin master pt */
     /*
      * Pin page tables. Do this after writing to them as otherwise Xen
      * will barf when doing the type-checking.
@@ -1991,6 +2083,8 @@ if (1){
         switch ( pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
         {
         case XEN_DOMCTL_PFINFO_L1TAB:
+	    if (!test_bit(i, to_send)) // it is in (~to_send & mL1)(=~to_send & sL1), already pined
+		continue;
             pin[nr_pins].cmd = MMUEXT_PIN_L1_TABLE;
             break;
 
@@ -2032,6 +2126,56 @@ if (1){
         goto out;
     }
 
+    /* Step5: unpin unneeded non-dirty L1 pagetables: ~to_send & mL1 (= ~to_send & sL1) */
+    nr_pins = 0;
+    for ( i = 0; i < dinfo->p2m_size; i++ )
+    {
+        switch ( pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
+        {
+        case XEN_DOMCTL_PFINFO_L1TAB:
+            if (pfn_type[i] & XEN_DOMCTL_PFINFO_LPINTAB) // still needed
+		continue;
+	    if (test_bit(i, to_send)) // not pined by step 1
+		continue;
+
+            pin[nr_pins].cmd = MMUEXT_UNPIN_TABLE;
+            break;
+
+        case XEN_DOMCTL_PFINFO_L2TAB:
+        case XEN_DOMCTL_PFINFO_L3TAB:
+        case XEN_DOMCTL_PFINFO_L4TAB:
+        default:
+            continue;
+        }
+
+        pin[nr_pins].arg1.mfn = ctx->p2m[i];
+        nr_pins++;
+ 
+        /* Batch full? Then flush. */
+        if ( nr_pins == MAX_PIN_BATCH )
+        {
+            if ( xc_mmuext_op(xch, pin, nr_pins, dom) < 0 )
+            {
+                PERROR("Failed to pin L1 batch of %d page tables", nr_pins);
+                goto out;
+            }
+            nr_pins = 0;
+        }
+    }
+
+    /* Flush final partial batch. */
+    if ( (nr_pins != 0) && (xc_mmuext_op(xch, pin, nr_pins, dom) < 0) )
+    {
+        PERROR("Failed to pin L1 batch of %d page tables", nr_pins);
+        goto out;
+    }
+    /* end Step 5 */
+
+    /*
+     * copy memory from shared buffer into VM
+     */
+    memcpy(pfn_type_slaver, pfn_type, dinfo->p2m_size * sizeof(xen_pfn_t));
+    
     DPRINTF("Memory reloaded (%ld pages)\n", ctx->nr_pfns);
 
     /* Get the list of PFNs that are not in the psuedo-phys map */

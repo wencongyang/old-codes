@@ -2175,7 +2175,7 @@ int do_reset_memory_op(unsigned long domid)
             d->arch.pirq_eoi_map = NULL;
         }
 	printk("yewei: free eoi map.\n");
-
+	goto done;
         d->arch.relmem = RELMEM_xen;
         /* fallthrough */
 	if (time > 0) 
@@ -2259,7 +2259,7 @@ int do_reset_memory_op(unsigned long domid)
     time++;
 
     d->arch.relmem = RELMEM_not_started;
-
+done:
     domain_unpause(d);
     rcu_unlock_domain(d);
 
