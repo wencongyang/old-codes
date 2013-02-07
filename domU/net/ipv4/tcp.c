@@ -854,6 +854,10 @@ wait_for_memory:
 	}
 
 out:
+	if (flags & MSG_MORE)
+		tp->nonagle |= TCP_NAGLE_AUTO_CORK;
+	else
+		tp->nonagle &= ~TCP_NAGLE_AUTO_CORK;
 	if (copied)
 		tcp_push(sk, tp, flags, mss_now, tp->nonagle);
 	TCP_CHECK_TIMER(sk);

@@ -184,6 +184,7 @@ extern void tcp_time_wait(struct sock *sk, int state, int timeo);
 #define TCP_NAGLE_OFF		1	/* Nagle's algo is disabled */
 #define TCP_NAGLE_CORK		2	/* Socket is corked	    */
 #define TCP_NAGLE_PUSH		4	/* Cork is overridden for already queued data */
+#define TCP_NAGLE_AUTO_CORK	8
 
 extern struct inet_timewait_death_row tcp_death_row;
 
