@@ -1907,6 +1907,8 @@ next_checkpoint:
         }
     }
 
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]start step1\n", time.tv_sec, time.tv_usec);
     /* Step1: pin non-dirty L1 pagetables: ~to_send & mL1 (= ~to_send & sL1) */
     nr_pins = 0;
     for ( i = 0; i < dinfo->p2m_size; i++ )
@@ -2001,6 +2003,9 @@ next_checkpoint:
         goto out;
     }
 
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]finish step2 \n", time.tv_sec, time.tv_usec);
+
     /* Step 3: copy dirty page */
     //for (pfn = 0; pfn < dinfo->p2m_size; pfn++ ) {
 if (1){
@@ -2063,6 +2068,9 @@ if (1){
         goto out;
     }
 }
+
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]start step4\n", time.tv_sec, time.tv_usec);
 
     /* Step 4: pin master pt */
     /*
@@ -2170,6 +2178,8 @@ if (1){
         goto out;
     }
     /* end Step 5 */
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]finish step5\n", time.tv_sec, time.tv_usec);
 
     /*
      * copy memory from shared buffer into VM
