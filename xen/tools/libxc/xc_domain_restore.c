@@ -2009,15 +2009,40 @@ next_checkpoint:
     /* Step 3: copy dirty page */
     //for (pfn = 0; pfn < dinfo->p2m_size; pfn++ ) {
 if (1){
+    long dirty_all = 0, dirty_l4 = 0, dirty_l3 = 3, dirty_l2 = 0, dirty_l1 = 0;
+
     for (j = pfn = 0; pfn < max_mem_pfn; pfn++) {
 	if ( !test_bit(pfn, to_send) )
 		continue;
 	
+	dirty_all++;
 	pagetype = pfn_type[pfn] & XEN_DOMCTL_PFINFO_LTAB_MASK;
 		
 	if (pagetype == XEN_DOMCTL_PFINFO_XTAB)
 		// a bogus/unmapped page: skip it
 		continue;
+
+        switch ( pagetype )
+        {
+        case XEN_DOMCTL_PFINFO_L1TAB:
+		dirty_l1++;
+            break;
+
+        case XEN_DOMCTL_PFINFO_L2TAB:
+		dirty_l2++;
+            break;
+
+        case XEN_DOMCTL_PFINFO_L3TAB:
+		dirty_l3++;
+            break;
+
+        case XEN_DOMCTL_PFINFO_L4TAB:
+		dirty_l4++;
+            break;
+
+        default:
+            break;
+        }
 
 	mfn = ctx->p2m[pfn];
 	j++;
@@ -2067,6 +2092,19 @@ if (1){
         PERROR("Error doing flush_mmu_updates()");
         goto out;
     }
+	fprintf(fp,	"dirty_all=%ld\n"
+			"dirty_all_pt=%ld\n"
+			"dirty_l4=%ld\n"
+			"dirty_l3=%ld\n"
+			"dirty_l2=%ld\n"
+			"dirty_l1=%ld\n",
+			dirty_all,
+			dirty_l4 + dirty_l3 + dirty_l2 + dirty_l1,
+			dirty_l4,
+			dirty_l3,
+			dirty_l2,
+			dirty_l1);
+	fflush(fp);
 }
 
     gettimeofday(&time, NULL);
