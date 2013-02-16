@@ -1409,7 +1409,7 @@ static void colo_fix_tcp_packet(struct sk_buff *skb)
 	tcph = (void *)((char *)iph + iph->ihl * 4);
 	window = ntohs(tcph->window);
 	if (window >=0x100)
-		new_window = window & 0x100;
+		new_window = window & ~0xff;
 	else
 		new_window = 1 << (fls(window) - 1);
 

@@ -1,0 +1,33 @@
+Tips for colo:
+
+On master&slaver side, you should do the following things:
+1. remove suspend lock file
+   rm -f /var/lib/xen/suspend_*
+2. bind dom0's vcpu to each pcpu
+   For example: the machine has 4pvcpus:
+        xm vcpu-pin 0 0 0
+        xm vcpu-pin 0 1 1
+        xm vcpu-pin 0 2 2
+        xm vcpu-pin 0 3 3
+3. bind network interface's interrupt to dom0's vcpu
+   a. each network interface should have only one rx irq and
+      tx irq, and rx/tx irq should be handled on the same cpu
+   b. different network interface's irq should use different
+      cpu
+   c. don't bind the irq to cpu0, because vif's netback will
+      run on cpu0
+4. modify network interface's txqueuelen
+   You should modify the following network interface's txqueuelen
+   a. vif
+   b. the network interface that is used to forward packets
+   c. ifb0 and ifb1
+5. If the network interface that is used to forward packets is
+   created by openvpn, the bandwidth is about 100Mb/s
+6. don't use tso, sg, gso, lro, gro
+   You should change offload parametes for the following network
+   interface:
+   a. the network interface that is used to forward packets
+   b. the network interface that vif is bridged to
+7. modify domU's network buffer:
+   echo 1000000 >/proc/sys/net/core/rmem_max
+   echo 1000000 >/proc/sys/net/core/wmem_max

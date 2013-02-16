@@ -1996,6 +1996,25 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     discard_file_cache(xch, io_fd, 1);
 
  resume:
+    /*
+     * master                       slaver
+     *                  <----       "finish"
+     * flush packets
+     * "resume"         ---->
+     * resume vm                    resume vm
+     */
+    read(io_fd, sig_buf, 6);
+
+    if (!first_time)
+        /* flush queued packets now */
+        ioctl(dev_fd, COMP_IOCTSUSPEND);
+
+    /* notify slaver to resume vm*/
+    if (write_exact(io_fd, "resume", 6)) {
+        PERROR("write: resume");
+        goto out;
+    }
+
     if ( !rc && callbacks->postcopy )
         callbacks->postcopy(callbacks->data);
 
@@ -2137,9 +2156,6 @@ start_ck:
 	callbacks->flush_disk(callbacks->data);
 
 	write_exact(io_fd, "start", 5);
-	
-	/* Notify compare module VMs are suspended. */
-	ioctl(dev_fd, COMP_IOCTSUSPEND);
 
 	/* Tell the xc_domain_restore routine this is not the first checkpoint */
 	first_time = 0;
