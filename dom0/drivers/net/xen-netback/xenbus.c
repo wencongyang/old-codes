@@ -27,7 +27,7 @@
 extern wait_queue_head_t resume_queue;
 extern int is_resumed;
 extern struct net_device *vif_port_dev;
-extern int dev_opencnt;
+extern atomic_t dev_opencnt;
 
 static int irqcount = 0;
 
@@ -606,9 +606,8 @@ static void __otherend_changed_handler(struct work_struct *work)
 	case XenbusStateInitWait:
 		if (be->vif)
 			connect(be);
-		is_resumed = 1;
-		dev_opencnt++;
-		if (dev_opencnt == 2) {
+		if (atomic_add_return(1, &dev_opencnt) == 2) {
+			is_resumed = 1;
 			wake_up_interruptible(&resume_queue);
 			printk("COLO: wake up resume.\n");
 		}
