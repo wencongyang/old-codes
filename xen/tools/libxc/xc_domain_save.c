@@ -1261,6 +1261,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 #endif
 #define ratewrite(fd, live, buf, len) ratewrite_buffer(xch, last_iter, &ob, (fd), (live), (buf), (len))
 
+    gettimeofday(&tv, NULL);
+    printf("\nTIME: page trasmit start at %lu.%06lu\n", (unsigned long)tv.tv_sec,
+		(unsigned long)tv.tv_usec);
+
     /* Now write out each data page, canonicalising page tables as we go... */
     for ( ; ; )
     {
@@ -1393,6 +1397,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             if ( batch == 0 )
                 goto skip; /* vanishingly unlikely... */
 
+	    gettimeofday(&tv, NULL);
+	    printf("TIME: xc_map_foreign_bulk/xc_get_pfn_type_batch start at %lu.%06lu, batch=%d\n", (unsigned long)tv.tv_sec,
+			(unsigned long)tv.tv_usec, batch);
+
             region_base = xc_map_foreign_bulk(
                 xch, dom, PROT_READ, pfn_type, pfn_err, batch);
             if ( region_base == NULL )
@@ -1401,12 +1409,19 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                 goto out;
             }
 
+	    gettimeofday(&tv, NULL);
+	    printf("TIME: xc_get_pfn_type_batch start %lu.%06lu\n", (unsigned long)tv.tv_sec,
+			(unsigned long)tv.tv_usec);
             /* Get page types */
             if ( xc_get_pfn_type_batch(xch, dom, batch, pfn_type) )
             {
                 PERROR("get_pfn_type_batch failed");
                 goto out;
             }
+
+	    gettimeofday(&tv, NULL);
+	    printf("TIME: xc_map_foreign_bulk/xc_get_pfn_type_batch finish %lu.%06lu\n", (unsigned long)tv.tv_sec,
+			(unsigned long)tv.tv_usec);
 
             for ( run = j = 0; j < batch; j++ )
             {
@@ -1555,6 +1570,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             sent_this_iter += batch;
 
             munmap(region_base, batch*PAGE_SIZE);
+	    gettimeofday(&tv, NULL);
+	    printf("TIME: page trasmit finish batch send %lu.%06lu\n\n\n", (unsigned long)tv.tv_sec,
+			(unsigned long)tv.tv_usec);
 
         } /* end of this while loop for this iteration */
 
@@ -1642,6 +1660,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         }
     } /* end of infinite for loop */
+
+	gettimeofday(&tv, NULL);
+	printf("TIME: page trasmit end %lu.%06lu\n", (unsigned long)tv.tv_sec,
+		(unsigned long)tv.tv_usec);
 
     DPRINTF("All memory is saved\n");
 
