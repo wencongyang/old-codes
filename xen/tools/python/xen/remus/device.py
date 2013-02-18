@@ -24,6 +24,10 @@ class CheckpointedDevice(object):
         'called when backup has acknowledged checkpoint reception'
         pass
 
+    def check(self):
+        'called when both sides are running'
+        pass
+
 class ReplicatedDisk(CheckpointedDevice):
     """
     Send a checkpoint message to a replicated disk while the domain

@@ -46,6 +46,11 @@ struct save_callbacks {
     /* callback for flush disk */
     int (*flush_disk)(void* data);
 
+    /* returns:
+     * 0: don't take another checkpoint
+     * 1: take another checkpoint */
+    int (*check)(void* data);
+
     /* to be provided as the last argument to each callback function */
     void* data;
 };

@@ -141,6 +141,14 @@ def run(cfg):
         if closure.cmd == 's2':
             die()
 
+    def check():
+        'return true if we need to do a checkpoint'
+        ret = False
+        for buf in bufs:
+            if buf.check():
+                ret = True
+        return ret
+
     def preresume():
         'Complete external checkpointing before domain resumes'
         if closure.cmd == 'r':
@@ -187,7 +195,7 @@ def run(cfg):
     rc = 0
 
     checkpointer = save.Saver(cfg.domid, fd, postsuspend, preresume, commit,
-                              interval)
+                              check, interval)
 
     try:
         checkpointer.start()
