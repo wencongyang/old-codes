@@ -969,6 +969,43 @@ static void install_fw_network(void)
 }
 */
 
+/* big cache to avoid future map */
+static char **pages_base;
+
+static int colo_ro_map_and_cache(xc_interface *xch, uint32_t dom,
+	unsigned long *pfn_batch, xen_pfn_t *pfn_type, int *pfn_err, int batch)
+{
+    static xen_pfn_t cache_pfn_type[MAX_BATCH_SIZE];
+    static int cache_pfn_err[MAX_BATCH_SIZE];
+    int i, cache_batch = 0;
+    char *map;
+
+    for (i = 0; i < batch; i++) {
+	if (!pages_base[pfn_batch[i]])
+		cache_pfn_type[cache_batch++] = pfn_type[i];
+    }
+
+    if (cache_batch) {
+        map = xc_map_foreign_bulk(xch, dom, PROT_READ, cache_pfn_type, cache_pfn_err, cache_batch);
+	if (!map)
+		return -1;
+    }
+
+    cache_batch = 0;
+    for (i = 0; i < batch; i++) {
+	if (pages_base[pfn_batch[i]]) {
+		pfn_err[i] = 0;
+	} else {
+		if (!cache_pfn_err[cache_batch])
+			pages_base[pfn_batch[i]] = map + PAGE_SIZE * cache_batch;
+		pfn_err[i] = cache_pfn_err[cache_batch];
+		cache_batch++;
+	}
+    }
+
+    return 0;
+}
+
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
                    struct save_callbacks* callbacks, int hvm)
@@ -1184,10 +1221,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     analysis_phase(xch, dom, ctx, HYPERCALL_BUFFER(to_skip), 0);
 
+    pages_base = calloc(dinfo->p2m_size, sizeof(*pages_base));
     pfn_type   = malloc(ROUNDUP(MAX_BATCH_SIZE * sizeof(*pfn_type), PAGE_SHIFT));
     pfn_batch  = calloc(MAX_BATCH_SIZE, sizeof(*pfn_batch));
     pfn_err    = malloc(MAX_BATCH_SIZE * sizeof(*pfn_err));
-    if ( (pfn_type == NULL) || (pfn_batch == NULL) || (pfn_err == NULL) )
+    if ( (pages_base == NULL) || (pfn_type == NULL) || (pfn_batch == NULL) || (pfn_err == NULL) )
     {
         ERROR("failed to alloc memory for pfn_type and/or pfn_batch arrays");
         errno = ENOMEM;
@@ -1401,9 +1439,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 	    printf("TIME: xc_map_foreign_bulk/xc_get_pfn_type_batch start at %lu.%06lu, batch=%d\n", (unsigned long)tv.tv_sec,
 			(unsigned long)tv.tv_usec, batch);
 
-            region_base = xc_map_foreign_bulk(
-                xch, dom, PROT_READ, pfn_type, pfn_err, batch);
-            if ( region_base == NULL )
+	    if (colo_ro_map_and_cache(xch, dom, pfn_batch, pfn_type, pfn_err, batch) < 0)
             {
                 PERROR("map batch failed");
                 goto out;
@@ -1456,7 +1492,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                         DPRINTF("%d pfn=%08lx sum=%08lx\n",
                                 iter,
                                 pfn_type[j],
-                                csum_page(region_base + (PAGE_SIZE*j)));
+                                csum_page(pages_base[pfn_batch[j]]));
                     else
                         DPRINTF("%d pfn= %08lx mfn= %08lx [mfn]= %08lx"
                                 " sum= %08lx\n",
@@ -1464,13 +1500,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                                 pfn_type[j],
                                 gmfn,
                                 mfn_to_pfn(gmfn),
-                                csum_page(region_base + (PAGE_SIZE*j)));
+                                csum_page(pages_base[pfn_batch[j]]));
                 }
             }
 
             if ( !run )
             {
-                munmap(region_base, batch*PAGE_SIZE);
+                //munmap(region_base, batch*PAGE_SIZE);
                 continue; /* bail on this batch: no valid pages */
             }
 
@@ -1497,7 +1533,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             for ( j = 0; j < batch; j++ )
             {
                 unsigned long pfn, pagetype;
-                void *spage = (char *)region_base + (PAGE_SIZE*j);
+                void *spage = pages_base[pfn_batch[j]];
 
                 pfn      = pfn_type[j] & ~XEN_DOMCTL_PFINFO_LTAB_MASK;
                 pagetype = pfn_type[j] &  XEN_DOMCTL_PFINFO_LTAB_MASK;
@@ -1550,7 +1586,15 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                 else
                 {
                     /* We have a normal page: accumulate it for writing. */
-                    run++;
+		    /* Laijs: stop accumulate write temporarily. we will add it back via writev() when needed */
+                    if ( ratewrite(io_fd, live, spage, PAGE_SIZE) != PAGE_SIZE )
+                    {
+                        PERROR("Error when writing to state file (4b)"
+                              " (errno %d)", errno);
+                        goto out;
+                    }
+                    run = 0;
+                    //run++;
                 }
             } /* end of the write out for this batch */
 
@@ -1569,7 +1613,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
             sent_this_iter += batch;
 
-            munmap(region_base, batch*PAGE_SIZE);
+            //munmap(region_base, batch*PAGE_SIZE);
 	    gettimeofday(&tv, NULL);
 	    printf("TIME: page trasmit finish batch send %lu.%06lu\n\n\n", (unsigned long)tv.tv_sec,
 			(unsigned long)tv.tv_usec);
