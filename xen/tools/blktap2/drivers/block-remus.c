@@ -103,6 +103,10 @@ td_vbd_t *device_vbd = NULL;
 td_image_t *remus_image = NULL;
 struct tap_disk tapdisk_remus;
 
+/* cache 10M(20480 sectors) data */
+#define MAX_WRITE_REQS 20480
+uint64_t write_reqs;
+
 struct ramdisk {
 	size_t sector_size;
 	struct hashtable* h;
@@ -155,6 +159,8 @@ struct tdremus_state {
 	poll_fd_t ctl_fd;     /* io_fd slot for control FIFO */
 	char*     msg_path; /* output completion message here */
 	poll_fd_t msg_fd;
+	char*     ntf_path;
+	poll_fd_t ntf_fd;
 
   /* replication host */
 	struct sockaddr_in sa;
@@ -185,6 +191,7 @@ typedef struct tdremus_wire {
 #define TDREMUS_SUBMIT "sreq"
 #define TDREMUS_COMMIT "creq"
 #define TDREMUS_DONE "done"
+#define TDREMUS_OVERFLOW "overflow"
 #define TDREMUS_FAIL "fail"
 
 /* primary read/write functions */
@@ -203,6 +210,7 @@ static int tdremus_close(td_driver_t *driver);
 
 static int switch_mode(td_driver_t *driver, enum tdremus_mode mode);
 static int ctl_respond(struct tdremus_state *s, const char *response);
+static int ctl_notify(struct tdremus_state *s, const char *response);
 
 /* ring functions */
 static inline unsigned int ring_next(struct req_ring* ring, unsigned int pos)
@@ -820,6 +828,7 @@ static void primary_queue_read(td_driver_t *driver, td_request_t treq)
 static void primary_queue_write(td_driver_t *driver, td_request_t treq)
 {
 	struct tdremus_state *s = (struct tdremus_state *)driver->data;
+	uint64_t old_write_reqs = write_reqs;
 
 	char header[sizeof(uint32_t) + sizeof(uint64_t)];
 	uint32_t *sectors = (uint32_t *)header;
@@ -836,6 +845,12 @@ static void primary_queue_write(td_driver_t *driver, td_request_t treq)
 
 	*sectors = treq.secs;
 	*sector = treq.sec;
+	write_reqs += treq.secs;
+	if (write_reqs > MAX_WRITE_REQS && old_write_reqs <= MAX_WRITE_REQS ) {
+		/* Too many requests, inform msg_fd */
+		RPRINTF("Too many requests\n");
+		ctl_notify(s, TDREMUS_OVERFLOW);
+	}
 
 	if (mwrite(s->stream_fd.fd, TDREMUS_WRITE, strlen(TDREMUS_WRITE)) < 0)
 		goto fail;
@@ -1497,6 +1512,7 @@ static void ctl_request(event_id_t id, char mode, void *private)
 				RPRINTF("error passing flush request to backup");
 				ctl_respond(s, TDREMUS_FAIL);
 			}
+		write_reqs = 0;
 	} else {
 		RPRINTF("unknown command: %s\n", msg);
 	}
@@ -1510,6 +1526,20 @@ static int ctl_respond(struct tdremus_state *s, const char *response)
 		RPRINTF("error writing notification: %d\n", errno);
 		close(s->msg_fd.fd);
 		if ((s->msg_fd.fd = open(s->msg_path, O_RDWR)) < 0)
+			RPRINTF("error reopening FIFO: %d\n", errno);
+	}
+
+	return rc;
+}
+
+static int ctl_notify(struct tdremus_state *s, const char *response)
+{
+	int rc;
+
+	if ((rc = write(s->ntf_fd.fd, response, strlen(response))) < 0) {
+		RPRINTF("error writing notification: %d\n", errno);
+		close(s->ntf_fd.fd);
+		if ((s->ntf_fd.fd = open(s->ntf_path, O_RDWR)) < 0)
 			RPRINTF("error reopening FIFO: %d\n", errno);
 	}
 
@@ -1539,21 +1569,28 @@ static int ctl_open(td_driver_t *driver, const char* name)
 	}
 	if (asprintf(&s->msg_path, "%s.msg", s->ctl_path) < 0)
 		goto err_ctlfifo;
+	if (asprintf(&s->ntf_path, "%s.notify", s->ctl_path) < 0)
+		goto err_msgfifo;
 
 	if (mkfifo(s->ctl_path, S_IRWXU|S_IRWXG|S_IRWXO) && errno != EEXIST) {
 		RPRINTF("error creating control FIFO %s: %d\n", s->ctl_path, errno);
-		goto err_msgfifo;
+		goto err_ntffifo;
 	}
 
 	if (mkfifo(s->msg_path, S_IRWXU|S_IRWXG|S_IRWXO) && errno != EEXIST) {
 		RPRINTF("error creating message FIFO %s: %d\n", s->msg_path, errno);
-		goto err_msgfifo;
+		goto err_ntffifo;
+	}
+
+	if (mkfifo(s->ntf_path, S_IRWXU|S_IRWXG|S_IRWXO) && errno != EEXIST) {
+		RPRINTF("error creating notify FIFO %s: %d\n", s->ntf_path, errno);
+		goto err_ntffifo;
 	}
 
 	/* RDWR so that fd doesn't block select when no writer is present */
 	if ((s->ctl_fd.fd = open(s->ctl_path, O_RDWR)) < 0) {
 		RPRINTF("error opening control FIFO %s: %d\n", s->ctl_path, errno);
-		goto err_msgfifo;
+		goto err_ntffifo;
 	}
 
 	if ((s->msg_fd.fd = open(s->msg_path, O_RDWR)) < 0) {
@@ -1561,13 +1598,24 @@ static int ctl_open(td_driver_t *driver, const char* name)
 		goto err_openctlfifo;
 	}
 
+	if ((s->ntf_fd.fd = open(s->ntf_path, O_RDWR)) < 0) {
+		RPRINTF("error opening notify FIFO %s: %d\n", s->ntf_path, errno);
+		goto err_openmsgfifo;
+	}
+
 	RPRINTF("control FIFO %s\n", s->ctl_path);
 	RPRINTF("message FIFO %s\n", s->msg_path);
+	RPRINTF("notify FIFO %s\n", s->ntf_path);
 
 	return 0;
 
+ err_openmsgfifo:
+	close(s->msg_fd.fd);
  err_openctlfifo:
 	close(s->ctl_fd.fd);
+ err_ntffifo:
+	free(s->ntf_path);
+	s->ntf_path = NULL;
  err_msgfifo:
 	free(s->msg_path);
 	s->msg_path = NULL;
@@ -1595,6 +1643,11 @@ static void ctl_close(td_driver_t *driver)
 		unlink(s->msg_path);
 		free(s->msg_path);
 		s->msg_path = NULL;
+	}
+	if (s->ntf_path) {
+		unlink(s->ntf_path);
+		free(s->ntf_path);
+		s->ntf_path = NULL;
 	}
 }
 
