@@ -2136,7 +2136,16 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 start_ck:
 	printf("wait for new checkpoint.\n");
 #ifdef NET_FW
-		err = ioctl(dev_fd, COMP_IOCTWAIT);
+    while (1) {
+        err = ioctl(dev_fd, COMP_IOCTWAIT);
+        if (err == 0)
+            break;
+        if (callbacks->check) {
+            err = callbacks->check(callbacks->data);
+            if (err)
+                break;
+        }
+    }
 #else
 		printf("pause:");
 		scanf("%d", &err);
