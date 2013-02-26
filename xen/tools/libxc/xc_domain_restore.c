@@ -1469,6 +1469,9 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 	goto out;
     }
 
+    for (i = 0; i < dinfo->p2m_size; i++)
+        pfn_type[i] = XEN_DOMCTL_PFINFO_XTAB;
+
     DPRINTF("xc_domain_restore start: p2m_size = %lx\n", dinfo->p2m_size);
 
     if ( !get_platform_info(xch, dom,
