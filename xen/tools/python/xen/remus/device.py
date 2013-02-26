@@ -3,6 +3,8 @@
 # Coordinates with devices at suspend, resume, and commit hooks
 
 import os, re
+from fcntl import fcntl, F_GETFL, F_SETFL
+from os import O_NONBLOCK
 
 import netlink, qdisc, util
 
@@ -50,10 +52,14 @@ class ReplicatedDisk(CheckpointedDevice):
         fifo = re.match("tap:.*(remus.*)\|", disk.uname).group(1).replace(':', '_')
         absfifo = os.path.join(self.FIFODIR, fifo)
         absmsgfifo = absfifo + '.msg'
+        absntyfifo = absfifo + '.notify'
 
         self.installed = False
         self.ctlfd = open(absfifo, 'w+b')
         self.msgfd = open(absmsgfifo, 'r+b')
+        self.ntyfd = open(absntyfifo, 'r+b')
+        old_flags = fcntl(self.ntyfd, F_GETFL)
+        fcntl(self.ntyfd, F_SETFL, old_flags | O_NONBLOCK)
 
     def __del__(self):
         self.uninstall()
@@ -69,11 +75,24 @@ class ReplicatedDisk(CheckpointedDevice):
 
     def postsuspend(self):
         os.write(self.ctlfd.fileno(), 'flush')
+        try:
+            msg = os.read(self.ntyfd.fileno(), 8)
+        except Exception, e:
+            pass
 
     def commit(self):
         msg = os.read(self.msgfd.fileno(), 4)
         if msg != 'done':
             print 'Unknown message: %s' % msg
+
+    def check(self):
+        try:
+            msg = os.read(self.ntyfd.fileno(), 8)
+        except Exception, e:
+            return False
+        if msg == '':
+            return False
+        return True
 
 ### Network
 
