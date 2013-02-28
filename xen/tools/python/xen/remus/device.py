@@ -66,14 +66,19 @@ class ReplicatedDisk(CheckpointedDevice):
             self.ctlfd = None
 
     def postsuspend(self):
+        print 'write flush to control fifo'
+        os.write(self.ctlfd.fileno(), 'flush')
         try:
+            print 'try to clear notify fifo'
             msg = os.read(self.ntyfd.fileno(), 8)
         except Exception, e:
+            print 'clear error: %s' % e
             pass
-        os.write(self.ctlfd.fileno(), 'flush')
 
     def commit(self):
+        print 'try to read done from msg fifo'
         msg = os.read(self.msgfd.fileno(), 4)
+        print 'read %s from msg fifo' % msg
         if msg != 'done':
             print 'Unknown message: %s' % msg
 
