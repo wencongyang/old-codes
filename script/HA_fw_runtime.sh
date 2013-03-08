@@ -5,7 +5,6 @@
 module="HA_compare"
 device="HA_compare"
 mode="664"
-path="/root/yewei/source/pure/code"
 
 function getvif() {
 	local vif=$(ifconfig | awk "\$1 ~ /vif*/ {print \$1}")
@@ -51,33 +50,12 @@ function stop() {
 function install() {
 
 	echo "install"
-	if [ -e "$path/sch_master.ko" ]; then
-		echo "Load sch_master.ko"
-		insmod $path/sch_master.ko
-	else
-		echo "Cannot find sch_master.ko"
-		exit 1
-	fi
-
-	if [ -e "$path/sch_slaver.ko" ]; then
-		echo "Load sch_slaver.ko"
-		insmod $path/sch_slaver.ko
-	else
-		echo "Cannot find sch_slaver.ko"
-		exit 1
-	fi
-	
-	if [ -e "$path/HA_compare.ko" ]; then
-		echo "Load HA_compare.ko"
-		#insmod HA_compare.ko
-		insmod $path/$module.ko || exit 1
-		rm -f /dev/${device}
-		major=$(awk "\$2==\"$module\" {print \$1}" /proc/devices)
-		mknod /dev/$device c $major 0
-	else
-		echo "Cannot find HA_compare.ko"
-		exit 1
-	fi
+	modprobe sch_master || exit 1
+	modprobe sch_slaver || exit 1
+	modprobe $module || exit 1
+	rm -f /dev/${device}
+	major=$(awk "\$2==\"$module\" {print \$1}" /proc/devices)
+	mknod /dev/$device c $major 0
 
 	ifconfig eth0 promisc
 
