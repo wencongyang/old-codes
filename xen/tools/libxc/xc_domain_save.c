@@ -923,7 +923,7 @@ static void start_input_network(void)
 		return;
 	}
 
-	execl("/root/yewei/source/pure/code/HA_fw_runtime.sh", "HA_fw_runtime.sh", "input", NULL);
+	execl("/etc/xen/scripts/HA_fw_runtime.sh", "HA_fw_runtime.sh", "input", NULL);
 }
 #endif
 #ifdef FAILOVER
@@ -952,7 +952,7 @@ static void install_fw_network(void)
 		return;
 	}
 
-	execl("/root/yewei/source/pure/code/HA_fw_runtime.sh", "HA_fw_runtime.sh", "install", NULL);
+	execl("/etc/xen/scripts/HA_fw_runtime.sh", "HA_fw_runtime.sh", "install", NULL);
 }
 #endif
 /*static void uninstall_fw_network(void)
@@ -965,7 +965,7 @@ static void install_fw_network(void)
 		return;
 	}
 
-	execl("/root/yewei/source/pure/code/HA_fw_runtime.sh", "HA_fw_runtime.sh", "uninstall", NULL);
+	execl("/etc/xen/scripts/HA_fw_runtime.sh", "HA_fw_runtime.sh", "uninstall", NULL);
 }
 */
 
