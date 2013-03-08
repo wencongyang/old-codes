@@ -56,6 +56,7 @@ obj-$(CONFIG_WIMAX) += wimax/
 obj-$(CONFIG_VMXNET3) += vmxnet3/
 obj-$(CONFIG_XEN_NETDEV_FRONTEND) += xen-netfront.o
 obj-$(CONFIG_XEN_NETDEV_BACKEND) += xen-netback/
+obj-$(CONFIG_XEN_COLO_COMPARE) += xen-colo-compare/
 
 obj-$(CONFIG_USB_CATC)          += usb/
 obj-$(CONFIG_USB_KAWETH)        += usb/

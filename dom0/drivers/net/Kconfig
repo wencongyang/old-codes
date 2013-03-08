@@ -330,6 +330,13 @@ config XEN_NETDEV_BACKEND
 	  compile this driver as a module, chose M here: the module
 	  will be called xen-netback.
 
+config XEN_COLO_COMPARE
+	tristate "Xen colo compare module"
+	depends on XEN_BACKEND
+	default m
+	help
+		Xen colo compare module
+
 config VMXNET3
 	tristate "VMware VMXNET3 ethernet driver"
 	depends on PCI && INET
