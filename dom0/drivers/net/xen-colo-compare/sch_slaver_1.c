@@ -32,58 +32,6 @@ static int skb_remove_foreign_references(struct sk_buff *skb)
 	return !skb_linearize(skb);
 }
 
-static void get_udp_info(const unsigned char* p, unsigned char *protocol, 
-			unsigned int *XID, unsigned int *stamp, 
-			unsigned short *src_port, unsigned short *dst_port)
-{
-	unsigned char *t;
-
-	t = protocol;
-	*t = *((unsigned char *)(p + 23));
-
-	if (*protocol == 17) {// UDP
-		t = src_port;
-		*(t+1) = *((unsigned char *)(p + 34));
-		*t = *((unsigned char *)(p + 35));
-		
-		t = dst_port;
-		*(t+1) = *((unsigned char *)(p + 36));
-		*t = *((unsigned char *)(p + 37));
-		
-		t = XID;
-		*(t+3) = *((unsigned char *)(p + 42));
-		*(t+2) = *((unsigned char *)(p + 43));
-		*(t+1) = *((unsigned char *)(p + 44));
-		*t = *((unsigned char *)(p + 45));
-
-		t = stamp;
-		*(t+3) = *((unsigned char *)(p + 74));
-		*(t+2) = *((unsigned char *)(p + 75));
-		*(t+1) = *((unsigned char *)(p + 76));
-		*t = *((unsigned char *)(p + 77));
-	}
-}
-
-static int is_nfs_pkt(const struct sk_buff *p)
-{
-	unsigned char *buf, protocol;
-	unsigned short src_port, dst_port;
-	unsigned short XID, stamp;
-	unsigned short eth_type;
-	unsigned char *t;
-
-	buf = p->data;
-	
-	t = &eth_type;
-	*(t+1) = *((unsigned char *)(buf + 12));
-	*t = *((unsigned char *)(buf + 13));
-	if (eth_type == 0x0806) //arp
-		return 1;
-	
-	get_udp_info(buf, &protocol, &XID, &stamp, &src_port, &dst_port);
-	
-	return protocol == 17;
-}
 int count = 0;
 static int slaver_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
@@ -94,18 +42,6 @@ static int slaver_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 		return qdisc_reshape_fail(skb, sch);
 	}
 
-	/* nfs pkt release directly */
-	/*if ( is_nfs_pkt(skb) ) {
-		spin_lock(&slaver_queue->qlock_nfs);
-		__skb_queue_tail(&slaver_queue->nfs, skb);
-		sch->qstats.backlog += qdisc_pkt_len(skb);
-		spin_unlock(&slaver_queue->qlock_nfs);
-		netif_schedule_queue(slaver_queue->sch->dev_queue);
-		
-		return NET_XMIT_SUCCESS;
-	}*/
-	//printk("HA_compare: not nfs pkt\n");
-	
 	spin_lock(&slaver_queue->qlock_blo);
 	//__skb_queue_tail(&slaver_queue->blo, skb);
 	qlen = insert(&slaver_queue->blo, skb);	
