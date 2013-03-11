@@ -1085,6 +1085,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     fd_set rfds;
     int want_exit = 0;
 
+    FILE *stat_fp;
+
+    stat_fp = fopen("/root/yewei/master.txt", "at");
+    setbuf(stat_fp, NULL);
+    setlinebuf(stdout);
 
     syscall(NR_reset_suspend_count);
     syscall(NR_vif_block, 0);
@@ -1300,9 +1305,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 #define ratewrite(fd, live, buf, len) ratewrite_buffer(xch, last_iter, &ob, (fd), (live), (buf), (len))
 
     gettimeofday(&tv, NULL);
-    printf("\nTIME: page trasmit start at %lu.%06lu\n", (unsigned long)tv.tv_sec,
+    printf("\n[%lu.%06lu]page transmit start.\n", (unsigned long)tv.tv_sec,
 		(unsigned long)tv.tv_usec);
 
+    
+    fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
     /* Now write out each data page, canonicalising page tables as we go... */
     for ( ; ; )
     {
@@ -1435,29 +1442,18 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             if ( batch == 0 )
                 goto skip; /* vanishingly unlikely... */
 
-	    gettimeofday(&tv, NULL);
-	    printf("TIME: xc_map_foreign_bulk/xc_get_pfn_type_batch start at %lu.%06lu, batch=%d\n", (unsigned long)tv.tv_sec,
-			(unsigned long)tv.tv_usec, batch);
-
 	    if (colo_ro_map_and_cache(xch, dom, pfn_batch, pfn_type, pfn_err, batch) < 0)
             {
                 PERROR("map batch failed");
                 goto out;
             }
 
-	    gettimeofday(&tv, NULL);
-	    printf("TIME: xc_get_pfn_type_batch start %lu.%06lu\n", (unsigned long)tv.tv_sec,
-			(unsigned long)tv.tv_usec);
             /* Get page types */
             if ( xc_get_pfn_type_batch(xch, dom, batch, pfn_type) )
             {
                 PERROR("get_pfn_type_batch failed");
                 goto out;
             }
-
-	    gettimeofday(&tv, NULL);
-	    printf("TIME: xc_map_foreign_bulk/xc_get_pfn_type_batch finish %lu.%06lu\n", (unsigned long)tv.tv_sec,
-			(unsigned long)tv.tv_usec);
 
             for ( run = j = 0; j < batch; j++ )
             {
@@ -1614,10 +1610,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             sent_this_iter += batch;
 
             //munmap(region_base, batch*PAGE_SIZE);
-	    gettimeofday(&tv, NULL);
-	    printf("TIME: page trasmit finish batch send %lu.%06lu\n\n\n", (unsigned long)tv.tv_sec,
-			(unsigned long)tv.tv_usec);
-
         } /* end of this while loop for this iteration */
 
       skip:
@@ -1705,9 +1697,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         }
     } /* end of infinite for loop */
 
-	gettimeofday(&tv, NULL);
-	printf("TIME: page trasmit end %lu.%06lu\n", (unsigned long)tv.tv_sec,
+    gettimeofday(&tv, NULL);
+    printf("[%lu.%06lu]page transmit end.\n", (unsigned long)tv.tv_sec,
 		(unsigned long)tv.tv_usec);
+
+    fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
 
     DPRINTF("All memory is saved\n");
 
@@ -2051,7 +2045,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
  out:
     completed = 1;
    
-    printf("begin flush sockets.\n");
+    gettimeofday(&tv, NULL); 
+    printf("[%lu.%06lu]begin flush sockets.\n", (unsigned long)tv.tv_sec, 
+	(unsigned long)tv.tv_usec);
  
     /* Flush last write and discard cache for file. */
     if ( outbuf_flush(xch, &ob, io_fd) < 0 ) {
@@ -2059,7 +2055,16 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         rc = 1;
     }
 
+    gettimeofday(&tv, NULL);
+    printf("[%lu.%06lu]finished flush, begin discard file cache.\n", (unsigned long)tv.tv_sec,
+	(unsigned long)tv.tv_usec);
+
     discard_file_cache(xch, io_fd, 1);
+
+    gettimeofday(&tv, NULL);
+    printf("[%lu.%06lu]finished discard file cache.\n", (unsigned long)tv.tv_sec,
+	(unsigned long)tv.tv_usec);
+
 
  resume:
     /*
@@ -2095,8 +2100,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     /* wait slaver finish resume */
     read(io_fd, sig_buf, 7);
     sig_buf[7] = 0;
-    printf("received from slaver: str=%s\n", sig_buf);
-    
+    gettimeofday(&tv, NULL);
+    printf("[%lu.%06lu]Received from slaver: str=%s\n", (unsigned long)tv.tv_sec,
+		(unsigned long)tv.tv_usec, sig_buf);
+
+    fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
     /* forward network */
     // COMMENTS: For manually raise ck. 
 #ifdef NET_FW
@@ -2112,9 +2120,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 #ifdef NET_FW
     if (!first_time) {
     	// notify compare module checkpoint finish
-    	printf("notify checkpoint finish.\n");
+	gettimeofday(&tv, NULL);
+    	printf("[%lu.%06lu]Notify checkpoint finish.\n", (unsigned long)tv.tv_sec,
+		(unsigned long)tv.tv_usec);
     	ioctl(dev_fd, COMP_IOCTRESUME);
-	printf("done\n");
+	gettimeofday(&tv, NULL);
+    	printf("[%lu.%06lu]Done.\n", (unsigned long)tv.tv_sec,
+		(unsigned long)tv.tv_usec);
     }
 #endif
 
@@ -2134,7 +2146,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 	/* wait for a new chekcpoint */
 
 start_ck:
-	printf("wait for new checkpoint.\n");
+    gettimeofday(&tv, NULL);
+    printf("[%lu.%06lu]wait for new checkpoint.\n", (unsigned long)tv.tv_sec,
+         (unsigned long)tv.tv_usec);
+
+    fprintf(stat_fp, "%lu.%06lu\n", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
 #ifdef NET_FW
     while (1) {
         err = ioctl(dev_fd, COMP_IOCTWAIT);
@@ -2162,8 +2178,10 @@ start_ck:
 #endif
 
  	gettimeofday(&tv, NULL);
-  	printf("TIME: checkpoint start at %lu.%06lu\n", (unsigned long)tv.tv_sec,
+  	printf("[%lu.%06lu]checkpoint start.\n", (unsigned long)tv.tv_sec,
          (unsigned long)tv.tv_usec);
+
+        fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
 
         /* reset stats timer */
         print_stats(xch, dom, 0, &stats, 0);
@@ -2210,25 +2228,33 @@ start_ck:
 			printf("Timeout to notify slaver.\n");
 			rc = 0;
 			want_exit = 1;
-			goto resume;
+                       goto resume;
 		}
 		
 		read(io_fd, sig_buf, 8);
 		sig_buf[8] = 0;
-		printf("received from slaver: str=%s\n", sig_buf);
+ 		
+                gettimeofday(&tv, NULL);
+                printf("[%lu.%06lu]Received from slaver: str=%s\n", (unsigned long)tv.tv_sec,
+		      (unsigned long)tv.tv_usec, sig_buf);
+  
+                fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
 		break;
         }
 
 	if (sig_buf[0] == 'r')
 		goto start_ck;
-
- 	gettimeofday(&tv, NULL);
-	printf("receive at %lu.%06lu.\n", (unsigned long)tv.tv_sec,
-	 (unsigned long)tv.tv_usec);
-
+	
 	// Notify the slaver to flush the disk.
-	printf("flush disk.\n");
+ 	gettimeofday(&tv, NULL);
+	printf("[%lu.%06lu]Begin to flush disk.\n", (unsigned long)tv.tv_sec,
+	      (unsigned long)tv.tv_usec);
+
 	callbacks->flush_disk(callbacks->data);
+	
+	gettimeofday(&tv, NULL);
+	printf("[%lu.%06lu]Flush disk end.\n", (unsigned long)tv.tv_sec,
+	      (unsigned long)tv.tv_usec);
 
 	write_exact(io_fd, "start", 5);
 
@@ -2276,6 +2302,7 @@ sigintr:
 
     DPRINTF("Save exit rc=%d\n",rc);
 
+    fclose(stat_fp);
     return !!rc;
 }
 

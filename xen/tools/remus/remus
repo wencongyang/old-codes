@@ -165,7 +165,7 @@ def run(cfg):
         if closure.cmd == 'c':
             die()
 
-        print >> sys.stderr, "PROF: flushed memory at %0.6f" % (time.time())
+        print >> sys.stderr, "[%0.6f]PROF: flushed memory" % (time.time())
 
         for buf in bufs:
             buf.commit()
