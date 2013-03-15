@@ -57,7 +57,7 @@
 */
 #define DEF_MAX_ITERS   29   /* limit us to 30 times round loop   */
 #define DEF_MAX_FACTOR   3   /* never send more than 3x p2m_size  */
-//#define FAILOVER
+#define FAILOVER
 #define NET_FW
 
 struct save_ctx {
@@ -937,7 +937,7 @@ static void failover(void)
 		return;
 	}
 	
-	execl("/root/yewei/source/pure/code/failover_master.sh", "failover_master.sh", NULL);
+	execl("/etc/xen/scripts/failover_master.sh", "failover_master.sh", NULL);
 }
 #endif
 
@@ -2154,7 +2154,7 @@ start_ck:
 #ifdef NET_FW
     while (1) {
         err = ioctl(dev_fd, COMP_IOCTWAIT);
-        if (err == 0)
+        if (err == 0 || err == -1)
             break;
         if (callbacks->check) {
             err = callbacks->check(callbacks->data);
