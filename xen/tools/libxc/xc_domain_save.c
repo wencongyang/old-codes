@@ -864,6 +864,50 @@ static int save_tsc_info(xc_interface *xch, uint32_t dom, int io_fd)
     return 0;
 }
 
+/* big cache to avoid future map */
+static char **pages_base;
+
+static int colo_ro_map_and_cache(xc_interface *xch, uint32_t dom,
+                                 unsigned long *pfn_batch, xen_pfn_t *pfn_type,
+                                 int *pfn_err, int batch)
+{
+    static xen_pfn_t cache_pfn_type[MAX_BATCH_SIZE];
+    static int cache_pfn_err[MAX_BATCH_SIZE];
+    int i, cache_batch = 0;
+    char *map;
+
+    for (i = 0; i < batch; i++)
+    {
+        if (!pages_base[pfn_batch[i]])
+            cache_pfn_type[cache_batch++] = pfn_type[i];
+    }
+
+    if (cache_batch)
+    {
+        map = xc_map_foreign_bulk(xch, dom, PROT_READ, cache_pfn_type, cache_pfn_err, cache_batch);
+        if (!map)
+            return -1;
+    }
+
+    cache_batch = 0;
+    for (i = 0; i < batch; i++)
+    {
+        if (pages_base[pfn_batch[i]])
+        {
+            pfn_err[i] = 0;
+        }
+        else
+        {
+            if (!cache_pfn_err[cache_batch])
+                pages_base[pfn_batch[i]] = map + PAGE_SIZE * cache_batch;
+            pfn_err[i] = cache_pfn_err[cache_batch];
+            cache_batch++;
+        }
+    }
+
+    return 0;
+}
+
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
                    struct save_callbacks* callbacks, int hvm)
@@ -894,9 +938,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     /* Live mapping of shared info structure */
     shared_info_any_t *live_shinfo = NULL;
-
-    /* base of the region in which domain memory is mapped */
-    unsigned char *region_base = NULL;
 
     /* A copy of the CPU eXtended States of the guest. */
     DECLARE_HYPERCALL_BUFFER(void, buffer);
@@ -1078,6 +1119,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     }
     memset(pfn_type, 0,
            ROUNDUP(MAX_BATCH_SIZE * sizeof(*pfn_type), PAGE_SHIFT));
+
+    pages_base = calloc(dinfo->p2m_size, sizeof(*pages_base));
+    if (!pages_base)
+    {
+        ERROR("failed to alloc memory to cache page mapping");
+        errno = ENOMEM;
+        goto out;
+    }
 
     /* Setup the mfn_to_pfn table mapping */
     if ( !(ctx->live_m2p = xc_map_m2p(xch, ctx->max_mfn, PROT_READ, &ctx->m2p_mfn0)) )
@@ -1276,9 +1325,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             if ( batch == 0 )
                 goto skip; /* vanishingly unlikely... */
 
-            region_base = xc_map_foreign_bulk(
-                xch, dom, PROT_READ, pfn_type, pfn_err, batch);
-            if ( region_base == NULL )
+            if (colo_ro_map_and_cache(xch, dom, pfn_batch, pfn_type, pfn_err,
+                                      batch) < 0)
             {
                 PERROR("map batch failed");
                 goto out;
@@ -1324,7 +1372,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                         DPRINTF("%d pfn=%08lx sum=%08lx\n",
                                 iter,
                                 pfn_type[j],
-                                csum_page(region_base + (PAGE_SIZE*j)));
+                                csum_page(pages_base[pfn_batch[j]]));
                     else
                         DPRINTF("%d pfn= %08lx mfn= %08lx [mfn]= %08lx"
                                 " sum= %08lx\n",
@@ -1332,13 +1380,12 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                                 pfn_type[j],
                                 gmfn,
                                 mfn_to_pfn(gmfn),
-                                csum_page(region_base + (PAGE_SIZE*j)));
+                                csum_page(pages_base[pfn_batch[j]]));
                 }
             }
 
             if ( !run )
             {
-                munmap(region_base, batch*PAGE_SIZE);
                 continue; /* bail on this batch: no valid pages */
             }
 
@@ -1361,32 +1408,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     pfn_type[j] = ((unsigned long *)pfn_type)[j];
 
             /* entering this loop, pfn_type is now in pfns (Not mfns) */
-            run = 0;
             for ( j = 0; j < batch; j++ )
             {
                 unsigned long pfn, pagetype;
-                void *spage = (char *)region_base + (PAGE_SIZE*j);
+                void *spage = pages_base[pfn_batch[j]];
 
                 pfn      = pfn_type[j] & ~XEN_DOMCTL_PFINFO_LTAB_MASK;
                 pagetype = pfn_type[j] &  XEN_DOMCTL_PFINFO_LTAB_MASK;
-
-                if ( pagetype != 0 )
-                {
-                    /* If the page is not a normal data page, write out any
-                       run of pages we may have previously acumulated */
-                    if ( run )
-                    {
-                        if ( ratewrite(io_fd, live, 
-                                       (char*)region_base+(PAGE_SIZE*(j-run)), 
-                                       PAGE_SIZE*run) != PAGE_SIZE*run )
-                        {
-                            PERROR("Error when writing to state file (4a)"
-                                  " (errno %d)", errno);
-                            goto out;
-                        }                        
-                        run = 0;
-                    }
-                }
 
                 /* skip pages that aren't present */
                 if ( pagetype == XEN_DOMCTL_PFINFO_XTAB )
@@ -1417,28 +1445,19 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                 }
                 else
                 {
-                    /* We have a normal page: accumulate it for writing. */
-                    run++;
+                    /* stop accumulate write temporarily. we will add it
+                     * back via writev() when needed.
+                     */
+                    if (ratewrite(io_fd, live, spage, PAGE_SIZE) != PAGE_SIZE)
+                    {
+                        PERROR("Error when writing to state file (4c)"
+                               " (errno %d)", errno);
+                        goto out;
+                    }
                 }
             } /* end of the write out for this batch */
 
-            if ( run )
-            {
-                /* write out the last accumulated run of pages */
-                if ( ratewrite(io_fd, live, 
-                               (char*)region_base+(PAGE_SIZE*(j-run)), 
-                               PAGE_SIZE*run) != PAGE_SIZE*run )
-                {
-                    PERROR("Error when writing to state file (4c)"
-                          " (errno %d)", errno);
-                    goto out;
-                }                        
-            }
-
             sent_this_iter += batch;
-
-            munmap(region_base, batch*PAGE_SIZE);
-
         } /* end of this while loop for this iteration */
 
       skip:
