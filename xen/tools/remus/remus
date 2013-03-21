@@ -110,6 +110,7 @@ def run(cfg):
     for disk in dom.disks:
         try:
             bufs.append(ReplicatedDisk(disk))
+            disk.init('r')
         except ReplicatedDiskException, e:
             print e
             continue

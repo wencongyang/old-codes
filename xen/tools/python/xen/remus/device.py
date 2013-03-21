@@ -12,6 +12,10 @@ class BufferedNICException(Exception): pass
 class CheckpointedDevice(object):
     'Base class for buffered devices'
 
+    def init(self, mode):
+        'init device state, only called once'
+        pass
+
     def postsuspend(self):
         'called after guest has suspended'
         pass
@@ -49,6 +53,10 @@ class ReplicatedDisk(CheckpointedDevice):
 
     def __del__(self):
         self.uninstall()
+
+    def init(self, mode):
+        if self.ctlfd:
+            os.write(self.ctlfd.fileno(), mode)
 
     def uninstall(self):
         if self.ctlfd:

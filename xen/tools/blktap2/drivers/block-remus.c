@@ -176,6 +176,9 @@ struct tdremus_state {
 	/* mode methods */
 	enum tdremus_mode mode;
 	int (*queue_flush)(td_driver_t *driver);
+
+	/* init data */
+	int init_state; /* 0: init, 1: remus, 2: colo */
 };
 
 typedef struct tdremus_wire {
@@ -189,6 +192,7 @@ typedef struct tdremus_wire {
 #define TDREMUS_WRITE "wreq"
 #define TDREMUS_SUBMIT "sreq"
 #define TDREMUS_COMMIT "creq"
+#define TDREMUS_COLO "colo"
 #define TDREMUS_DONE "done"
 #define TDREMUS_FAIL "fail"
 
@@ -750,6 +754,33 @@ static int primary_do_connect(struct tdremus_state *state)
 	return 0;
 }
 
+static void read_state(struct tdremus_state *s)
+{
+	int rc;
+	char state;
+
+	rc = read(s->ctl_fd.fd, &state, 1);
+	if (rc <= 0)
+		return;
+
+	if (state == 'r') {
+		s->init_state = 1;
+	} else if (state == 'c') {
+		s->init_state = 2;
+	} else {
+		RPRINTF("read unknown state: %d, use remus\n", (int)state);
+		s->init_state = 1;
+	}
+}
+
+static void start_remus(struct tdremus_state *s)
+{
+	if (mwrite(s->stream_fd.fd, TDREMUS_COLO, strlen(TDREMUS_COLO)) < 0) {
+		RPRINTF("error start colo mode");
+		exit(1);
+	}
+}
+
 static int primary_blocking_connect(struct tdremus_state *state)
 {
 	int fd;
@@ -799,6 +830,18 @@ static int primary_blocking_connect(struct tdremus_state *state)
 
 	state->stream_fd.fd = fd;
 	state->stream_fd.id = id;
+
+	/* The user runs the remus command after we try to connect backup end */
+	if (!state->init_state)
+		read_state(state);
+
+	if (!state->init_state) {
+		RPRINTF("read state failed, try to use remus\n");
+		state->init_state = 1;
+	}
+
+	if (state->init_state == 2)
+		start_remus(state);
 	return 0;
 }
 
@@ -1387,6 +1430,8 @@ static void remus_server_event(event_id_t id, char mode, void *private)
 		server_do_sreq(driver);
 	else if (!strcmp(req, TDREMUS_COMMIT))
 		server_do_creq(driver);
+	else if (!strcmp(req, TDREMUS_COLO))
+		switch_mode(driver, mode_colo);
 	else
 		RPRINTF("unknown request received: %s\n", req);
 
@@ -1579,6 +1624,10 @@ static void ctl_request(event_id_t id, char mode, void *private)
 	int rc;
 
 	// RPRINTF("data waiting on control fifo\n");
+	if (!s->init_state) {
+		read_state(s);
+		return;
+	}
 
 	if (!(rc = read(s->ctl_fd.fd, msg, sizeof(msg) - 1 /* append nul */))) {
 		RPRINTF("0-byte read received, reopening FIFO\n");
