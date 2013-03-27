@@ -1886,9 +1886,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
  out:
     completed = 1;
 
-    if ( !rc && callbacks->postcopy )
-        callbacks->postcopy(callbacks->data);
-
     /* Flush last write and discard cache for file. */
     if ( outbuf_flush(xch, &ob, io_fd) < 0 ) {
         PERROR("Error when flushing output buffer");
@@ -1896,6 +1893,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     }
 
     discard_file_cache(xch, io_fd, 1 /* flush */);
+
+    if ( !rc && callbacks->postcopy )
+        callbacks->postcopy(callbacks->data);
 
     /* checkpoint_cb can spend arbitrarily long in between rounds */
     if (!rc && callbacks->checkpoint &&
