@@ -57,6 +57,7 @@
 #include <sys/sysctl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <stdbool.h>
 
 /* timeout for reads and writes in ms */
 #define HEARTBEAT_MS 1000
@@ -71,7 +72,8 @@ enum tdremus_mode {
 	mode_invalid = 0,
 	mode_unprotected,
 	mode_primary,
-	mode_backup
+	mode_backup,
+	mode_colo
 };
 
 struct tdremus_req {
@@ -109,6 +111,14 @@ struct ramdisk {
 	struct hashtable* prev;
 	/* count of outstanding requests to the base driver */
 	size_t inflight;
+
+	/* local holds the requests from backup vm.
+	 * If we flush the requests hold in h, we will drop all requests in
+	 * local.
+	 * If we switch to unprotected mode, all requests in local should be
+	 * flushed to disk.
+	 */
+	struct hashtable* local;
 };
 
 /* the ramdisk intercepts the original callback for reads and writes.
@@ -864,6 +874,18 @@ static int client_flush(td_driver_t *driver)
 	return 0;
 }
 
+static int server_flush(td_driver_t *driver)
+{
+	struct tdremus_state *s = (struct tdremus_state *)driver->data;
+	/*
+	 * Nothing to flush in beginning.
+	 */
+	if (!s->ramdisk.prev)
+		return 0;
+	/* Try to flush any remaining requests */
+	return ramdisk_flush(driver, s);
+}
+
 static int primary_start(td_driver_t *driver)
 {
 	struct tdremus_state *s = (struct tdremus_state *)driver->data;
@@ -1146,6 +1168,126 @@ static int backup_start(td_driver_t *driver)
 	return 0;
 }
 
+static int ramdisk_read_colo(struct ramdisk* ramdisk, uint64_t sector,
+			     int nb_sectors, char* buf)
+{
+	int i;
+	char* v;
+	uint64_t key;
+
+	for (i = 0; i < nb_sectors; i++) {
+		key = sector + i;
+		/* check whether it is queued in a previous flush request */
+		if (!(v = hashtable_search(ramdisk->local, &key)))
+			return -1;
+		memcpy(buf + i * ramdisk->sector_size, v, ramdisk->sector_size);
+	}
+
+	return 0;
+}
+
+static void colo_queue_read(td_driver_t *driver, td_request_t treq)
+{
+	struct tdremus_state *s = (struct tdremus_state *)driver->data;
+	int i;
+	if(!remus_image)
+		remus_image = treq.image;
+
+	/* check if this read is queued in any currently ongoing flush */
+	if (ramdisk_read_colo(&s->ramdisk, treq.sec, treq.secs, treq.buf)) {
+		/* TODO: Add to pending read hash */
+		td_forward_request(treq);
+	} else {
+		/* complete the request */
+		td_complete_request(treq, 0);
+	}
+}
+
+static inline int ramdisk_write_colo(struct ramdisk* ramdisk, uint64_t sector,
+				     int nb_sectors, char* buf)
+{
+	int i, rc;
+
+	for (i = 0; i < nb_sectors; i++) {
+		rc = ramdisk_write_hash(ramdisk->local, sector + i,
+					buf + i * ramdisk->sector_size,
+					ramdisk->sector_size);
+		if (rc)
+			return rc;
+	}
+
+	return 0;
+}
+
+static void colo_queue_write(td_driver_t *driver, td_request_t treq)
+{
+	struct tdremus_state *s = (struct tdremus_state *)driver->data;
+
+	if (ramdisk_write_colo(&s->ramdisk, treq.sec, treq.secs, treq.buf) < 0)
+		td_complete_request(treq, -EBUSY);
+	else
+		td_complete_request(treq, 0);
+}
+
+/* flush_local:
+ *      true:  we have switched to unprotected mode, so all queued requests in h
+ *             should be dropped.
+ *      false: all queued requests in local should be dropped, and all queued
+ *             requests in h should be flushed.
+ *
+ */
+static int ramdisk_start_flush_colo(td_driver_t *driver, bool flush_local)
+{
+	struct tdremus_state *s = (struct tdremus_state *)driver->data;
+
+	if (flush_local) {
+		if (s->ramdisk.h) {
+			hashtable_destroy(s->ramdisk.h, 1);
+			s->ramdisk.h = NULL;
+		}
+		if (s->ramdisk.local) {
+			s->ramdisk.h = s->ramdisk.local;
+			s->ramdisk.local = NULL;
+		}
+	} else if (s->ramdisk.local){
+		hashtable_destroy(s->ramdisk.local, 1);
+		s->ramdisk.local = create_hashtable(RAMDISK_HASHSIZE,
+						    uint64_hash,
+						    rd_hash_equal);
+	}
+
+	return ramdisk_start_flush(driver);
+}
+
+/* This function will be called when we switch to unprotected mode. In this
+ * case, we should flush queued request in prev and local.
+ */
+static int colo_flush(td_driver_t *driver)
+{
+	struct tdremus_state *s = (struct tdremus_state *)driver->data;
+
+	ramdisk_start_flush_colo(driver, 1);
+
+	/* all queued requests should be flushed are in prev now, so we can
+	 * use server_flush to do flush.
+	 */
+	s->queue_flush = server_flush;
+	return 0;
+}
+
+static int colo_start(td_driver_t *driver)
+{
+	struct tdremus_state *s = (struct tdremus_state *)driver->data;
+
+	/* colo mode is switched from backup mode */
+	s->ramdisk.local = create_hashtable(RAMDISK_HASHSIZE, uint64_hash,
+					    rd_hash_equal);
+	tapdisk_remus.td_queue_read = colo_queue_read;
+	tapdisk_remus.td_queue_write = colo_queue_write;
+	s->queue_flush = colo_flush;
+	return 0;
+}
+
 static int server_do_wreq(td_driver_t *driver)
 {
 	struct tdremus_state *s = (struct tdremus_state *)driver->data;
@@ -1206,7 +1348,10 @@ static int server_do_creq(td_driver_t *driver)
 
 	// RPRINTF("committing buffer\n");
 
-	ramdisk_start_flush(driver);
+	if (s->mode == mode_colo)
+		ramdisk_start_flush_colo(driver, 0);
+	else
+		ramdisk_start_flush(driver);
 
 	/* XXX this message should not be sent until flush completes! */
 	if (write(s->stream_fd.fd, TDREMUS_DONE, strlen(TDREMUS_DONE)) != 4)
@@ -1413,6 +1558,8 @@ static int switch_mode(td_driver_t *driver, enum tdremus_mode mode)
 		rc = primary_start(driver);
 	else if (mode == mode_backup)
 		rc = backup_start(driver);
+	else if (mode == mode_colo)
+		rc = colo_start(driver);
 	else {
 		RPRINTF("unknown mode requested: %d\n", mode);
 		rc = -1;
