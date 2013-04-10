@@ -1996,6 +1996,52 @@ int domain_relinquish_resources(struct domain *d)
     return 0;
 }
 
+int do_reset_vcpu_op(unsigned long domid)
+{
+    struct vcpu *v;
+    struct domain *d;
+
+    if (domid == DOMID_SELF)
+        d = rcu_lock_current_domain();
+    else if ( (d = rcu_lock_domain_by_id(domid)) == NULL )
+        return -EINVAL;
+
+    BUG_ON(!cpus_empty(d->domain_dirty_cpumask));
+    domain_pause(d);
+
+    if ( d->arch.relmem == RELMEM_not_started )
+    {
+        for_each_vcpu ( d, v )
+        {
+            /* Drop the in-use references to page-table bases. */
+            vcpu_destroy_pagetables(v);
+
+            /*
+             * Relinquish GDT mappings. No need for explicit unmapping of the
+             * LDT as it automatically gets squashed with the guest mappings.
+             */
+            destroy_gdt(v);
+
+            unmap_vcpu_info(v);
+            v->is_initialised = 0;
+        }
+        printk("colo: free vcpu done.\n");
+
+        if ( d->arch.pirq_eoi_map != NULL )
+        {
+            unmap_domain_page_global(d->arch.pirq_eoi_map);
+            put_page_and_type(mfn_to_page(d->arch.pirq_eoi_map_mfn));
+            d->arch.pirq_eoi_map = NULL;
+        }
+        printk("colo: free eoi map done.\n");
+    }
+
+    domain_unpause(d);
+    rcu_unlock_domain(d);
+
+    return 0;
+}
+
 void arch_dump_domain_info(struct domain *d)
 {
     paging_dump_domain_info(d);

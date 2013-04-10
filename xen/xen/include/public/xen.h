@@ -93,6 +93,7 @@ DEFINE_XEN_GUEST_HANDLE(xen_pfn_t);
 #define __HYPERVISOR_domctl               36
 #define __HYPERVISOR_kexec_op             37
 #define __HYPERVISOR_tmem_op              38
+#define __HYPERVISOR_reset_vcpu_op        40
 
 /* Architecture-specific hypercall definitions. */
 #define __HYPERVISOR_arch_0               48
