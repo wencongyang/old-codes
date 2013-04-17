@@ -180,6 +180,7 @@ int checkpoint_start(checkpoint_state* s, int fd,
 
     s->fd = fd;
 
+    fprintf(stderr, "0,switch qemu log...\n");
     hvm = s->domtype > dt_pv;
     if (hvm) {
        flags |= XCFLAGS_HVM;
@@ -187,7 +188,11 @@ int checkpoint_start(checkpoint_state* s, int fd,
            return -1;
     }
 
+    fprintf(stderr, "1,call backs ...\n");
+    fflush(stderr);
     callbacks->switch_qemu_logdirty = noop_switch_logdirty;
+    fprintf(stderr, "2,callbacks...\n");
+    fflush(stderr);
 
     rc = xc_domain_save(s->xch, fd, s->domid, 0, 0, flags, callbacks, hvm);
 
@@ -219,8 +224,10 @@ int checkpoint_suspend(checkpoint_state* s)
 
   if (s->domtype == dt_pvhvm && s->suspend_evtchn >= 0) {
       rc = xc_suspend_qemu(s->xch, s->xsh, s->domid);
-      if (rc < 0)
+      if (rc < 0) {
+          fprintf(stderr,"PROF: suspending qemu fail\n");
           return 0;
+      }
   }
 
   return 1;
@@ -471,8 +478,10 @@ static int evtchn_suspend(checkpoint_state* s)
 	if (!(rc = pollfd(s, xc_evtchn_fd(s->xce))))
 	    rc = xc_evtchn_pending(s->xce);
     while (rc >= 0 && rc != s->suspend_evtchn);
-    if (rc <= 0)
+    if (rc <= 0) {
+        fprintf(stderr, "suspend error.. in pending.... %d  %d \n", rc, errno);
 	return -1;
+    }
 
     if (xc_evtchn_unmask(s->xce, s->suspend_evtchn) < 0) {
 	snprintf(errbuf, sizeof(errbuf),
@@ -651,12 +660,15 @@ static int send_qemu(checkpoint_state *s)
        close(qfd);
        return -1;
     }
+
+    fprintf(stderr, "Sending %u length QEMU state\n", qlen);
     if (write(s->fd, &qlen, sizeof(qlen)) != sizeof(qlen)) {
        s->errstr = "error writing QEMU size";
        close(qfd);
        return -1;
     }
 
+    fprintf(stderr, "Sending QEMU state\n");
     while ((rc = read(qfd, buf, qlen > sizeof(buf) ? sizeof(buf) : qlen)) > 0) {
        qlen -= rc;
        if (write(s->fd, buf, rc) != rc) {
