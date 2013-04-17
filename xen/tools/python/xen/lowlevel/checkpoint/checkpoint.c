@@ -580,6 +580,12 @@ static int postcopy_trampoline(void* data)
   PyObject* result;
   int rc = 0;
 
+  /* send qemu state before writing other data to fd */
+  if (checkpoint_postflush(&self->cps) < 0) {
+      fprintf(stderr, "%s\n", checkpoint_error(&self->cps));
+      return 0;
+  }
+
   if (self->colo) {
     if (notify_slaver_resume(self) < 0) {
       fprintf(stderr, "nofitying slaver resume fails\n");
@@ -620,11 +626,6 @@ static int checkpoint_trampoline(void* data)
   CheckpointObject* self = (CheckpointObject*)data;
 
   PyObject* result;
-
-  if (checkpoint_postflush(&self->cps) < 0) {
-      fprintf(stderr, "%s\n", checkpoint_error(&self->cps));
-      return -1;
-  }
 
   if (self->colo) {
     if (pre_checkpoint(self) < 0) {
