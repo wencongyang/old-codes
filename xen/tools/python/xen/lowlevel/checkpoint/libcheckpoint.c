@@ -503,6 +503,7 @@ static int pollfd(checkpoint_state* s, int fd)
     struct timeval tv;
     int rc;
 
+again:
     FD_ZERO(&rfds);
     FD_SET(fd, &rfds);
 
@@ -516,8 +517,8 @@ static int pollfd(checkpoint_state* s, int fd)
 		 "error polling fd: %s", strerror(errno));
 	s->errstr = errbuf;
     } else if (!rc) {
-	snprintf(errbuf, sizeof(errbuf), "timeout polling fd");
-	s->errstr = errbuf;
+        fprintf(stderr, "timeout polling fd");
+        goto again;
     } else if (! FD_ISSET(fd, &rfds)) {
 	snprintf(errbuf, sizeof(errbuf), "unknown error polling fd");
 	s->errstr = errbuf;
