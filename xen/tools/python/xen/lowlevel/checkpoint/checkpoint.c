@@ -308,6 +308,7 @@ static int notify_slaver_suspend(CheckpointObject *self)
     if (self->first_time == 1)
         return 0;
 
+    fprintf(stderr, "nofity slaver suspend\n");
     return write_exact(fd, "continue", 8);
 }
 
@@ -330,6 +331,7 @@ static int wait_slaver_suspend(CheckpointObject *self)
         PERROR("read \"%s\", expect \"suspend\"", buf);
         return -1;
     }
+    fprintf(stderr, "read suspend from slaver\n");
 
     return 0;
 }
@@ -342,6 +344,7 @@ static int notify_slaver_start_checkpoint(CheckpointObject *self)
     if (self->first_time == 1)
         return 0;
 
+    fprintf(stderr, "notify slaver to start new checkpoint\n");
     if ( write_exact(fd, "start", 5) < 0) {
         PERROR("write start");
         return -1;
@@ -364,6 +367,7 @@ static int notify_slaver_resume(CheckpointObject *self)
     xc_interface *xch = self->cps.xch;
     char buf[7];
 
+    fprintf(stderr, "wait slaver to finish updating memory\n");
     /* wait slaver to finish update memory, device state... */
     if ( read_exact(fd, buf, 6) < 0) {
         PERROR("read: finish");
@@ -375,11 +379,15 @@ static int notify_slaver_resume(CheckpointObject *self)
         ERROR("read \"%s\", expect \"finish\"", buf);
         return -1;
     }
+    fprintf(stderr, "read finish from slaver\n");
 
-    if (!self->first_time)
+    if (!self->first_time) {
+        fprintf(stderr, "flush packets\n");
         /* flush queued packets now */
         ioctl(self->dev_fd, COMP_IOCTFLUSH);
+    }
 
+    fprintf(stderr, "notify slaver to resume VM\n");
     /* notify slaver to resume vm*/
     if (write_exact(fd, "resume", 6) < 0) {
         PERROR("write: resume");
@@ -423,6 +431,7 @@ static int wait_slaver_resume(CheckpointObject *self)
     xc_interface *xch = self->cps.xch;
     char buf[7];
 
+    fprintf(stderr, "wait slaver to resume vm\n");
     if (read_exact(fd, buf, 6) < 0) {
         PERROR("read resume");
         return -1;
@@ -433,6 +442,7 @@ static int wait_slaver_resume(CheckpointObject *self)
         ERROR("read \"%s\", expect \"resume\"", buf);
         return -1;
     }
+    fprintf(stderr, "read resume from slaver\n");
 
     return 0;
 }
@@ -453,12 +463,14 @@ static int colo_postresume(CheckpointObject *self)
         return rc;
 
     if (self->first_time) {
+        fprintf(stderr, "install network\n");
         rc = install_fw_network(self);
         if (rc < 0) {
             fprintf(stderr, "install network fails\n");
             return rc;
         }
     } else {
+        fprintf(stderr, "notify compare module to resume\n");
         ioctl(dev_fd, COMP_IOCTRESUME);
     }
 
@@ -547,6 +559,8 @@ static int suspend_trampoline(void* data)
   result = PyObject_CallFunction(self->suspend_cb, NULL);
   self->threadstate = PyEval_SaveThread();
 
+  fprintf(stderr, "suspend_cb() returns %p(%p)\n", result, Py_None);
+
   if (!result)
     return 0;
 
@@ -588,6 +602,7 @@ static int postcopy_trampoline(void* data)
   int rc = 0;
 
   /* send qemu state before writing other data to fd */
+  fprintf(stderr, "call postflush to send qemu\n");
   if (checkpoint_postflush(&self->cps) < 0) {
       fprintf(stderr, "%s\n", checkpoint_error(&self->cps));
       return 0;
@@ -682,6 +697,7 @@ static int post_sendstate_trampoline(void* data)
   /* In colo mode, guest is running on slaver side, so we should
    * send XC_SAVE_ID_LAST_CHECKPOINT to slaver.
    */
+  fprintf(stderr, "writing XC_SAVE_ID_LAST_CHECKPOINT to slaver\n");
   if (write_exact(fd, &i, sizeof(int)) < 0) {
     fprintf(stderr, "writing XC_SAVE_ID_LAST_CHECKPOINT fails\n");
     return -1;
