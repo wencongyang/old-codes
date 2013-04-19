@@ -882,13 +882,15 @@ static int pagebuf_get(xc_interface *xch, struct restore_ctx *ctx,
 static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
                        xen_pfn_t* region_mfn, unsigned long* pfn_type, int pae_extended_cr3,
                        unsigned int hvm, struct xc_mmu* mmu,
-                       pagebuf_t* pagebuf, int curbatch)
+                       pagebuf_t* pagebuf, int curbatch,
+                       struct restore_callbacks *callbacks)
 {
     int i, j, curpage, nr_mfns;
     /* used by debug verify code */
     unsigned long buf[PAGE_SIZE/sizeof(unsigned long)];
     /* Our mapping of the current region (batch) */
     char *region_base;
+    char *target_buf;
     /* A temporary mapping, and a copy, of one frame of guest memory. */
     unsigned long *page = NULL;
     int nraces = 0;
@@ -954,16 +956,19 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
         }
     }
 
-    /* Map relevant mfns */
-    pfn_err = calloc(j, sizeof(*pfn_err));
-    region_base = xc_map_foreign_bulk(
-        xch, dom, PROT_WRITE, region_mfn, pfn_err, j);
-
-    if ( region_base == NULL )
+    if ( !callbacks || !callbacks->get_page)
     {
-        PERROR("map batch failed");
-        free(pfn_err);
-        return -1;
+        /* Map relevant mfns */
+        pfn_err = calloc(j, sizeof(*pfn_err));
+        region_base = xc_map_foreign_bulk(
+            xch, dom, PROT_WRITE, region_mfn, pfn_err, j);
+
+        if ( region_base == NULL )
+        {
+            PERROR("map batch failed");
+            free(pfn_err);
+            return -1;
+        }
     }
 
     for ( i = 0, curpage = -1; i < j; i++ )
@@ -975,7 +980,7 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
             /* a bogus/unmapped page: skip it */
             continue;
 
-        if (pfn_err[i])
+        if ( (!callbacks || !callbacks->get_page) && pfn_err[i] )
         {
             ERROR("unexpected PFN mapping failure");
             goto err_mapped;
@@ -993,8 +998,20 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
 
         mfn = ctx->p2m[pfn];
 
+        if ( callbacks && callbacks->get_page )
+        {
+            target_buf = callbacks->get_page(&callbacks->comm_data,
+                                             callbacks->data, pfn);
+            if ( !target_buf )
+            {
+                ERROR("Cannot get a buffer to store memory");
+                goto err_mapped;
+            }
+        }
+        else
+            target_buf = region_base + i*PAGE_SIZE;
         /* In verify mode, we use a copy; otherwise we work in place */
-        page = pagebuf->verify ? (void *)buf : (region_base + i*PAGE_SIZE);
+        page = pagebuf->verify ? (void *)buf : target_buf;
 
         memcpy(page, pagebuf->pages + (curpage + curbatch) * PAGE_SIZE, PAGE_SIZE);
 
@@ -1038,27 +1055,26 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
 
         if ( pagebuf->verify )
         {
-            int res = memcmp(buf, (region_base + i*PAGE_SIZE), PAGE_SIZE);
+            int res = memcmp(buf, target_buf, PAGE_SIZE);
             if ( res )
             {
                 int v;
 
                 DPRINTF("************** pfn=%lx type=%lx gotcs=%08lx "
                         "actualcs=%08lx\n", pfn, pagebuf->pfn_types[pfn],
-                        csum_page(region_base + (i + curbatch)*PAGE_SIZE),
+                        csum_page(target_buf),
                         csum_page(buf));
 
                 for ( v = 0; v < 4; v++ )
                 {
-                    unsigned long *p = (unsigned long *)
-                        (region_base + i*PAGE_SIZE);
+                    unsigned long *p = (unsigned long *)target_buf;
                     if ( buf[v] != p[v] )
                         DPRINTF("    %d: %08lx %08lx\n", v, buf[v], p[v]);
                 }
             }
         }
 
-        if ( !hvm &&
+        if ( (!callbacks || !callbacks->get_page) && !hvm &&
              xc_add_mmu_update(xch, mmu,
                                (((unsigned long long)mfn) << PAGE_SHIFT)
                                | MMU_MACHPHYS_UPDATE, pfn) )
@@ -1071,8 +1087,11 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
     rc = nraces;
 
   err_mapped:
-    munmap(region_base, j*PAGE_SIZE);
-    free(pfn_err);
+    if ( !callbacks || !callbacks->get_page )
+    {
+        munmap(region_base, j*PAGE_SIZE);
+        free(pfn_err);
+    }
 
     return rc;
 }
@@ -1080,7 +1099,8 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
 int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       unsigned int store_evtchn, unsigned long *store_mfn,
                       unsigned int console_evtchn, unsigned long *console_mfn,
-                      unsigned int hvm, unsigned int pae, int superpages)
+                      unsigned int hvm, unsigned int pae, int superpages,
+                      struct restore_callbacks *callbacks)
 {
     DECLARE_DOMCTL;
     int rc = 1, frc, i, j, n, m, pae_extended_cr3 = 0, ext_vcpucontext = 0;
@@ -1140,6 +1160,9 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     };
     static struct restore_ctx *ctx = &_ctx;
     struct domain_info_context *dinfo = &ctx->dinfo;
+
+    struct restore_data *comm_data = NULL;
+    void *data = NULL;
 
     pagebuf_init(&pagebuf);
     memset(&tailbuf, 0, sizeof(tailbuf));
@@ -1249,6 +1272,32 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         goto out;
     }
 
+    /* init callbacks->comm_data */
+    if ( callbacks )
+    {
+        callbacks->comm_data.xch = xch;
+        callbacks->comm_data.dom = dom;
+        callbacks->comm_data.dinfo = dinfo;
+        callbacks->comm_data.hvm = hvm;
+        callbacks->comm_data.pfn_type = pfn_type;
+        callbacks->comm_data.mmu = mmu;
+        callbacks->comm_data.p2m_frame_list = p2m_frame_list;
+        callbacks->comm_data.p2m = ctx->p2m;
+        comm_data = &callbacks->comm_data;
+
+        /* init callbacks->data */
+        if ( callbacks->init)
+        {
+            callbacks->data = NULL;
+            if (callbacks->init(&callbacks->comm_data, &callbacks->data) < 0 )
+            {
+                ERROR("Could not initialise restore callbacks private data");
+                goto out;
+            }
+        }
+        data = callbacks->data;
+    }
+
     xc_report_progress_start(xch, "Reloading memory pages", dinfo->p2m_size);
 
     /*
@@ -1298,7 +1347,8 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
             int brc;
 
             brc = apply_batch(xch, dom, ctx, region_mfn, pfn_type,
-                              pae_extended_cr3, hvm, mmu, &pagebuf, curbatch);
+                              pae_extended_cr3, hvm, mmu, &pagebuf, curbatch,
+                              callbacks);
             if ( brc < 0 )
                 goto out;
 
@@ -1368,6 +1418,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         goto finish;
     }
 
+getpages:
     // DPRINTF("Buffered checkpoint\n");
 
     if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
@@ -1499,58 +1550,69 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         }
     }
 
-    /*
-     * Pin page tables. Do this after writing to them as otherwise Xen
-     * will barf when doing the type-checking.
-     */
-    nr_pins = 0;
-    for ( i = 0; i < dinfo->p2m_size; i++ )
+    if ( callbacks && callbacks->flush_memory )
     {
-        if ( (pfn_type[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 )
-            continue;
-
-        switch ( pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
+        if ( callbacks->flush_memory(comm_data, data) < 0 )
         {
-        case XEN_DOMCTL_PFINFO_L1TAB:
-            pin[nr_pins].cmd = MMUEXT_PIN_L1_TABLE;
-            break;
-
-        case XEN_DOMCTL_PFINFO_L2TAB:
-            pin[nr_pins].cmd = MMUEXT_PIN_L2_TABLE;
-            break;
-
-        case XEN_DOMCTL_PFINFO_L3TAB:
-            pin[nr_pins].cmd = MMUEXT_PIN_L3_TABLE;
-            break;
-
-        case XEN_DOMCTL_PFINFO_L4TAB:
-            pin[nr_pins].cmd = MMUEXT_PIN_L4_TABLE;
-            break;
-
-        default:
-            continue;
-        }
-
-        pin[nr_pins].arg1.mfn = ctx->p2m[i];
-        nr_pins++;
-
-        /* Batch full? Then flush. */
-        if ( nr_pins == MAX_PIN_BATCH )
-        {
-            if ( xc_mmuext_op(xch, pin, nr_pins, dom) < 0 )
-            {
-                PERROR("Failed to pin batch of %d page tables", nr_pins);
-                goto out;
-            }
-            nr_pins = 0;
+            ERROR("Error doing callbacks->flush_memory()");
+            goto out;
         }
     }
-
-    /* Flush final partial batch. */
-    if ( (nr_pins != 0) && (xc_mmuext_op(xch, pin, nr_pins, dom) < 0) )
+    else
     {
-        PERROR("Failed to pin batch of %d page tables", nr_pins);
-        goto out;
+        /*
+         * Pin page tables. Do this after writing to them as otherwise Xen
+         * will barf when doing the type-checking.
+         */
+        nr_pins = 0;
+        for ( i = 0; i < dinfo->p2m_size; i++ )
+        {
+            if ( (pfn_type[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 )
+                continue;
+
+            switch ( pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
+            {
+            case XEN_DOMCTL_PFINFO_L1TAB:
+                pin[nr_pins].cmd = MMUEXT_PIN_L1_TABLE;
+                break;
+
+            case XEN_DOMCTL_PFINFO_L2TAB:
+                pin[nr_pins].cmd = MMUEXT_PIN_L2_TABLE;
+                break;
+
+            case XEN_DOMCTL_PFINFO_L3TAB:
+                pin[nr_pins].cmd = MMUEXT_PIN_L3_TABLE;
+                break;
+
+            case XEN_DOMCTL_PFINFO_L4TAB:
+                pin[nr_pins].cmd = MMUEXT_PIN_L4_TABLE;
+                break;
+
+            default:
+                continue;
+            }
+
+            pin[nr_pins].arg1.mfn = ctx->p2m[i];
+            nr_pins++;
+
+            /* Batch full? Then flush. */
+            if ( nr_pins == MAX_PIN_BATCH )
+            {
+                if ( xc_mmuext_op(xch, pin, nr_pins, dom) < 0 )
+                {
+                    PERROR("Failed to pin batch of %d page tables", nr_pins);
+                    goto out;
+                }
+                nr_pins = 0;
+            }
+        }
+
+        /* Flush final partial batch. */
+        if ( (nr_pins != 0) && (xc_mmuext_op(xch, pin, nr_pins, dom) < 0) )
+        {
+            PERROR("Failed to pin batch of %d page tables", nr_pins);
+            goto out;
+        }
     }
 
     DPRINTF("Memory reloaded (%ld pages)\n", ctx->nr_pfns);
@@ -1625,6 +1687,8 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
             *console_mfn = ctx->p2m[GET_FIELD(start_info, console.domU.mfn)];
             SET_FIELD(start_info, console.domU.mfn, *console_mfn);
             SET_FIELD(start_info, console.domU.evtchn, console_evtchn);
+            callbacks->comm_data.store_mfn = *store_mfn;
+            callbacks->comm_data.console_mfn = *console_mfn;
             munmap(start_info, PAGE_SIZE);
         }
         /* Uncanonicalise each GDT frame number. */
@@ -1767,37 +1831,61 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     /* leave wallclock time. set by hypervisor */
     munmap(new_shared_info, PAGE_SIZE);
 
-    /* Uncanonicalise the pfn-to-mfn table frame-number list. */
-    for ( i = 0; i < P2M_FL_ENTRIES; i++ )
+    if ( callbacks && callbacks->update_p2m )
     {
-        pfn = p2m_frame_list[i];
-        if ( (pfn >= dinfo->p2m_size) || (pfn_type[pfn] != XEN_DOMCTL_PFINFO_NOTAB) )
+        if ( callbacks->update_p2m(comm_data, data) < 0 )
         {
-            ERROR("PFN-to-MFN frame number %i (%#lx) is bad", i, pfn);
+            ERROR("Error doing callbacks->update_p2m()");
             goto out;
         }
-        p2m_frame_list[i] = ctx->p2m[pfn];
     }
-
-    /* Copy the P2M we've constructed to the 'live' P2M */
-    if ( !(ctx->live_p2m = xc_map_foreign_pages(xch, dom, PROT_WRITE,
-                                           p2m_frame_list, P2M_FL_ENTRIES)) )
-    {
-        PERROR("Couldn't map p2m table");
-        goto out;
-    }
-
-    /* If the domain we're restoring has a different word size to ours,
-     * we need to adjust the live_p2m assignment appropriately */
-    if ( dinfo->guest_width > sizeof (xen_pfn_t) )
-        for ( i = dinfo->p2m_size - 1; i >= 0; i-- )
-            ((int64_t *)ctx->live_p2m)[i] = (long)ctx->p2m[i];
-    else if ( dinfo->guest_width < sizeof (xen_pfn_t) )
-        for ( i = 0; i < dinfo->p2m_size; i++ )   
-            ((uint32_t *)ctx->live_p2m)[i] = ctx->p2m[i];
     else
-        memcpy(ctx->live_p2m, ctx->p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
-    munmap(ctx->live_p2m, P2M_FL_ENTRIES * PAGE_SIZE);
+    {
+        /* Uncanonicalise the pfn-to-mfn table frame-number list. */
+        for ( i = 0; i < P2M_FL_ENTRIES; i++ )
+        {
+            pfn = p2m_frame_list[i];
+            if ( (pfn >= dinfo->p2m_size) || (pfn_type[pfn] != XEN_DOMCTL_PFINFO_NOTAB) )
+            {
+                ERROR("PFN-to-MFN frame number %i (%#lx) is bad", i, pfn);
+                goto out;
+            }
+            p2m_frame_list[i] = ctx->p2m[pfn];
+        }
+
+        /* Copy the P2M we've constructed to the 'live' P2M */
+        if ( !(ctx->live_p2m = xc_map_foreign_pages(xch, dom, PROT_WRITE,
+                                               p2m_frame_list, P2M_FL_ENTRIES)) )
+        {
+            PERROR("Couldn't map p2m table");
+            goto out;
+        }
+
+        /* If the domain we're restoring has a different word size to ours,
+         * we need to adjust the live_p2m assignment appropriately */
+        if ( dinfo->guest_width > sizeof (xen_pfn_t) )
+            for ( i = dinfo->p2m_size - 1; i >= 0; i-- )
+                ((int64_t *)ctx->live_p2m)[i] = (long)ctx->p2m[i];
+        else if ( dinfo->guest_width < sizeof (xen_pfn_t) )
+            for ( i = 0; i < dinfo->p2m_size; i++ )
+                ((uint32_t *)ctx->live_p2m)[i] = ctx->p2m[i];
+        else
+            memcpy(ctx->live_p2m, ctx->p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
+        munmap(ctx->live_p2m, P2M_FL_ENTRIES * PAGE_SIZE);
+    }
+
+    if ( callbacks && callbacks->finish_restotre )
+    {
+        rc = callbacks->finish_restotre(comm_data, data);
+        if ( rc == 1 )
+            goto getpages;
+
+        if ( rc < 0 )
+        {
+            ERROR("Er1ror doing callbacks->finish_restotre()");
+            goto out;
+        }
+    }
 
     DPRINTF("Domain ready to be built.\n");
     rc = 0;
@@ -1835,6 +1923,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         goto out;
     }
     *store_mfn = tailbuf.u.hvm.magicpfns[2];
+    callbacks->comm_data.store_mfn = *store_mfn;
 
     if ( console_pfn ) {
         if ( xc_clear_domain_page(xch, dom, console_pfn) ) {
@@ -1847,6 +1936,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
             goto out;
         }
         *console_mfn = console_pfn;
+        callbacks->comm_data.console_mfn = console_pfn;
     }
 
     frc = xc_domain_hvm_setcontext(xch, dom, tailbuf.u.hvm.hvmbuf,
@@ -1861,6 +1951,8 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     rc = 0;
 
  out:
+    if ( callbacks && callbacks->free && callbacks->data)
+        callbacks->free(&callbacks->comm_data, callbacks->data);
     if ( (rc != 0) && (dom != 0) )
         xc_domain_destroy(xch, dom);
     xc_hypercall_buffer_free(xch, ctxt);

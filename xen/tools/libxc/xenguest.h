@@ -60,6 +60,59 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                    struct save_callbacks* callbacks, int hvm);
 
 
+/* pass the variable defined in xc_domain_restore() to callback. Use
+ * this structure for the following purpose:
+ *   1. avoid too many arguments.
+ *   2. different callback implemention may need different arguments.
+ *      Just add the information you need here.
+ */
+struct restore_data
+{
+    xc_interface *xch;
+    uint32_t dom;
+    struct domain_info_context *dinfo;
+    int hvm;
+    unsigned long *pfn_type;
+    struct xc_mmu *mmu;
+    unsigned long *p2m_frame_list;
+    unsigned long *p2m;
+    unsigned long console_mfn;
+    unsigned long store_mfn;
+};
+
+/* callbacks provided by xc_domain_restore */
+struct restore_callbacks {
+    /* callback to init data */
+    int (*init)(struct restore_data *comm_data, void **data);
+    /* callback to free data */
+    void (*free)(struct restore_data *comm_data, void *data);
+    /* callback to get a buffer to store memory data that is transfered
+     * from the source machine.
+     */
+    char *(*get_page)(struct restore_data *comm_data, void *data,
+                     unsigned long pfn);
+    /* callback to flush memory that is transfered from the source machine
+     * to the guest. Update the guest's pagetable if necessary.
+     */
+    int (*flush_memory)(struct restore_data *comm_data, void *data);
+    /* callback to update the guest's p2m table */
+    int (*update_p2m)(struct restore_data *comm_data, void *data);
+    /* callback to finish restore process. It is called before xc_domain_restore()
+     * returns.
+     *
+     * Return value:
+     *   -1: error
+     *    0: continue to start vm
+     *    1: continue to do a checkpoint
+     */
+    int (*finish_restotre)(struct restore_data *comm_data, void *data);
+
+    /* xc_domain_restore() init it */
+    struct restore_data comm_data;
+    /* to be provided as the last argument to each callback function */
+    void* data;
+};
+
 /**
  * This function will restore a saved domain.
  *
@@ -76,7 +129,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       unsigned int store_evtchn, unsigned long *store_mfn,
                       unsigned int console_evtchn, unsigned long *console_mfn,
-                      unsigned int hvm, unsigned int pae, int superpages);
+                      unsigned int hvm, unsigned int pae, int superpages,
+                      struct restore_callbacks *callbacks);
 /**
  * xc_domain_restore writes a file to disk that contains the device
  * model saved state.

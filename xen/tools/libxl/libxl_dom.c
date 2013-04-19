@@ -305,7 +305,7 @@ int libxl__domain_restore_common(libxl_ctx *ctx, uint32_t domid,
     rc = xc_domain_restore(ctx->xch, fd, domid,
                              state->store_port, &state->store_mfn,
                              state->console_port, &state->console_mfn,
-                             info->hvm, info->u.hvm.pae, 0);
+                             info->hvm, info->u.hvm.pae, 0, NULL);
     if ( rc ) {
         LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "restoring domain");
         return ERROR_FAIL;
