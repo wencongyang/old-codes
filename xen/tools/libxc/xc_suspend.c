@@ -132,3 +132,38 @@ cleanup:
 
     return -1;
 }
+
+int xc_suspend_qemu(xc_interface *xch, struct xs_handle* xsh, int domid)
+{
+    char path[128];
+
+    sprintf(path, "/local/domain/0/device-model/%d/command", domid);
+    if (!xs_write(xsh, XBT_NULL, path, "save", 4)) {
+        ERROR("error signalling QEMU to save");
+        return -1;
+    }
+
+    sprintf(path, "/local/domain/0/device-model/%d/state", domid);
+
+    do {
+        char* state;
+        unsigned int len;
+
+        state = xs_read(xsh, XBT_NULL, path, &len);
+        if (!state) {
+            ERROR("error reading QEMU state");
+            return -1;
+        }
+
+        if (!strcmp(state, "paused")) {
+            free(state);
+            return 0;
+        }
+
+        free(state);
+        usleep(1000);
+    } while(1);
+
+    /* cannot reach here */
+    return -1;
+}

@@ -23,6 +23,8 @@
 #ifndef XENGUEST_H
 #define XENGUEST_H
 
+#include "xs.h"
+
 #define XCFLAGS_LIVE      1
 #define XCFLAGS_DEBUG     2
 #define XCFLAGS_HVM       4
@@ -255,6 +257,8 @@ int xc_query_page_offline_status(xc_interface *xch, unsigned long start,
                                  unsigned long end, uint32_t *status);
 
 int xc_exchange_page(xc_interface *xch, int domid, xen_pfn_t mfn);
+
+int xc_suspend_qemu(xc_interface *xch, struct xs_handle* xsh, int domid);
 
 
 /**

@@ -6,6 +6,7 @@ CFLAGS   += -Werror
 INCLUDES += -I $(XEN_XC)
 INCLUDES += -I $(XEN_LIBXC)
 INCLUDES += -I $(XEN_INCLUDE)
+INCLUDES += -I $(XEN_XENSTORE)
 CFLAGS   += $(INCLUDES)
 
 HDRS     = $(wildcard *.h)

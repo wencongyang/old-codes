@@ -29,7 +29,6 @@ static int pollfd(checkpoint_state* s, int fd);
 
 static int switch_qemu_logdirty(checkpoint_state* s, int enable);
 static int suspend_hvm(checkpoint_state* s);
-static int suspend_qemu(checkpoint_state* s);
 static int resume_qemu(checkpoint_state* s);
 static int send_qemu(checkpoint_state* s);
 
@@ -588,45 +587,9 @@ static int suspend_hvm(checkpoint_state *s)
     if (check_shutdown(s) != 1)
        return -1;
 
-    rc = suspend_qemu(s);
+    rc = xc_suspend_qemu(s->xch, s->xsh, s->domid);
 
     return rc;
-}
-
-static int suspend_qemu(checkpoint_state *s)
-{
-    char path[128];
-
-    fprintf(stderr, "pausing QEMU\n");
-
-    sprintf(path, "/local/domain/0/device-model/%d/command", s->domid);
-    if (!xs_write(s->xsh, XBT_NULL, path, "save", 4)) {
-       fprintf(stderr, "error signalling QEMU to save\n");
-       return -1;
-    }
-
-    sprintf(path, "/local/domain/0/device-model/%d/state", s->domid);
-
-    do {
-       char* state;
-       unsigned int len;
-
-       state = xs_read(s->xsh, XBT_NULL, path, &len);
-       if (!state) {
-           s->errstr = "error reading QEMU state";
-           return -1;
-       }
-
-       if (!strcmp(state, "paused")) {
-           free(state);
-           return 0;
-       }
-
-       free(state);
-       usleep(1000);
-    } while(1);
-
-    return -1;
 }
 
 static int resume_qemu(checkpoint_state *s)
