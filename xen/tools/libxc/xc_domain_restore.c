@@ -882,7 +882,7 @@ static int pagebuf_get(xc_interface *xch, struct restore_ctx *ctx,
 static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
                        xen_pfn_t* region_mfn, unsigned long* pfn_type, int pae_extended_cr3,
                        unsigned int hvm, struct xc_mmu* mmu,
-                       pagebuf_t* pagebuf, int curbatch,
+                       pagebuf_t* pagebuf, int curbatch, int *invalid_pages,
                        struct restore_callbacks *callbacks)
 {
     int i, j, curpage, nr_mfns;
@@ -890,13 +890,14 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
     unsigned long buf[PAGE_SIZE/sizeof(unsigned long)];
     /* Our mapping of the current region (batch) */
     char *region_base;
-    char *target_buf;
+    char *target_buf, *src_buf;
     /* A temporary mapping, and a copy, of one frame of guest memory. */
     unsigned long *page = NULL;
     int nraces = 0;
     struct domain_info_context *dinfo = &ctx->dinfo;
     int* pfn_err = NULL;
     int rc = -1;
+    int local_invalid_pages = 0;
 
     unsigned long mfn, pfn, pagetype;
 
@@ -976,9 +977,11 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
         pfn      = pagebuf->pfn_types[i + curbatch] & ~XEN_DOMCTL_PFINFO_LTAB_MASK;
         pagetype = pagebuf->pfn_types[i + curbatch] &  XEN_DOMCTL_PFINFO_LTAB_MASK;
 
-        if ( pagetype == XEN_DOMCTL_PFINFO_XTAB )
+        if ( pagetype == XEN_DOMCTL_PFINFO_XTAB ) {
+            local_invalid_pages++;
             /* a bogus/unmapped page: skip it */
             continue;
+        }
 
         if ( (!callbacks || !callbacks->get_page) && pfn_err[i] )
         {
@@ -1013,7 +1016,12 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
         /* In verify mode, we use a copy; otherwise we work in place */
         page = pagebuf->verify ? (void *)buf : target_buf;
 
-        memcpy(page, pagebuf->pages + (curpage + curbatch) * PAGE_SIZE, PAGE_SIZE);
+        /* We have handled @curbatch pages before this batch, and there are
+         * @invalid_pages pages that are not in pagebuf->pages. So the first
+         * page for this page is (@curbatch - @invalid_pages) page.
+         */
+        src_buf = pagebuf->pages + (curbatch - *invalid_pages + curpage) * PAGE_SIZE;
+        memcpy(page, src_buf, PAGE_SIZE);
 
         pagetype &= XEN_DOMCTL_PFINFO_LTABTYPE_MASK;
 
@@ -1085,6 +1093,7 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
     } /* end of 'batch' for loop */
 
     rc = nraces;
+    *invalid_pages += local_invalid_pages;
 
   err_mapped:
     if ( !callbacks || !callbacks->get_page )
@@ -1311,7 +1320,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
  loadpages:
     for ( ; ; )
     {
-        int j, curbatch;
+        int j, curbatch, invalid_pages;
 
         xc_report_progress_step(xch, n, dinfo->p2m_size);
 
@@ -1344,12 +1353,13 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
         /* break pagebuf into batches */
         curbatch = 0;
+        invalid_pages = 0;
         while ( curbatch < j ) {
             int brc;
 
             brc = apply_batch(xch, dom, ctx, region_mfn, pfn_type,
                               pae_extended_cr3, hvm, mmu, &pagebuf, curbatch,
-                              callbacks);
+                              &invalid_pages, callbacks);
             if ( brc < 0 )
                 goto out;
 
