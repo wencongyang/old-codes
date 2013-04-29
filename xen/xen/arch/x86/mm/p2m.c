@@ -650,7 +650,7 @@ p2m_pod_empty_cache(struct domain *d)
     struct page_info *page;
 
     /* After this barrier no new PoD activities can happen. */
-    BUG_ON(!d->is_dying);
+    //BUG_ON(!d->is_dying);
     spin_barrier(&p2m->lock);
 
     spin_lock(&d->page_alloc_lock);

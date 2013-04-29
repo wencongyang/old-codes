@@ -646,7 +646,7 @@ void hap_teardown(struct domain *d)
     struct vcpu *v;
     mfn_t mfn;
 
-    ASSERT(d->is_dying);
+    //ASSERT(d->is_dying);
     ASSERT(d != current->domain);
 
     if ( !hap_locked_by_me(d) )
