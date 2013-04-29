@@ -2706,6 +2706,9 @@ int hvm_do_hypercall(struct cpu_user_regs *regs)
     int mode = hvm_guest_x86_mode(curr);
     uint32_t eax = regs->eax;
 
+    if (eax > 38)
+        printk("dom%d calls hvm hypercall %d\n", curr->domain->domain_id, eax);
+
     switch ( mode )
     {
 #ifdef __x86_64__

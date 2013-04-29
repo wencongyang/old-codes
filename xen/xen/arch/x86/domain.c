@@ -2053,16 +2053,20 @@ int do_rdwt_data_op(XEN_GUEST_HANDLE(rdwt_data_t) arg)
 
     if (data.flag == 0) {
         /* read */
+        printk("colo: read rdwt(vbd): ref: %d, evtchn: %d\n", save.vbd_ref, save.vbd_evtchn);
+        printk("colo: read rdwt(vif): tx: %d, rx: %d, evtchn: %d\n", save.tx_ref, save.rx_ref, save.vnif_evtchn);
         copy_to_guest(arg, &save, 1);
     } else {
         /* write */
         if (data.vnif_evtchn) {
             /* vif */
+            printk("colo: update rdwt(vif): tx: %d, rx: %d, evtchn: %d\n", data.tx_ref, data.rx_ref, data.vnif_evtchn);
             save.rx_ref = data.rx_ref;
             save.tx_ref = data.tx_ref;
             save.vnif_evtchn = data.vnif_evtchn;
         } else if (data.vbd_evtchn) {
             /* vbd */
+            printk("colo: update rdwt(vbd): ref: %d, evtchn: %d\n", data.vbd_ref, data.vbd_evtchn);
             save.vbd_ref = data.vbd_ref;
             save.vbd_evtchn = data.vbd_evtchn;
         }
