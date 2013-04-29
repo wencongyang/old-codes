@@ -763,6 +763,7 @@ static void read_state(struct tdremus_state *s)
 	if (rc <= 0)
 		return;
 
+	RPRINTF("read %c\n", state);
 	if (state == 'r') {
 		s->init_state = 1;
 	} else if (state == 'c') {
@@ -832,8 +833,10 @@ static int primary_blocking_connect(struct tdremus_state *state)
 	state->stream_fd.id = id;
 
 	/* The user runs the remus command after we try to connect backup end */
-	if (!state->init_state)
+	if (!state->init_state) {
+		RPRINTF("call read_state() in primary_blocking_connect()\n");
 		read_state(state);
+	}
 
 	if (!state->init_state) {
 		RPRINTF("read state failed, try to use remus\n");
@@ -1625,6 +1628,7 @@ static void ctl_request(event_id_t id, char mode, void *private)
 
 	// RPRINTF("data waiting on control fifo\n");
 	if (!s->init_state) {
+		RPRINTF("call read_state() in ctl_request()\n");
 		read_state(s);
 		return;
 	}
