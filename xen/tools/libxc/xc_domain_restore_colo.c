@@ -44,6 +44,7 @@ int restore_colo_init(struct restore_data *comm_data, void **data)
     xc_interface *xch = comm_data->xch;
     struct restore_colo_data *colo_data;
     struct domain_info_context *dinfo = comm_data->dinfo;
+    DECLARE_HYPERCALL;
 
     if (dirty_pages)
         /* restore_colo_init() is called more than once?? */
@@ -113,6 +114,11 @@ skip_hvm:
     colo_data->first_time = 1;
     colo_data->local_port = -1;
     *data = colo_data;
+
+    /* set which side */
+    hypercall.op = __HYPERVISOR_which_side_op;
+    hypercall.arg[0] = (unsigned long)comm_data->dom;
+    do_xen_hypercall(xch, &hypercall);
 
     return 0;
 
