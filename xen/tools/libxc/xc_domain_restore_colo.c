@@ -1,6 +1,8 @@
 #include <xc_save_restore_colo.h>
 #include <xs.h>
 
+#define NR_wait_resume 312
+
 struct restore_colo_data
 {
     unsigned long max_mem_pfn;
@@ -701,6 +703,12 @@ int finish_colo(struct restore_data *comm_data, void *data)
     {
         ERROR("read %s, expect resume", str);
         return -1;
+    }
+
+    while(1) {
+        rc = syscall(NR_wait_resume);
+        if (rc == 0)
+            break;
     }
 
     /* notify python code vm is resumed */
