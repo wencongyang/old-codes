@@ -1892,6 +1892,16 @@ getpages:
     goto out;
 
   finish_hvm:
+    if ( callbacks && callbacks->flush_memory )
+    {
+        rc = callbacks->flush_memory(&callbacks->comm_data, callbacks->data);
+        if ( rc < 0 )
+        {
+            PERROR("Error flushing memory");
+            goto out;
+        }
+    }
+
     /* Dump the QEMU state to a state file for QEMU to load */
     if ( dump_qemu(xch, dom, &tailbuf.u.hvm) ) {
         PERROR("Error dumping QEMU state to file");
@@ -1945,6 +1955,19 @@ getpages:
     {
         PERROR("error setting the HVM context");
         goto out;
+    }
+
+    if ( callbacks && callbacks->finish_restotre )
+    {
+        rc = callbacks->finish_restotre(&callbacks->comm_data, callbacks->data);
+        if ( rc < 0 )
+        {
+            PERROR("Error finishing restore");
+            goto out;
+        }
+
+        if ( rc == 1 )
+            goto getpages;
     }
 
     /* HVM success! */
