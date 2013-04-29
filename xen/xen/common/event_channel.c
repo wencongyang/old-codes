@@ -857,6 +857,8 @@ static long evtchn_reset(evtchn_reset_t *r)
     for ( i = 0; port_is_valid(d, i); i++ )
         (void)__evtchn_close(d, i);
 
+    d->suspend_evtchn = 0;
+
     rc = 0;
 
 out:
@@ -865,6 +867,40 @@ out:
     return rc;
 }
 
+static long evtchn_select_reset(evtchn_select_reset_t *r)
+{
+    domid_t dom = DOMID_SELF;
+    struct domain *d;
+    int i, j, rc;
+
+    rc = rcu_lock_target_domain_by_id(dom, &d);
+    if ( rc )
+        return rc;
+
+    rc = xsm_evtchn_reset(current->domain, d);
+    if ( rc )
+        goto out;
+
+    for ( i = 0; port_is_valid(d, i); i++ ) {
+        for (j = 0; j < r->len; j++) {
+            if (r->port_no[j] == i)
+                break;
+        }
+        if (j < r->len)
+            continue;
+
+        (void)__evtchn_close(d, i);
+    }
+
+    //d->suspend_evtchn = 0;
+
+    rc = 0;
+
+out:
+    rcu_unlock_domain(d);
+
+    return rc;
+}
 
 long do_event_channel_op(int cmd, XEN_GUEST_HANDLE(void) arg)
 {
@@ -969,6 +1005,14 @@ long do_event_channel_op(int cmd, XEN_GUEST_HANDLE(void) arg)
         if ( copy_from_guest(&reset, arg, 1) != 0 )
             return -EFAULT;
         rc = evtchn_reset(&reset);
+        break;
+    }
+
+    case EVTCHNOP_select_reset: {
+        struct evtchn_select_reset reset;
+        if ( copy_from_guest(&reset, arg, 1) != 0 )
+            return -EFAULT;
+        rc = evtchn_select_reset(&reset);
         break;
     }
 
