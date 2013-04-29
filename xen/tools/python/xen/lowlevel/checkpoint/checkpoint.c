@@ -390,19 +390,30 @@ static int notify_slaver_resume(CheckpointObject *self)
 
 static int install_fw_network(CheckpointObject *self)
 {
-    PyObject* result;
+    pid_t pid;
+    xc_interface *xch = self->cps.xch;
+    int status;
+    int rc;
 
-    PyEval_RestoreThread(self->threadstate);
-    result = PyObject_CallFunction(self->setup_cb, NULL);
-    self->threadstate = PyEval_SaveThread();
-
-    if (!result)
+    pid = vfork();
+    if (pid < 0) {
+        PERROR("vfork fails");
         return -1;
+    }
 
-    if (result == Py_None || PyObject_IsTrue(result))
+    if (pid > 0) {
+        rc = waitpid(pid, &status, 0);
+        if (rc != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            ERROR("getting child status fails");
+            return -1;
+        }
+
         return 0;
-    else
-        return -1;
+    }
+
+    execl("/etc/xen/scripts/network-colo", "network-colo", "master", "install", "vif1.0", "eth0", NULL);
+    PERROR("execl fails");
+    return -1;
 }
 
 static int wait_slaver_resume(CheckpointObject *self)
