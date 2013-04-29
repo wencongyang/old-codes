@@ -1,0 +1,189 @@
+#! /bin/bash
+#============================================================================
+# ${XEN_SCRIPT_DIR}/network-colo
+#
+# Script for configuring the network of Master & Slaver.
+#
+# Usage:
+# network-colo (master|slaver) (install|uninstall) vif pif [ifb1 ifb2]
+#============================================================================
+
+sides=$1
+op=$2
+vif=$3
+pif=$4
+ifb1=$5
+ifb2=$6
+
+module="HA_compare"
+device="HA_compare"
+path="/root/yewei/source/pure/code"
+
+# start_master ifbx
+function start_master() {
+    echo "start master"
+
+    # copy and foward input packets to $pif
+    tc qdisc add dev $vif root handle 1: prio
+    tc filter add dev $vif parent 1: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress mirror dev $pif
+    tc filter add dev $vif parent 1: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress mirror dev $pif
+
+    # foward output packets to ifbx
+    tc qdisc add dev $vif ingress
+    tc filter add dev $vif parent ffff: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $1
+    tc filter add dev $vif parent ffff: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $1
+
+    # In colo mode, we don't use gso, gro...
+    ip link set dev $1 qlen 4096
+}
+
+function stop_master() {
+    echo "stop master"
+
+    # don't copy and foward input packets to $pif
+    tc filter del dev $vif parent 1: protocol ip prio 10 u32
+    tc filter del dev $vif parent 1: protocol arp prio 11 u32
+    tc qdisc del dev $vif root handle 1: prio
+
+    # don't foward output packets to ifbx
+    tc filter del dev $vif parent ffff: protocol ip prio 10 u32
+    tc filter del dev $vif parent ffff: protocol arp prio 11 u32
+    tc qdisc del dev $vif ingress
+}
+
+# load_module module parameter
+function load_module()
+{
+    module=$1
+    shift
+
+    lsmod | grep -q "$module"
+    if [[ $? -eq 0 ]]; then
+        # The module has been loaded
+        return
+    fi
+
+    modprobe $module "$@"
+}
+
+function select_ifb()
+{
+    local -i index
+
+    for (( index = 0; index < 100; index++)); do
+        state=$(ip link show dev ifb$index | sed -n -e 's/.*state \([a-zA-Z]*\) .*/\1/p')
+        if [[ $state == "DOWN" ]]; then
+            return $index
+        fi
+    done
+
+    return 100
+}
+
+
+function install_master() {
+    echo "install master"
+    load_module sch_master
+    load_module sch_slaver
+    load_module HA_compare
+
+    if [[ ! -e "/dev/$device" ]]; then
+        major=$(awk "\$2==\"$module\" {print \$1}" /proc/devices)
+        mknod /dev/$device c $major 0
+    fi
+
+    load_module ifb numifbs=100
+
+    select_ifb
+    index1=$?
+    if [[ $index1 -eq 100 ]]; then
+        echo "can't find free ifb"
+        exit 1
+    fi
+    ip link set ifb$index1 up
+    tc qdisc add dev ifb$index1 root handle 1: master
+
+    select_ifb
+    index2=$?
+    if [[ $index2 -eq 100 ]]; then
+        echo "can't find free ifb"
+        exit 1
+    fi
+    ip link set ifb$index2 up
+    tc qdisc add dev ifb$index2 root handle 1: slaver
+
+    ifconfig $pif promisc
+
+    # forward packets from $pif to ifb$index2
+    tc qdisc add dev $pif ingress
+    tc filter add dev $pif parent ffff: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev ifb$index2
+    tc filter add dev $pif parent ffff: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev ifb$index2
+
+    start_master ifb$index1
+
+    echo "done"
+    exit 0
+}
+
+function uninstall_master() {
+    echo "uninstall master";
+
+    stop_master
+
+    # shutdown $ifb1
+    tc qdisc del dev $ifb1 root handle 1: master
+    ip link set $ifb1 down
+
+    # don't forward packets from $pif to $ifb2
+    tc filter del dev $pif parent ffff: protocol ip prio 10 u32
+    tc qdisc del dev $pif ingress
+
+    # shutdown $ifb2
+    tc qdisc del dev $ifb2 root handle 1: slaver
+    ip link set $ifb2 down
+
+    ifconfig $pif -promisc
+
+    echo "done"
+    exit 0
+}
+
+function install_slaver()
+{
+    ifconfig $pif promisc
+
+    # forward packets from $pif to $vif
+    tc qdisc add dev $pif ingress
+    tc filter add dev eth0 parent ffff: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $vif
+    tc filter add dev eth0 parent ffff: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $vif
+
+    # forward packets from $vif to $pif
+    tc qdisc add dev $vif ingress
+    tc filter add dev $vif parent ffff: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $pif
+    tc filter add dev $vif parent ffff: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $pif
+}
+
+function uninstall_slaver()
+{
+    # don't forward packets from $pif to $vif
+    tc filter del dev $pif parent ffff: protocol ip prio 10 u32
+    tc filter del dev $pif parent ffff: protocol arp prio 11 u32
+    tc qdisc del dev $pif ingress
+
+    # don't forward packets from $vif to $pif
+    tc filter del dev $vif parent ffff: protocol ip prio 10 u32
+    tc filter del dev $vif parent ffff: protocol arp prio 11 u32
+    tc qdisc del dev $vif ingress
+
+    ifconfig $pif -promisc
+}
+
+if [[ $1 != "master" && $1 != "slaver" ]]; then
+    exit 1
+fi
+
+if [[ $2 != "install" && $2 != "uninstall" ]]; then
+    exit 1
+fi
+
+${op}_$sides
