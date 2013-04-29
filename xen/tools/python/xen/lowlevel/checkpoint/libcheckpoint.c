@@ -125,10 +125,9 @@ int checkpoint_open(checkpoint_state* s, unsigned int domid)
 		    "falling back to slow xenstore signalling\n");
 	}
     } else if (s->domtype == dt_pvhvm) {
-       checkpoint_close(s);
-       s->errstr = "PV-on-HVM is unsupported";
-
-       return -1;
+        if (setup_suspend_evtchn(s) < 0)
+            fprintf(stderr, "WARNING: suspend event channel unavailable, "
+                    "falling back to slow xenstore signalling\n");
     }
 
     return 0;
@@ -184,7 +183,7 @@ int checkpoint_start(checkpoint_state* s, int fd,
     hvm = s->domtype > dt_pv;
     if (hvm) {
        flags |= XCFLAGS_HVM;
-       if (!switch_qemu_logdirty(s, 1))
+       if (switch_qemu_logdirty(s, 1))
            return -1;
     }
 
@@ -215,7 +214,16 @@ int checkpoint_suspend(checkpoint_state* s)
   else
       rc = compat_suspend(s);
 
-  return rc < 0 ? 0 : 1;
+  if (rc < 0)
+      return 0;
+
+  if (s->domtype == dt_pvhvm && s->suspend_evtchn >= 0) {
+      rc = xc_suspend_qemu(s->xch, s->xsh, s->domid);
+      if (rc < 0)
+          return 0;
+  }
+
+  return 1;
 }
 
 /* wait for a suspend to be triggered by another thread */
