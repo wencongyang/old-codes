@@ -3005,18 +3005,19 @@ class XendDomainInfo:
     # TODO: recategorise - called from XendCheckpoint
     # 
 
-    def completeRestore(self, store_mfn, console_mfn):
+    def completeRestore(self, store_mfn, console_mfn, first_time = True):
 
         log.debug("XendDomainInfo.completeRestore")
 
         self.store_mfn = store_mfn
         self.console_mfn = console_mfn
 
-        self._introduceDomain()
-        self.image = image.create(self, self.info)
-        if self.image:
-            self.image.createDeviceModel(True)
-        self._storeDomDetails()
+        if first_time:
+            self._introduceDomain()
+            self.image = image.create(self, self.info)
+            if self.image:
+                self.image.createDeviceModel(True)
+            self._storeDomDetails()
         self._registerWatches()
         self.refreshShutdown()
 
