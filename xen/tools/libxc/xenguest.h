@@ -45,6 +45,9 @@ struct save_callbacks {
     /* Enable qemu-dm logging dirty pages to xen */
     int (*switch_qemu_logdirty)(int domid, unsigned enable, void *data); /* HVM only */
 
+    /* called before Zero terminate is sent */
+    int (*post_sendstate)(void *data);
+
     /* to be provided as the last argument to each callback function */
     void* data;
 };

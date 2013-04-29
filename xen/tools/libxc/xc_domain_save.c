@@ -1645,6 +1645,23 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         }
     }
 
+    /* Flush last write and discard cache for file. */
+    if ( outbuf_flush(xch, &ob, io_fd) < 0 ) {
+        PERROR("Error when flushing output buffer");
+        rc = 1;
+    }
+
+    discard_file_cache(xch, io_fd, 1 /* flush */);
+
+    if ( callbacks->post_sendstate )
+    {
+        if ( callbacks->post_sendstate(callbacks->data) < 0)
+        {
+            PERROR("Error: post_sendstate()\n");
+            goto out;
+        }
+    }
+
     /* Zero terminate */
     i = 0;
     if ( wrexact(io_fd, &i, sizeof(int)) )

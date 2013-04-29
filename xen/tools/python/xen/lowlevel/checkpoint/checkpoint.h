@@ -40,6 +40,8 @@ typedef struct {
     timer_t timer;
 } checkpoint_state;
 
+#define CHECKPOINT_FLAGS_COLO        2
+
 char* checkpoint_error(checkpoint_state* s);
 
 void checkpoint_init(checkpoint_state* s);
