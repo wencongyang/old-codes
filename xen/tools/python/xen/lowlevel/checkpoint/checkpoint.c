@@ -22,6 +22,7 @@ typedef struct {
   PyObject* suspend_cb;
   PyObject* postcopy_cb;
   PyObject* checkpoint_cb;
+  PyObject* setup_cb;
 
   PyThreadState* threadstate;
 } CheckpointObject;
@@ -88,6 +89,8 @@ static PyObject* pycheckpoint_close(PyObject* obj, PyObject* args)
   self->postcopy_cb = NULL;
   Py_XDECREF(self->checkpoint_cb);
   self->checkpoint_cb = NULL;
+  Py_XDECREF(self->setup_cb);
+  self->setup_cb = NULL;
 
   Py_INCREF(Py_None);
   return Py_None;
@@ -100,14 +103,15 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   PyObject* suspend_cb = NULL;
   PyObject* postcopy_cb = NULL;
   PyObject* checkpoint_cb = NULL;
+  PyObject* setup_cb = NULL;
   unsigned int interval = 0;
 
   int fd;
   struct save_callbacks callbacks;
   int rc;
 
-  if (!PyArg_ParseTuple(args, "O|OOOI", &iofile, &suspend_cb, &postcopy_cb,
-                       &checkpoint_cb, &interval))
+  if (!PyArg_ParseTuple(args, "O|OOOOI", &iofile, &suspend_cb, &postcopy_cb,
+                       &checkpoint_cb, &setup_cb, &interval))
     return NULL;
 
   self->interval = interval;
@@ -116,6 +120,7 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   Py_XINCREF(suspend_cb);
   Py_XINCREF(postcopy_cb);
   Py_XINCREF(checkpoint_cb);
+  Py_XINCREF(setup_cb);
 
   fd = PyObject_AsFileDescriptor(iofile);
   Py_DECREF(iofile);
@@ -151,6 +156,15 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   } else
     self->checkpoint_cb = NULL;
 
+  if (setup_cb && setup_cb != Py_None) {
+    if (!PyCallable_Check(setup_cb)) {
+      PyErr_SetString(PyExc_TypeError, "setup callback not callable");
+      return NULL;
+    }
+    self->setup_cb = setup_cb;
+  } else
+    self->setup_cb = NULL;
+
   callbacks.suspend = suspend_trampoline;
   callbacks.postcopy = postcopy_trampoline;
   callbacks.checkpoint = checkpoint_trampoline;
@@ -175,6 +189,8 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   Py_XDECREF(postcopy_cb);
   self->checkpoint_cb = NULL;
   Py_XDECREF(checkpoint_cb);
+  self->setup_cb = NULL;
+  Py_XDECREF(self->setup_cb);
 
   return NULL;
 }

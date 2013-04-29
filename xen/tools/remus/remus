@@ -147,6 +147,15 @@ def run(cfg):
         if closure.cmd == 'r2':
             die()
 
+    def setup():
+        'setup network'
+        if cfg.colo:
+            for vif in dom.vifs:
+                print "setup %s" % vif.dev
+                print util.runcmd(['/etc/xen/scripts/network-colo', 'master', 'install', vif.dev, 'eth0'])
+                return True
+        return False
+
     def commit():
         'commit network buffer'
         if closure.cmd == 'c':
@@ -182,7 +191,7 @@ def run(cfg):
     rc = 0
 
     checkpointer = save.Saver(cfg.domid, fd, postsuspend, preresume, commit,
-                              interval)
+                              setup, interval)
 
     try:
         checkpointer.start()
