@@ -1163,6 +1163,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     struct restore_data *comm_data = NULL;
     void *data = NULL;
+    int skip_set_param = 0;
 
     pagebuf_init(&pagebuf);
     memset(&tailbuf, 0, sizeof(tailbuf));
@@ -1917,6 +1918,9 @@ getpages:
         goto out;
     }
 
+    if ( skip_set_param )
+        goto skip_set_hvm_param;
+
     if ( (frc = xc_set_hvm_param(xch, dom,
                                  HVM_PARAM_IOREQ_PFN, tailbuf.u.hvm.magicpfns[0]))
          || (frc = xc_set_hvm_param(xch, dom,
@@ -1932,6 +1936,8 @@ getpages:
         PERROR("error setting HVM params: %i", frc);
         goto out;
     }
+
+skip_set_hvm_param:
     *store_mfn = tailbuf.u.hvm.magicpfns[2];
     callbacks->comm_data.store_mfn = *store_mfn;
 
@@ -1940,14 +1946,18 @@ getpages:
             PERROR("error zeroing console page");
             goto out;
         }
-        if ( (frc = xc_set_hvm_param(xch, dom, 
-                                    HVM_PARAM_CONSOLE_PFN, console_pfn)) ) {
+        if ( !skip_set_param && (frc = xc_set_hvm_param(xch, dom,
+                                                        HVM_PARAM_CONSOLE_PFN,
+                                                        console_pfn)) ) {
             PERROR("error setting HVM param: %i", frc);
             goto out;
         }
         *console_mfn = console_pfn;
         callbacks->comm_data.console_mfn = console_pfn;
     }
+
+    /* no need to set hvm param again */
+    skip_set_param = 1;
 
     frc = xc_domain_hvm_setcontext(xch, dom, tailbuf.u.hvm.hvmbuf,
                                    tailbuf.u.hvm.reclen);
