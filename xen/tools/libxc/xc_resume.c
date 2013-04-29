@@ -37,7 +37,7 @@ static int pv_guest_width(xc_interface *xch, uint32_t domid)
     return domctl.u.address_size.size / 8;
 }
 
-static int modify_returncode(xc_interface *xch, uint32_t domid)
+static int modify_returncode(xc_interface *xch, uint32_t domid, int new_rc)
 {
     vcpu_guest_context_any_t ctxt;
     xc_dominfo_t info;
@@ -79,7 +79,7 @@ static int modify_returncode(xc_interface *xch, uint32_t domid)
     if ( (rc = xc_vcpu_getcontext(xch, domid, 0, &ctxt)) != 0 )
         return rc;
 
-    SET_FIELD(&ctxt, user_regs.eax, 1);
+    SET_FIELD(&ctxt, user_regs.eax, new_rc);
 
     if ( (rc = xc_vcpu_setcontext(xch, domid, 0, &ctxt)) != 0 )
         return rc;
@@ -89,7 +89,7 @@ static int modify_returncode(xc_interface *xch, uint32_t domid)
 
 #else
 
-static int modify_returncode(xc_interface *xch, uint32_t domid)
+static int modify_returncode(xc_interface *xch, uint32_t domid, int new_rc)
 {
     return 0;
 
@@ -97,7 +97,7 @@ static int modify_returncode(xc_interface *xch, uint32_t domid)
 
 #endif
 
-static int xc_domain_resume_cooperative(xc_interface *xch, uint32_t domid)
+static int xc_domain_resume_cooperative(xc_interface *xch, uint32_t domid, int fast)
 {
     DECLARE_DOMCTL;
     int rc;
@@ -106,7 +106,7 @@ static int xc_domain_resume_cooperative(xc_interface *xch, uint32_t domid)
      * Set hypercall return code to indicate that suspend is cancelled
      * (rather than resuming in a new domain context).
      */
-    if ( (rc = modify_returncode(xch, domid)) != 0 )
+    if ( (rc = modify_returncode(xch, domid, fast)) != 0 )
         return rc;
 
     domctl.cmd = XEN_DOMCTL_resumedomain;
@@ -254,6 +254,6 @@ static int xc_domain_resume_any(xc_interface *xch, uint32_t domid)
 int xc_domain_resume(xc_interface *xch, uint32_t domid, int fast)
 {
     return (fast
-            ? xc_domain_resume_cooperative(xch, domid)
+            ? xc_domain_resume_cooperative(xch, domid, fast)
             : xc_domain_resume_any(xch, domid));
 }
