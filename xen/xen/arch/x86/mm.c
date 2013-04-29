@@ -5662,6 +5662,18 @@ void memguard_unguard_stack(void *p)
     memguard_unguard_range(p, PAGE_SIZE);
 }
 
+int do_mfncopy_op(unsigned long mfn, unsigned long pagebuff)
+{
+    char *buff = (char *)pagebuff;
+    void *ptr = NULL;
+
+    /* Map page mfn and copy pagebuff into it */
+    ptr = page_to_virt(mfn_to_page(mfn));
+    memcpy(ptr, buff, PAGE_SIZE);
+
+    return 0;
+}
+
 /*
  * Local variables:
  * mode: C

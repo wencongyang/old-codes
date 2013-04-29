@@ -105,6 +105,10 @@ extern int
 do_kexec(
     unsigned long op, unsigned arg1, XEN_GUEST_HANDLE(void) uarg);
 
+extern int
+do_mfncopy_op(
+    unsigned long mfn, unsigned long pagebuff);
+
 #ifdef __x86_64__
 
 extern long
