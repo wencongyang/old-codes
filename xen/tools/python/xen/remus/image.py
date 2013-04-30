@@ -5,6 +5,7 @@ import logging, struct
 import vm
 
 SIGNATURE = 'LinuxGuestRecord'
+COLO_SIGNATURE = "GuestColoRestore"
 LONGLEN = struct.calcsize('L')
 INTLEN = struct.calcsize('i')
 PAGE_SIZE = 4096
@@ -189,9 +190,12 @@ def parseheader(header):
     "parses a header sexpression"
     return vm.parsedominfo(vm.strtosxpr(header))
 
-def makeheader(dominfo):
+def makeheader(dominfo, colo):
     "create an image header from a VM dominfo sxpr"
-    items = [SIGNATURE]
+    if colo:
+        items = [COLO_SIGNATURE]
+    else:
+        items = [SIGNATURE]
     sxpr = vm.sxprtostr(dominfo)
     items.append(struct.pack('!i', len(sxpr)))
     items.append(sxpr)

@@ -123,8 +123,8 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   int rc;
   int flags = 0;
 
-  if (!PyArg_ParseTuple(args, "O|OOOOI", &iofile, &suspend_cb, &postcopy_cb,
-                       &checkpoint_cb, &setup_cb, &interval))
+  if (!PyArg_ParseTuple(args, "O|OOOOII", &iofile, &suspend_cb, &postcopy_cb,
+                       &checkpoint_cb, &setup_cb, &interval, &flags))
     return NULL;
 
   self->interval = interval;
