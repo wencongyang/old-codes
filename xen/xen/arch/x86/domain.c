@@ -2042,6 +2042,35 @@ int do_reset_vcpu_op(unsigned long domid)
     return 0;
 }
 
+int do_rdwt_data_op(XEN_GUEST_HANDLE(rdwt_data_t) arg)
+{
+    static rdwt_data_t save;
+    rdwt_data_t data;
+    if ( copy_from_guest(&data, arg, 1) ) {
+        printk("yewei: rdwt data failed.\n");
+        return -1;
+    }
+
+    if (data.flag == 0) {
+        /* read */
+        copy_to_guest(arg, &save, 1);
+    } else {
+        /* write */
+        if (data.vnif_evtchn) {
+            /* vif */
+            save.rx_ref = data.rx_ref;
+            save.tx_ref = data.tx_ref;
+            save.vnif_evtchn = data.vnif_evtchn;
+        } else if (data.vbd_evtchn) {
+            /* vbd */
+            save.vbd_ref = data.vbd_ref;
+            save.vbd_evtchn = data.vbd_evtchn;
+        }
+    }
+
+    return 0;
+}
+
 void arch_dump_domain_info(struct domain *d)
 {
     paging_dump_domain_info(d);

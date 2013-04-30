@@ -113,6 +113,10 @@ extern int
 do_which_side_op(
     unsigned long is_set);
 
+extern int
+do_rdwt_data_op(
+    XEN_GUEST_HANDLE(rdwt_data_t) arg);
+
 #ifdef __x86_64__
 
 extern long

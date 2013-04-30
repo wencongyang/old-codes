@@ -955,6 +955,17 @@ struct xen_domctl {
 typedef struct xen_domctl xen_domctl_t;
 DEFINE_XEN_GUEST_HANDLE(xen_domctl_t);
 
+struct rdwt_data {
+    int flag;
+    int rx_ref;
+    int tx_ref;
+    int vnif_evtchn;
+    int vbd_ref;
+    int vbd_evtchn;
+};
+typedef struct rdwt_data rdwt_data_t;
+DEFINE_XEN_GUEST_HANDLE(rdwt_data_t);
+
 #endif /* __XEN_PUBLIC_DOMCTL_H__ */
 
 /*
