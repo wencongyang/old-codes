@@ -28,8 +28,7 @@
 
 #include "xc_private.h"
 #include "xc_dom.h"
-#include "xg_private.h"
-#include "xg_save_restore.h"
+#include "xc_save_restore_colo.h"
 
 #include <xen/hvm/params.h>
 #include "xc_e820.h"
@@ -81,37 +80,6 @@ struct outbuf {
     (((_mfn) < (ctx->max_mfn)) &&                \
      ((mfn_to_pfn(_mfn) < (dinfo->p2m_size)) &&   \
       (pfn_to_mfn(mfn_to_pfn(_mfn)) == (_mfn))))
-
-/*
-** During (live) save/migrate, we maintain a number of bitmaps to track
-** which pages we have to send, to fixup, and to skip.
-*/
-
-#define BITS_PER_LONG (sizeof(unsigned long) * 8)
-#define BITS_TO_LONGS(bits) (((bits)+BITS_PER_LONG-1)/BITS_PER_LONG)
-#define BITMAP_SIZE   (BITS_TO_LONGS(dinfo->p2m_size) * sizeof(unsigned long))
-
-#define BITMAP_ENTRY(_nr,_bmap) \
-   ((volatile unsigned long *)(_bmap))[(_nr)/BITS_PER_LONG]
-
-#define BITMAP_SHIFT(_nr) ((_nr) % BITS_PER_LONG)
-
-#define ORDER_LONG (sizeof(unsigned long) == 4 ? 5 : 6)
-
-static inline int test_bit (int nr, volatile void * addr)
-{
-    return (BITMAP_ENTRY(nr, addr) >> BITMAP_SHIFT(nr)) & 1;
-}
-
-static inline void clear_bit (int nr, volatile void * addr)
-{
-    BITMAP_ENTRY(nr, addr) &= ~(1UL << BITMAP_SHIFT(nr));
-}
-
-static inline void set_bit ( int nr, volatile void * addr)
-{
-    BITMAP_ENTRY(nr, addr) |= (1UL << BITMAP_SHIFT(nr));
-}
 
 /* Returns the hamming weight (i.e. the number of bits set) in a N-bit word */
 static inline unsigned int hweight32(unsigned int w)
