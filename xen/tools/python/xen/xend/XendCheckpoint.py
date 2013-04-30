@@ -23,8 +23,11 @@ from xen.xend.XendLogging import log
 from xen.xend.XendConfig import XendConfig
 from xen.xend.XendConstants import *
 from xen.xend import XendNode
+from xen.xend.xenstore.xsutil import ResumeDomain
+from xen.remus import util
 
 SIGNATURE = "LinuxGuestRecord"
+COLO_SIGNATURE = "GuestColoRestore"
 QEMU_SIGNATURE = "QemuDeviceModelRecord"
 dm_batch = 512
 XC_SAVE = "xc_save"
@@ -203,9 +206,14 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
 
     signature = read_exact(fd, len(SIGNATURE),
         "not a valid guest state file: signature read")
-    if signature != SIGNATURE:
+    if signature != SIGNATURE and signature != COLO_SIGNATURE:
         raise XendError("not a valid guest state file: found '%s'" %
                         signature)
+
+    if signature == COLO_SIGNATURE:
+        colo = True
+    else:
+        colo = False
 
     l = read_exact(fd, sizeof_int,
                    "not a valid guest state file: config size read")
@@ -301,12 +309,15 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
 
         cmd = map(str, [xen.util.auxbin.pathTo(XC_RESTORE),
                         fd, dominfo.getDomid(),
-                        store_port, console_port, int(is_hvm), pae, apic, superpages])
+                        store_port, console_port, int(is_hvm), pae, apic,
+                        superpages, int(colo)])
         log.debug("[xc_restore]: %s", string.join(cmd))
 
-        handler = RestoreInputHandler()
+        inputHandler = RestoreInputHandler()
+        restoreHandler = RestoreHandler(fd, colo, dominfo, inputHandler,
+                                         is_hvm, restore_image)
 
-        forkHelper(cmd, fd, handler.handler, True)
+        forkHelper(cmd, fd, inputHandler.handler, not colo, restoreHandler)
 
         # We don't want to pass this fd to any other children -- we 
         # might need to recover the disk space that backs it.
@@ -321,35 +332,9 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
             raise XendError('Could not read store MFN')
 
         if not is_hvm and handler.console_mfn is None:
-            raise XendError('Could not read console MFN')        
+            raise XendError('Could not read console MFN')
 
-        restore_image.setCpuid()
-
-        # xc_restore will wait for source to close connection
-        
-        dominfo.completeRestore(handler.store_mfn, handler.console_mfn)
-
-        #
-        # We shouldn't hold the domains_lock over a waitForDevices
-        # As this function sometime gets called holding this lock,
-        # we must release it and re-acquire it appropriately
-        #
-        from xen.xend import XendDomain
-
-        lock = True;
-        try:
-            XendDomain.instance().domains_lock.release()
-        except:
-            lock = False;
-
-        try:
-            dominfo.waitForDevices() # Wait for backends to set up
-        finally:
-            if lock:
-                XendDomain.instance().domains_lock.acquire()
-
-        if not paused:
-            dominfo.unpause()
+        restoreHandler.resume(True, paused, None)
 
         return dominfo
     except Exception, exn:
@@ -358,23 +343,128 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
         raise exn
 
 
+class RestoreHandler:
+    def __init__(self, fd, colo, dominfo, inputHandler, is_hvm, restore_image):
+        self.fd = fd
+        self.colo = colo
+        self.firsttime = True
+        self.inputHandler = inputHandler
+        self.dominfo = dominfo
+        self.is_hvm = is_hvm
+        self.restore_image = restore_image
+        self.store_port = dominfo.store_port
+        self.console_port = dominfo.console_port
+
+    def start(self, child):
+        self.log("write", "xc_restore", "start")
+        child.tochild.write("start\n")
+        child.tochild.flush()
+        child.tochild.write("%s\n" % self.store_port)
+        child.tochild.flush()
+        child.tochild.write("%s\n" % self.console_port)
+        child.tochild.flush()
+
+    def resume(self, finish, paused, child):
+        fd = self.fd
+        dominfo = self.dominfo
+        handler = self.inputHandler
+        restore_image = self.restore_image
+        restore_image.setCpuid()
+        dominfo.completeRestore(handler.store_mfn, handler.console_mfn,
+                                self.firsttime)
+
+        if self.colo and not finish:
+            # notify master that checkpoint finishes
+            write_exact(fd, "finish", "failed to write finish done")
+            buf = read_exact(fd, 6, "failed to read resume flag")
+            if buf != "resume":
+                return False
+
+        from xen.xend import XendDomain
+
+        if self.firsttime:
+            lock = True
+            try:
+                XendDomain.instance().domains_lock.release()
+            except:
+                lock = False
+
+            try:
+                dominfo.waitForDevices() # Wait for backends to set up
+            finally:
+                if lock:
+                    XendDomain.instance().domains_lock.acquire()
+            if not paused:
+                dominfo.unpause()
+        else:
+            # colo
+            xc.domain_resume(dominfo.domid, 2)
+            ResumeDomain(dominfo.domid)
+
+        if self.colo and not finish:
+            child.tochild.write("resume\n")
+            child.tochild.flush()
+            buf = child.fromchild.readline()
+            if buf != "resume\n":
+                return False
+            if self.firsttime:
+                util.runcmd("/etc/xen/scripts/network-colo slaver install vif%s.0 eth0" % dominfo.domid)
+            # notify master side VM resumed
+            write_exact(fd, "resume", "failed to write resume done")
+
+            # wait new checkpoint
+            buf = read_exact(fd, 8, "failed to read continue flag")
+            if buf != "continue":
+                return False
+
+            child.tochild.write("suspend\n")
+            buf = child.fromchild.readline()
+            if buf != "suspend\n":
+                return False
+
+            # notify master side suspend done.
+            write_exact(fd, "suspend", "failed to write suspend done")
+            buf = read_exact(fd, 5, "failed to read start flag")
+            if buf != "start":
+                return False
+
+            dominfo.store_port = self.store_port
+            dominfo.console_port = self.console_port
+
+            child.tochild.write("start\n")
+            child.tochild.flush()
+            child.tochild.write("%s\n" % self.store_port)
+            child.tochild.flush()
+            child.tochild.write("%s\n" % self.console_port)
+            child.tochild.flush()
+
+            self.firsttime = False
+
 class RestoreInputHandler:
     def __init__(self):
         self.store_mfn = None
         self.console_mfn = None
 
 
-    def handler(self, line, _):
+    def handler(self, line, child, restoreHandler):
+        if line == "finish":
+            # colo
+            return restoreHandler.resume(False, False, child)
+
         m = re.match(r"^(store-mfn) (\d+)$", line)
         if m:
             self.store_mfn = int(m.group(2))
-        else:
-            m = re.match(r"^(console-mfn) (\d+)$", line)
-            if m:
-                self.console_mfn = int(m.group(2))
+            return True
+
+        m = re.match(r"^(console-mfn) (\d+)$", line)
+        if m:
+            self.console_mfn = int(m.group(2))
+            return True
+
+        return False
 
 
-def forkHelper(cmd, fd, inputHandler, closeToChild):
+def forkHelper(cmd, fd, inputHandler, closeToChild, restoreHandler):
     child = xPopen3(cmd, True, -1, [fd])
 
     if closeToChild:
@@ -382,6 +472,7 @@ def forkHelper(cmd, fd, inputHandler, closeToChild):
 
     thread = threading.Thread(target = slurp, args = (child.childerr,))
     thread.start()
+    restoreHandler.start(child)
 
     try:
         try:
@@ -392,7 +483,7 @@ def forkHelper(cmd, fd, inputHandler, closeToChild):
                 else:
                     line = line.rstrip()
                     log.debug('%s', line)
-                    inputHandler(line, child.tochild)
+                    inputHandler(line, child, restoreHandler)
 
         except IOError, exn:
             raise XendError('Error reading from child process for %s: %s' %
