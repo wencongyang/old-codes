@@ -1174,6 +1174,8 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     void *data = NULL;
     int skip_set_param = 0;
 
+    FILE *fp = fopen("/root/yewei/3.txt", "w");
+
     pagebuf_init(&pagebuf);
     memset(&tailbuf, 0, sizeof(tailbuf));
     tailbuf.ishvm = hvm;
@@ -1384,6 +1386,9 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         }
     }
 
+    fprintf(fp, "Load pages finishs\n");
+    fflush(fp);
+
     /*
      * Ensure we flush all machphys updates before potential PAE-specific
      * reallocations below.
@@ -1426,11 +1431,17 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     if ( ctx->last_checkpoint )
     {
         // DPRINTF("Last checkpoint, finishing\n");
+
+        fprintf(fp, "Last checkpoint\n");
+        fflush(fp);
         goto finish;
     }
 
 getpages:
     // DPRINTF("Buffered checkpoint\n");
+
+    fprintf(fp, "Buffered checkpoint\n");
+    fflush(fp);
 
     if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
         PERROR("error when buffering batch, finishing");
@@ -1919,6 +1930,9 @@ getpages:
         goto out;
     }
 
+    fprintf(fp, "dump_qemu finishs\n");
+    fflush(fp);
+
     /* These comms pages need to be zeroed at the start of day */
     if ( xc_clear_domain_page(xch, dom, tailbuf.u.hvm.magicpfns[0]) ||
          xc_clear_domain_page(xch, dom, tailbuf.u.hvm.magicpfns[1]) ||
@@ -1927,6 +1941,9 @@ getpages:
         PERROR("error zeroing magic pages");
         goto out;
     }
+
+    fprintf(fp, "clear pages\n");
+    fflush(fp);
 
     if ( skip_set_param )
         goto skip_set_hvm_param;
@@ -1946,6 +1963,9 @@ getpages:
         PERROR("error setting HVM params: %i", frc);
         goto out;
     }
+
+    fprintf(fp, "setting HVM params\n");
+    fflush(fp);
 
 skip_set_hvm_param:
     *store_mfn = tailbuf.u.hvm.magicpfns[2];
@@ -1977,9 +1997,14 @@ skip_set_hvm_param:
         goto out;
     }
 
+    fprintf(fp, "setting the HVM context\n");
+    fflush(fp);
+
     if ( callbacks && callbacks->finish_restotre )
     {
         rc = callbacks->finish_restotre(&callbacks->comm_data, callbacks->data);
+        fprintf(fp, "finish_restore returns %d\n", frc);
+        fflush(fp);
         if ( rc < 0 )
         {
             PERROR("Error finishing restore");

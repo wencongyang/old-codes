@@ -33,6 +33,9 @@ struct restore_colo_data
     int *pfn_err;
     char *vm_mm;
     struct xs_handle *xsh;
+
+    /* debug */
+    FILE *fp;
 };
 
 /* we restore only one vm in a process, so it is same to use global variable */
@@ -138,6 +141,8 @@ void restore_colo_free(struct restore_data *comm_data, void *data)
     if (!colo_data)
         return;
 
+    fprintf(colo_data->fp, "call restore_colo_free()\n");
+    fflush(colo_data->fp);
     free(colo_data->pfn_type_slaver);
     free(colo_data->pagebase);
     free(colo_data->pfn_batch_slaver);
@@ -174,6 +179,8 @@ static int pin_l1(struct restore_data *comm_data,
     unsigned long *pfn_type_slaver = colo_data->pfn_type_slaver;
     unsigned long *dirty_pages = colo_data->dirty_pages;
 
+    fprintf(colo_data->fp, "call pin_l1()\n");
+    fflush(colo_data->fp);
     for (i = 0; i < dinfo->p2m_size; i++)
     {
         switch ( pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
@@ -238,6 +245,8 @@ static int unpin_pagetable(struct restore_data *comm_data,
     unsigned long *pfn_type_slaver = colo_data->pfn_type_slaver;
     unsigned long *dirty_pages = colo_data->dirty_pages;
 
+    fprintf(colo_data->fp, "call unpin_pagetable()\n");
+    fflush(colo_data->fp);
     for (i = 0; i < dinfo->p2m_size; i++)
     {
         if ( (pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 )
@@ -306,11 +315,19 @@ static int update_memory(struct restore_data *comm_data,
     xen_pfn_t region_mfn_slaver;
     unsigned long mfn;
     char *pagebuff;
+    unsigned long count;
+
+    fprintf(colo_data->fp, "call update_memory()\n");
+    fflush(colo_data->fp);
 
     if (hvm && !colo_data->vm_mm) {
         unsigned long *pfn_type = calloc(dinfo->p2m_size,
                                          sizeof(unsigned long));
         unsigned long k;
+
+        fprintf(colo_data->fp, "p2m_size: %lu\n", dinfo->p2m_size);
+        fprintf(colo_data->fp, "max_mem_pfn: %lu\n", max_mem_pfn);
+        fflush(colo_data->fp);
 
         for (k = 0; k < dinfo->p2m_size; k++)
             pfn_type[k] = k;
@@ -320,24 +337,40 @@ static int update_memory(struct restore_data *comm_data,
                                                colo_data->pfn_err,
                                                dinfo->p2m_size);
         if (!colo_data->vm_mm) {
+            fprintf(colo_data->fp, "can't map vm total memory\n");
+            fflush(colo_data->fp);
             PERROR("can't map vm total memory");
             return 1;
         }
     }
 
+    count = 0;
     for (pfn = 0; pfn < max_mem_pfn; pfn++) {
-        if (!test_bit(pfn, dirty_pages))
+        if (!test_bit(pfn, dirty_pages)) {
+            if (colo_data->first_time) {
+                fprintf(colo_data->fp, "skip pfn: %lu\n", pfn);
+                fflush(colo_data->fp);
+            }
             continue;
+        }
 
         pagetype = pfn_type[pfn] & XEN_DOMCTL_PFINFO_LTAB_MASK;
-        if (pagetype == XEN_DOMCTL_PFINFO_XTAB)
+        if (pagetype == XEN_DOMCTL_PFINFO_XTAB) {
+            if (hvm && colo_data->pfn_err[pfn] == 0) {
+                fprintf(colo_data->fp, "unmapped page: %lu, pfn_err: %d\n", pfn, colo_data->pfn_err[pfn]);
+                fflush(colo_data->fp);
+            }
             /* a bogus/unmapped page: skip it */
             continue;
+        }
 
+        count++;
         mfn = comm_data->p2m[pfn];
         region_mfn_slaver = mfn;
         if (hvm) {
             if (colo_data->pfn_err[pfn]) {
+                fprintf(colo_data->fp, "xc_map_foreign_bulk failed\n");
+                fflush(colo_data->fp);
                 ERROR("update_memory: xc_map_foreign_bulk failed");
                 return 1;
             }
@@ -348,6 +381,8 @@ static int update_memory(struct restore_data *comm_data,
                                                      &region_mfn_slaver,
                                                      &pfn_err, 1);
             if (!region_base_slaver || pfn_err) {
+                fprintf(colo_data->fp, "xc_map_foreign_bulk failed\n");
+                fflush(colo_data->fp);
                 PERROR("update_memory: xc_map_foreign_bulk failed");
                 return 1;
             }
@@ -367,6 +402,9 @@ static int update_memory(struct restore_data *comm_data,
             return 1;
         }
     }
+
+    fprintf(colo_data->fp, "update %lu pages\n", count);
+    fflush(colo_data->fp);
 
     /*
      * Ensure we flush all machphys updates before potential PAE-specific
@@ -397,6 +435,8 @@ static int pin_pagetable(struct restore_data *comm_data,
     xc_interface *xch = comm_data->xch;
     unsigned long *dirty_pages = colo_data->dirty_pages;
 
+    fprintf(colo_data->fp, "call pin_pagetable()\n");
+    fflush(colo_data->fp);
     for ( i = 0; i < dinfo->p2m_size; i++ )
     {
         if ( (pfn_type[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 )
@@ -469,6 +509,8 @@ static int unpin_l1(struct restore_data *comm_data,
     unsigned long *pfn_type_slaver = colo_data->pfn_type_slaver;
     unsigned long *dirty_pages = colo_data->dirty_pages;
 
+    fprintf(colo_data->fp, "call unpin_l1()\n");
+    fflush(colo_data->fp);
     for (i = 0; i < dinfo->p2m_size; i++)
     {
         switch ( pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
@@ -557,6 +599,8 @@ int update_p2m_table(struct restore_data *comm_data, void *data)
     xen_pfn_t *live_p2m_one;
     unsigned long *p2m;
 
+    fprintf(colo_data->fp, "call update_p2m_table()\n");
+    fflush(colo_data->fp);
     j = 0;
     for (i = 0; i < P2M_FL_ENTRIES; i++)
     {
@@ -670,6 +714,8 @@ int finish_colo(struct restore_data *comm_data, void *data)
     int remote_port;
     int local_port = colo_data->local_port;
 
+    fprintf(colo_data->fp, "call finish_colo()\n");
+    fflush(colo_data->fp);
     /* output the store-mfn & console-mfn */
     printf("store-mfn %li\n", comm_data->store_mfn);
     printf("console-mfn %li\n", comm_data->console_mfn);
@@ -696,6 +742,8 @@ int finish_colo(struct restore_data *comm_data, void *data)
     /* notify python code checkpoint finish */
     printf("finish\n");
     fflush(stdout);
+    fprintf(colo_data->fp, "write finish to python\n");
+    fflush(colo_data->fp);
 
     /* wait domain resume, then connect the suspend evtchn */
     scanf("%s", str);
@@ -704,6 +752,8 @@ int finish_colo(struct restore_data *comm_data, void *data)
         ERROR("read %s, expect resume", str);
         return -1;
     }
+    fprintf(colo_data->fp, "read %s from python\n", str);
+    fflush(colo_data->fp);
 
     while(1) {
         rc = syscall(NR_wait_resume);
@@ -719,6 +769,8 @@ int finish_colo(struct restore_data *comm_data, void *data)
         sleep(10);
         remote_port = xs_suspend_evtchn_port(dom);
         if (remote_port < 0) {
+            fprintf(colo_data->fp, "getting remote_suspend port fails\n");
+            fflush(colo_data->fp);
             ERROR("getting remote suspend port fails");
             return -1;
         }
@@ -770,8 +822,16 @@ int finish_colo(struct restore_data *comm_data, void *data)
     if (strcmp(str, "start"))
         return -1;
 
+    fprintf(colo_data->fp, "read %s from python\n", str);
+    fflush(colo_data->fp);
+
     scanf("%s", str);
+    fprintf(colo_data->fp, "read %s from python\n", str);
+    fflush(colo_data->fp);
+
     scanf("%s", str);
+    fprintf(colo_data->fp, "read %s from python\n", str);
+    fflush(colo_data->fp);
 
     memset(colo_data->dirty_pages, 0x0, BITMAP_SIZE);
     if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_CLEAN,
@@ -785,6 +845,8 @@ int finish_colo(struct restore_data *comm_data, void *data)
     if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_OFF, NULL, 0, NULL,
                           0, NULL) < 0 )
     {
+        fprintf(colo_data->fp, "disabling dirty-log fails\n");
+        fflush(colo_data->fp);
         ERROR("disabling dirty-log fails");
         return -1;
     }

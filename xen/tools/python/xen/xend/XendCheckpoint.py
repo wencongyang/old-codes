@@ -214,6 +214,8 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
         colo = True
     else:
         colo = False
+    if colo:
+        log.debug("use colo mode")
 
     l = read_exact(fd, sizeof_int,
                    "not a valid guest state file: config size read")
@@ -354,7 +356,13 @@ class RestoreHandler:
         self.restore_image = restore_image
         self.store_port = dominfo.store_port
         self.console_port = dominfo.console_port
+        log.debug("port: %s %s" % (self.store_port, self.console_port))
 
+    def log(self, op, target, str):
+        if op == "write":
+            log.debug("write %s to %s" % (str, target))
+        elif op == "read":
+            log.debug("read %s from %s" % (str, target))
     def start(self, child):
         self.log("write", "xc_restore", "start")
         child.tochild.write("start\n")
@@ -365,20 +373,25 @@ class RestoreHandler:
         child.tochild.flush()
 
     def resume(self, finish, paused, child):
+        log.debug("call resume...")
         fd = self.fd
         dominfo = self.dominfo
         handler = self.inputHandler
         restore_image = self.restore_image
+        log.debug("call setCpuid")
         restore_image.setCpuid()
+        log.debug("call completeRestore")
         dominfo.completeRestore(handler.store_mfn, handler.console_mfn,
                                 self.firsttime)
 
         if self.colo and not finish:
             # notify master that checkpoint finishes
+            self.log("write", "master", "finish")
             write_exact(fd, "finish", "failed to write finish done")
             buf = read_exact(fd, 6, "failed to read resume flag")
             if buf != "resume":
                 return False
+            self.log("read", "master", "resume")
 
         from xen.xend import XendDomain
 
@@ -399,6 +412,8 @@ class RestoreHandler:
         else:
             # colo
             xc.domain_resume(dominfo.domid, 2)
+            log.debug("calling xc.domain_resume %d" % dominfo.domid)
+            log.debug("calling ResumeDomain")
             ResumeDomain(dominfo.domid)
             if self.is_hvm:
                 util.runcmd('xenstore write /local/domain/0/device-model/%d/command continue' % dominfo.domid)
@@ -408,35 +423,47 @@ class RestoreHandler:
                         break
 
         if self.colo and not finish:
+            self.log("write", "xc_restore", "resume")
             child.tochild.write("resume\n")
             child.tochild.flush()
             buf = child.fromchild.readline()
             if buf != "resume\n":
+                log.debug("read %s from xc_restore", buf.rstrip())
                 return False
+            self.log("read", "xc_restore", "resume")
             if self.firsttime:
                 util.runcmd("/etc/xen/scripts/network-colo slaver install vif%s.0 eth0" % dominfo.domid)
             # notify master side VM resumed
+            self.log("write", "master", "resume")
             write_exact(fd, "resume", "failed to write resume done")
 
             # wait new checkpoint
             buf = read_exact(fd, 8, "failed to read continue flag")
             if buf != "continue":
                 return False
+            self.log("read", "master", "continue")
 
+            self.log("write", "xc_restore", "suspend")
             child.tochild.write("suspend\n")
+            child.tochild.flush()
             buf = child.fromchild.readline()
             if buf != "suspend\n":
                 return False
+            self.log("read", "xc_restore", "suspend")
 
             # notify master side suspend done.
+            self.log("write", "master", "suspend")
             write_exact(fd, "suspend", "failed to write suspend done")
             buf = read_exact(fd, 5, "failed to read start flag")
             if buf != "start":
                 return False
+            self.log("read", "master", "start")
 
+            log.debug("dom info port: %s %s" % (dominfo.store_port, dominfo.console_port))
             dominfo.store_port = self.store_port
             dominfo.console_port = self.console_port
 
+            self.log("write", "xc_restore", "start")
             child.tochild.write("start\n")
             child.tochild.flush()
             child.tochild.write("%s\n" % self.store_port)

@@ -28,6 +28,13 @@ main(int argc, char **argv)
     struct restore_callbacks callback, *callback_p;
     int colo = 0;
     char str[10];
+    FILE *fp;
+
+    fp = fopen("/root/yewei/2.txt", "w");
+    if (fp) {
+        fprintf(fp, "argc is %d\n", argc);
+        fflush(fp);
+    }
 
     if ( (argc != 8) && (argc != 9) && (argc != 10) )
         errx(1, "usage: %s iofd domid store_evtchn "
@@ -49,12 +56,24 @@ main(int argc, char **argv)
     else
         superpages = 0;
 
-    if ( argc == 10 )
+    if ( argc == 10 ) {
         colo = atoi(argv[9]);
+        fprintf(fp, "colo is %d(%s)\n", colo, argv[9]);
+        fflush(fp);
+    }
+
+    fprintf(fp, "store_evtchn : %d\n", store_evtchn);
+    fprintf(fp, "console_evtchn: %d\n", console_evtchn);
 
     scanf("%s", str);
+    fprintf(fp, "receive %s\n", str);
+
     scanf("%s", str);
+    fprintf(fp, "receive %s\n", str);
+
     scanf("%s", str);
+    fprintf(fp, "receive %s\n", str);
+    fflush(fp);
 
     if ( colo )
     {
