@@ -3,8 +3,6 @@
 
 struct restore_colo_data
 {
-    /* store the pfn type on slave side */
-    unsigned long *pfn_type_slaver;
     unsigned long max_mem_pfn;
 
     /* cache the whole memory */
@@ -18,12 +16,21 @@ struct restore_colo_data
 
     xc_evtchn *xce;
 
+    int first_time;
+
+    /* PV */
+    /* store the pfn type on slave side */
+    unsigned long *pfn_type_slaver;
+
     /* temp buffer(avoid malloc/free frequently) */
     unsigned long *pfn_batch_slaver;
     unsigned long *pfn_type_batch_slaver;
     unsigned long *p2m_frame_list_temp;
 
-    int first_time;
+    /* HVM */
+    int *pfn_err;
+    char *vm_mm;
+    struct xs_handle *xsh;
 };
 
 /* we restore only one vm in a process, so it is same to use global variable */
@@ -38,10 +45,6 @@ int restore_colo_init(struct restore_data *comm_data, void **data)
     struct restore_colo_data *colo_data;
     struct domain_info_context *dinfo = comm_data->dinfo;
 
-    if (comm_data->hvm)
-        /* hvm is unsupported now */
-        return -1;
-
     if (dirty_pages)
         /* restore_colo_init() is called more than once?? */
         return -1;
@@ -49,6 +52,9 @@ int restore_colo_init(struct restore_data *comm_data, void **data)
     colo_data = calloc(1, sizeof(struct restore_colo_data));
     if (!colo_data)
         return -1;
+
+    if (comm_data->hvm)
+        goto hvm;
 
     if (xc_domain_getinfo(xch, comm_data->dom, 1, &info) != 1)
     {
@@ -62,15 +68,35 @@ int restore_colo_init(struct restore_data *comm_data, void **data)
     colo_data->pfn_batch_slaver = calloc(MAX_BATCH_SIZE, sizeof(xen_pfn_t));
     colo_data->pfn_type_batch_slaver = calloc(MAX_BATCH_SIZE, sizeof(xen_pfn_t));
     colo_data->p2m_frame_list_temp = malloc(P2M_FL_ENTRIES);
+    if (!colo_data->pfn_type_slaver || !colo_data->pfn_batch_slaver ||
+        !colo_data->pfn_type_batch_slaver || !colo_data->p2m_frame_list_temp) {
+        PERROR("Could not allocate memory for restore colo data");
+        goto err;
+    }
 
+    goto skip_hvm;
+
+hvm:
+    colo_data->max_mem_pfn = dinfo->p2m_size;
+    colo_data->pfn_err = calloc(dinfo->p2m_size, sizeof(int));
+    if (!colo_data->pfn_err) {
+        PERROR("Could not allocate memory for restore colo data");
+        goto err;
+    }
+
+    colo_data->xsh = xs_daemon_open();
+    if (!colo_data->xsh) {
+        PERROR("Cound not open xs daemon");
+        goto err;
+    }
+
+skip_hvm:
     dirty_pages = xc_hypercall_buffer_alloc_pages(xch, dirty_pages, NRPAGES(BITMAP_SIZE));
     colo_data->dirty_pages = dirty_pages;
 
     size = dinfo->p2m_size * PAGE_SIZE;
     colo_data->pagebase = malloc(size);
-    if (!colo_data->pfn_type_slaver || !colo_data->pfn_batch_slaver ||
-        !colo_data->pfn_type_batch_slaver || !colo_data->p2m_frame_list_temp ||
-        !colo_data->dirty_pages || !colo_data->pagebase) {
+    if (!colo_data->dirty_pages || !colo_data->pagebase) {
         PERROR("Could not allocate memory for restore colo data");
         goto err;
     }
@@ -264,6 +290,7 @@ static int update_memory(struct restore_data *comm_data,
     xc_interface *xch = comm_data->xch;
     int hvm = comm_data->hvm;
     struct xc_mmu *mmu = comm_data->mmu;
+    struct domain_info_context *dinfo = comm_data->dinfo;
     unsigned long *dirty_pages = colo_data->dirty_pages;
     char *pagebase = colo_data->pagebase;
     int pfn_err = 0;
@@ -272,8 +299,26 @@ static int update_memory(struct restore_data *comm_data,
     unsigned long mfn;
     char *pagebuff;
 
+    if (hvm && !colo_data->vm_mm) {
+        unsigned long *pfn_type = calloc(dinfo->p2m_size,
+                                         sizeof(unsigned long));
+        unsigned long k;
+
+        for (k = 0; k < dinfo->p2m_size; k++)
+            pfn_type[k] = k;
+
+        colo_data->vm_mm = xc_map_foreign_bulk(xch, dom, PROT_WRITE,
+                                               pfn_type,
+                                               colo_data->pfn_err,
+                                               dinfo->p2m_size);
+        if (!colo_data->vm_mm) {
+            PERROR("can't map vm total memory");
+            return 1;
+        }
+    }
+
     for (pfn = 0; pfn < max_mem_pfn; pfn++) {
-        if ( !test_bit(pfn, dirty_pages) )
+        if (!test_bit(pfn, dirty_pages))
             continue;
 
         pagetype = pfn_type[pfn] & XEN_DOMCTL_PFINFO_LTAB_MASK;
@@ -283,16 +328,27 @@ static int update_memory(struct restore_data *comm_data,
 
         mfn = comm_data->p2m[pfn];
         region_mfn_slaver = mfn;
-        region_base_slaver = xc_map_foreign_bulk(xch, dom,
-                                    PROT_WRITE, &region_mfn_slaver, &pfn_err, 1);
-        if (!region_base_slaver || pfn_err) {
-            PERROR("update_memory: xc_map_foreign_bulk failed");
-            return 1;
+        if (hvm) {
+            if (colo_data->pfn_err[pfn]) {
+                ERROR("update_memory: xc_map_foreign_bulk failed");
+                return 1;
+            }
+            region_base_slaver = colo_data->vm_mm + pfn * PAGE_SIZE;
+        } else {
+            region_base_slaver = xc_map_foreign_bulk(xch, dom,
+                                                     PROT_WRITE,
+                                                     &region_mfn_slaver,
+                                                     &pfn_err, 1);
+            if (!region_base_slaver || pfn_err) {
+                PERROR("update_memory: xc_map_foreign_bulk failed");
+                return 1;
+            }
         }
 
         pagebuff = (char *)(pagebase + pfn * PAGE_SIZE);
         memcpy(region_base_slaver, pagebuff, PAGE_SIZE);
-        munmap(region_base_slaver, PAGE_SIZE);
+        if (!hvm)
+            munmap(region_base_slaver, PAGE_SIZE);
 
         if (!hvm &&
             xc_add_mmu_update(xch, mmu,
@@ -454,19 +510,23 @@ int flush_memory(struct restore_data *comm_data, void *data)
 {
     struct restore_colo_data *colo_data = data;
 
-    if (pin_l1(comm_data, colo_data) != 0)
-        return -1;
-    if (unpin_pagetable(comm_data, colo_data) != 0)
-        return -1;
+    if (!comm_data->hvm) {
+        if (pin_l1(comm_data, colo_data) != 0)
+            return -1;
+        if (unpin_pagetable(comm_data, colo_data) != 0)
+            return -1;
+    }
     if (update_memory(comm_data, colo_data) != 0)
         return -1;
-    if (pin_pagetable(comm_data, colo_data) != 0)
-        return -1;
-    if (unpin_l1(comm_data, colo_data) != 0)
-        return -1;
+    if (!comm_data->hvm) {
+        if (pin_pagetable(comm_data, colo_data) != 0)
+            return -1;
+        if (unpin_l1(comm_data, colo_data) != 0)
+            return -1;
 
-    memcpy(colo_data->pfn_type_slaver, comm_data->pfn_type,
-           comm_data->dinfo->p2m_size * sizeof(xen_pfn_t));
+        memcpy(colo_data->pfn_type_slaver, comm_data->pfn_type,
+               comm_data->dinfo->p2m_size * sizeof(xen_pfn_t));
+    }
 
     return 0;
 }
@@ -593,6 +653,7 @@ int finish_colo(struct restore_data *comm_data, void *data)
     unsigned long *pfn_batch_slaver = colo_data->pfn_batch_slaver;
     unsigned long *pfn_type_batch_slaver = colo_data->pfn_type_batch_slaver;
     unsigned long *pfn_type_slaver = colo_data->pfn_type_slaver;
+    struct xs_handle *xsh = colo_data->xsh;
     DECLARE_HYPERCALL;
 
     unsigned long i, j;
@@ -681,6 +742,11 @@ int finish_colo(struct restore_data *comm_data, void *data)
         return -1;
     }
 
+    if (comm_data->hvm && xc_suspend_qemu(xch, xsh, dom) < 0) {
+        ERROR("suspending qemu fails");
+        return -1;
+    }
+
     /* notify python code suspend is done */
     printf("suspend\n");
     fflush(stdout);
@@ -707,6 +773,11 @@ int finish_colo(struct restore_data *comm_data, void *data)
     {
         ERROR("disabling dirty-log fails");
         return -1;
+    }
+
+    if (comm_data->hvm) {
+        colo_data->first_time = 0;
+        return 1;
     }
 
     j = 0;
