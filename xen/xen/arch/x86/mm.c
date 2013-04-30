@@ -5674,6 +5674,15 @@ int do_mfncopy_op(unsigned long mfn, unsigned long pagebuff)
     return 0;
 }
 
+int is_slaver = -1;
+/*slaver must set is_slaver=1*/
+int do_which_side_op(unsigned long is_set)
+{
+    if (is_set)
+        is_slaver = is_set;
+    return is_slaver;
+}
+
 /*
  * Local variables:
  * mode: C

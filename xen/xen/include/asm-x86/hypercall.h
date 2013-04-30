@@ -109,6 +109,10 @@ extern int
 do_mfncopy_op(
     unsigned long mfn, unsigned long pagebuff);
 
+extern int
+do_which_side_op(
+    unsigned long is_set);
+
 #ifdef __x86_64__
 
 extern long
