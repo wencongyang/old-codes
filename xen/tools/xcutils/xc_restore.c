@@ -27,7 +27,6 @@ main(int argc, char **argv)
     unsigned long store_mfn, console_mfn;
     struct restore_callbacks callback, *callback_p;
     int colo = 0;
-    char str[10];
     FILE *fp;
 
     fp = fopen("/root/yewei/2.txt", "w");
@@ -64,16 +63,6 @@ main(int argc, char **argv)
 
     fprintf(fp, "store_evtchn : %d\n", store_evtchn);
     fprintf(fp, "console_evtchn: %d\n", console_evtchn);
-
-    scanf("%s", str);
-    fprintf(fp, "receive %s\n", str);
-
-    scanf("%s", str);
-    fprintf(fp, "receive %s\n", str);
-
-    scanf("%s", str);
-    fprintf(fp, "receive %s\n", str);
-    fflush(fp);
 
     if ( colo )
     {

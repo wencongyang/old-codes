@@ -822,17 +822,6 @@ int finish_colo(struct restore_data *comm_data, void *data)
     if (strcmp(str, "start"))
         return -1;
 
-    fprintf(colo_data->fp, "read %s from python\n", str);
-    fflush(colo_data->fp);
-
-    scanf("%s", str);
-    fprintf(colo_data->fp, "read %s from python\n", str);
-    fflush(colo_data->fp);
-
-    scanf("%s", str);
-    fprintf(colo_data->fp, "read %s from python\n", str);
-    fflush(colo_data->fp);
-
     memset(colo_data->dirty_pages, 0x0, BITMAP_SIZE);
     if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_CLEAN,
                           HYPERCALL_BUFFER(dirty_pages), dinfo->p2m_size,

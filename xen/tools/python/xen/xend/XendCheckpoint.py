@@ -363,14 +363,6 @@ class RestoreHandler:
             log.debug("write %s to %s" % (str, target))
         elif op == "read":
             log.debug("read %s from %s" % (str, target))
-    def start(self, child):
-        self.log("write", "xc_restore", "start")
-        child.tochild.write("start\n")
-        child.tochild.flush()
-        child.tochild.write("%s\n" % self.store_port)
-        child.tochild.flush()
-        child.tochild.write("%s\n" % self.console_port)
-        child.tochild.flush()
 
     def resume(self, finish, paused, child):
         log.debug("call resume...")
@@ -466,10 +458,6 @@ class RestoreHandler:
             self.log("write", "xc_restore", "start")
             child.tochild.write("start\n")
             child.tochild.flush()
-            child.tochild.write("%s\n" % self.store_port)
-            child.tochild.flush()
-            child.tochild.write("%s\n" % self.console_port)
-            child.tochild.flush()
 
             self.firsttime = False
 
@@ -505,7 +493,6 @@ def forkHelper(cmd, fd, inputHandler, closeToChild, restoreHandler):
 
     thread = threading.Thread(target = slurp, args = (child.childerr,))
     thread.start()
-    restoreHandler.start(child)
 
     try:
         try:
