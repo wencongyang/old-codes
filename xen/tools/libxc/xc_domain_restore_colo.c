@@ -73,7 +73,7 @@ int restore_colo_init(struct restore_data *comm_data, void **data)
     colo_data->pfn_type_slaver = calloc(dinfo->p2m_size, sizeof(xen_pfn_t));
     colo_data->pfn_batch_slaver = calloc(MAX_BATCH_SIZE, sizeof(xen_pfn_t));
     colo_data->pfn_type_batch_slaver = calloc(MAX_BATCH_SIZE, sizeof(xen_pfn_t));
-    colo_data->p2m_frame_list_temp = malloc(P2M_FL_ENTRIES);
+    colo_data->p2m_frame_list_temp = malloc(P2M_FL_ENTRIES * sizeof(unsigned long));
     if (!colo_data->pfn_type_slaver || !colo_data->pfn_batch_slaver ||
         !colo_data->pfn_type_batch_slaver || !colo_data->p2m_frame_list_temp) {
         PERROR("Could not allocate memory for restore colo data");
@@ -607,7 +607,7 @@ int update_p2m_table(struct restore_data *comm_data, void *data)
         pfn = p2m_frame_list[i];
         if ((pfn >= dinfo->p2m_size) || (pfn_type[pfn] != XEN_DOMCTL_PFINFO_NOTAB))
         {
-            ERROR("PFN-to-MFN frame number %i (%#lx) is bad", i, pfn);
+            ERROR("PFN-to-MFN frame number %li (%#lx) is bad", i, pfn);
             return -1;
         }
 
