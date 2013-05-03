@@ -3178,7 +3178,7 @@ void shadow_teardown(struct domain *d)
     mfn_t mfn;
     struct page_info *unpaged_pagetable = NULL;
 
-    //ASSERT(d->is_dying);
+    ASSERT(d->is_dying);
     ASSERT(d != current->domain);
 
     if ( !shadow_locked_by_me(d) )
