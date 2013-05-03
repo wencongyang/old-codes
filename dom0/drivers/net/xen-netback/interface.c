@@ -348,13 +348,14 @@ err:
 }
 
 extern int suspended_count;
+extern int is_resumed ;
 void xenvif_disconnect(struct xenvif *vif)
 {
 	struct net_device *dev = vif->dev;
 	if (netif_carrier_ok(dev)) {
 		rtnl_lock();
 		netif_carrier_off(dev); /* discard queued packets */
-		if (netif_running(dev))
+		if (is_resumed && netif_running(dev))
 			xenvif_down(vif);
 		rtnl_unlock();
 		xenvif_put(vif);
@@ -365,7 +366,7 @@ void xenvif_disconnect(struct xenvif *vif)
 
 	del_timer_sync(&vif->credit_timeout);
 
-	if (vif->irq)
+	if (is_resumed && vif->irq)
 		unbind_from_irqhandler(vif->irq, vif);
 	if (vif->fast)
 		unbind_from_irqhandler(vif->fast, vif);
@@ -374,7 +375,8 @@ void xenvif_disconnect(struct xenvif *vif)
 
 	unregister_netdev(vif->dev);
 
-	xen_netbk_unmap_frontend_rings(vif);
+	if (is_resumed)
+		xen_netbk_unmap_frontend_rings(vif);
 
 	free_netdev(vif->dev);
 }
