@@ -127,8 +127,8 @@ class Keepalive(object):
 
 class Saver(object):
     def __init__(self, domid, fd, suspendcb=None, resumecb=None,
-                 checkpointcb=None, setupcb=None, interval=0, flags=0,
-                 colo=False):
+                 checkpointcb=None, setupcb=None, checkcb=None,interval=0,
+                 flags=0, colo=False):
         """Create a Saver object for taking guest checkpoints.
         domid:        name, number or UUID of a running domain
         fd:           a stream to which checkpoint data will be written.
@@ -137,6 +137,9 @@ class Saver(object):
         checkpointcb: callback invoked when a checkpoint is complete. Return
                       True to take another checkpoint, or False to stop.
         setupcb:      callback invoked to configure network for colo
+        checkcb:      callback invoked when a checkpoint is complete. Return
+                      True to take another checkpoint. It will be invoked many
+                      times when a checkpoint is complete.
         flags:        Remus flags to be passed to xc_domain_save
         colo:         use colo mode
         """
@@ -146,6 +149,7 @@ class Saver(object):
         self.checkpointcb = checkpointcb
         self.interval = interval
         self.setupcb = setupcb
+        self.checkcb = checkcb
         self.flags = flags
         self.colo = colo
 
@@ -165,7 +169,7 @@ class Saver(object):
             self.checkpointer.open(self.vm.domid)
             self.checkpointer.start(self.fd, self.suspendcb, self.resumecb,
                                     self.checkpointcb, self.setupcb,
-                                    self.interval, self.flags)
+                                    self.checkcb, self.interval, self.flags)
             self.checkpointer.close()
         except xen.lowlevel.checkpoint.error, e:
             raise CheckpointError(e)

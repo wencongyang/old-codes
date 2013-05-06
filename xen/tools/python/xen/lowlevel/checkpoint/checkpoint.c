@@ -33,6 +33,7 @@ typedef struct {
   PyObject* postcopy_cb;
   PyObject* checkpoint_cb;
   PyObject* setup_cb;
+  PyObject* check_cb;
 
   PyThreadState* threadstate;
   int colo;
@@ -105,6 +106,8 @@ static PyObject* pycheckpoint_close(PyObject* obj, PyObject* args)
   self->checkpoint_cb = NULL;
   Py_XDECREF(self->setup_cb);
   self->setup_cb = NULL;
+  Py_XDECREF(self->check_cb);
+  self->check_cb = NULL;
 
   Py_INCREF(Py_None);
   return Py_None;
@@ -118,6 +121,7 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   PyObject* postcopy_cb = NULL;
   PyObject* checkpoint_cb = NULL;
   PyObject* setup_cb = NULL;
+  PyObject* check_cb = NULL;
   unsigned int interval = 0;
 
   int fd;
@@ -125,8 +129,8 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   int rc;
   int flags = 0;
 
-  if (!PyArg_ParseTuple(args, "O|OOOOII", &iofile, &suspend_cb, &postcopy_cb,
-                       &checkpoint_cb, &setup_cb, &interval, &flags))
+  if (!PyArg_ParseTuple(args, "O|OOOOOII", &iofile, &suspend_cb, &postcopy_cb,
+                       &checkpoint_cb, &setup_cb, &check_cb, &interval, &flags))
     return NULL;
 
   self->interval = interval;
@@ -136,6 +140,7 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   Py_XINCREF(postcopy_cb);
   Py_XINCREF(checkpoint_cb);
   Py_XINCREF(setup_cb);
+  Py_XINCREF(check_cb);
 
   fd = PyObject_AsFileDescriptor(iofile);
   Py_DECREF(iofile);
@@ -186,10 +191,20 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
     self->colo = 0;
   self->first_time = 1;
 
+  if (check_cb && check_cb != Py_None) {
+    if (!PyCallable_Check(check_cb)) {
+      PyErr_SetString(PyExc_TypeError, "check callback not callable");
+      return NULL;
+    }
+    self->check_cb = check_cb;
+  } else
+    self->check_cb = NULL;
+
   callbacks.suspend = suspend_trampoline;
   callbacks.postcopy = postcopy_trampoline;
   callbacks.checkpoint = checkpoint_trampoline;
   callbacks.post_sendstate = post_sendstate_trampoline;
+  callbacks.check = check_trampoline;
   callbacks.data = self;
 
   self->threadstate = PyEval_SaveThread();
@@ -213,6 +228,8 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   Py_XDECREF(checkpoint_cb);
   self->setup_cb = NULL;
   Py_XDECREF(self->setup_cb);
+  self->check_cb = NULL;
+  Py_XDECREF(check_cb);
 
   return NULL;
 }
@@ -499,6 +516,7 @@ static void wait_new_checkpoint(CheckpointObject *self)
 {
     int dev_fd = self->dev_fd;
     int err;
+    PyObject* result;
 
     while (1) {
         err = ioctl(dev_fd, COMP_IOCTWAIT);
@@ -508,6 +526,23 @@ static void wait_new_checkpoint(CheckpointObject *self)
         if (err == -1 && errno != ERESTART) {
             fprintf(stderr, "ioctl() returns -1, errno: %d\n", errno);
         }
+
+        if (!self->check_cb)
+            continue;
+
+        PyEval_RestoreThread(self->threadstate);
+        result = PyObject_CallFunction(self->check_cb, NULL);
+        self->threadstate = PyEval_SaveThread();
+
+        if (!result)
+            continue;
+
+        if (result == Py_None || PyObject_IsTrue(result)) {
+            Py_DECREF(result);
+            break;
+        }
+
+        Py_DECREF(result);
     }
 
     syscall(NR_vif_block, 1);

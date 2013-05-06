@@ -199,6 +199,16 @@ def run(cfg):
         # False ends checkpointing
         return True
 
+    def check():
+        'return true if we need to do a checkpoint'
+        ret = False
+        for buf in bufs:
+            if buf.check():
+                ret = True
+                break
+        return ret
+
+
     if cfg.timer:
         interval = cfg.interval
     else:
@@ -207,7 +217,7 @@ def run(cfg):
     rc = 0
 
     checkpointer = save.Saver(cfg.domid, fd, postsuspend, preresume, commit,
-                              setup, interval, cfg.flags, cfg.colo)
+                              setup, check, interval, cfg.flags, cfg.colo)
 
     try:
         checkpointer.start()
