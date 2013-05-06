@@ -17,6 +17,7 @@
 #define COMP_IOCTFLUSH    _IO(COMP_IOC_MAGIC, 1)
 #define COMP_IOCTRESUME   _IO(COMP_IOC_MAGIC, 2)
 #define NR_wait_resume 312
+#define NR_vif_block   313
 
 static PyObject* CheckpointError;
 
@@ -472,6 +473,7 @@ static int colo_postresume(CheckpointObject *self)
     } else {
         fprintf(stderr, "notify compare module to resume\n");
         ioctl(dev_fd, COMP_IOCTRESUME);
+        syscall(NR_vif_block, 1);
     }
 
     return 0;
@@ -507,6 +509,8 @@ static void wait_new_checkpoint(CheckpointObject *self)
             fprintf(stderr, "ioctl() returns -1, errno: %d\n", errno);
         }
     }
+
+    syscall(NR_vif_block, 1);
 }
 
 /* private functions */
