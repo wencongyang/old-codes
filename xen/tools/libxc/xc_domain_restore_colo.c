@@ -125,6 +125,8 @@ skip_hvm:
     hypercall.arg[0] = (unsigned long)comm_data->dom;
     do_xen_hypercall(xch, &hypercall);
 
+    colo_data->fp = fopen("/root/yewei/1.txt", "w");
+
     return 0;
 
 err:
