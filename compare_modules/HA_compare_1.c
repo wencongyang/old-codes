@@ -227,6 +227,7 @@ static void debug_print(const unsigned char* p)
 	unsigned int XID;
 	unsigned int stamp;
 	unsigned short len;
+	unsigned int doff;
 
 	t = &protocol;
 	*t = *((unsigned char *)(p + 23));
@@ -288,6 +289,8 @@ static void debug_print(const unsigned char* p)
 		*(t+1) = *((unsigned char *)(p + 44));
 		*t = *((unsigned char *)(p + 45));
 
+		doff = ((*(unsigned char *)(p + 46) & 0xf0) >> 4) * 4;
+
 		debug_print_ip(p+14);
 		printk(KERN_DEBUG "HA_compare:[TCP] src=%u, dst=%u, seq = %u, ack=%u\n",
 					src_port, dst_port, seq, ack);
@@ -305,7 +308,7 @@ static void debug_print(const unsigned char* p)
 //		printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
 //			n[24], n[25], n[26], n[27], n[28], n[29], n[30], n[31]);
 		/* TCP options */
-		for (i = 54; i< len + 14; i++) {
+		for (i = 54; i< doff + 34; i++) {
 			int j;
 			if (p[i] == 0)
 				break;
