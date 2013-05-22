@@ -20,6 +20,9 @@
 #include <linux/sched.h>
 #include <net/pkt_sched.h>
 #include <asm/ioctl.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
 #include "hash.h"
 
 typedef void (*PTRFUN)(int id);
@@ -198,187 +201,224 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-static void debug_print_ip(const unsigned char* p)
+static void debug_print_packet(const unsigned char *n, unsigned int doff)
 {
-	unsigned char *t;
-	unsigned short len;
-	unsigned short id;
+	int i, j;
 
-	t = (unsigned char *)&len;
-	*(t+1) = *((unsigned char *)(p + 2));
-	*t = *((unsigned char *)(p + 3));
+	printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
+		n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7]);
+	printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
+		n[8], n[9], n[10], n[11], n[12], n[13], n[14], n[15]);
+	printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\n",
+		n[16], n[17], n[18], n[19]);
 
-	t = (unsigned char *)&id;
-	*(t+1) = *((unsigned char *)(p + 4));
-	*t = *((unsigned char *)(p + 5));
+	/* TCP options */
+	for (i = 20; i < doff; i++) {
+		if (n[i] == 0)
+			break;
 
-	printk("HA_compare:[IP]len = %u, id= %u.\n", len, id);
+		if (n[i] == 1) {
+			/* nop */
+			printk(KERN_DEBUG "HA_compare: nop\n");
+			continue;
+		}
+
+		printk(KERN_DEBUG "HA_compare:");
+		for (j = i; j < i + n[i+1]; j++) {
+			printk(KERN_CONT " %02x", (unsigned int)n[j]);
+		}
+		printk(KERN_CONT "\n");
+
+		i += n[i+1] - 1;
+	}
 }
 
-static void debug_print(const unsigned char* p)
+static void debug_print_ip(const struct iphdr *ip)
 {
-	int i;
-	unsigned char n[50], *t;
-	unsigned short id;
-	unsigned short src_port;
-	unsigned short dst_port;
-	unsigned int ack, seq;
-	unsigned char protocol;
-	unsigned int XID;
-	unsigned int stamp;
-	unsigned short len;
-	unsigned int doff;
+	unsigned short len = htons(ip->tot_len);
+	unsigned short id = htons(ip->id);
+	unsigned char protocol = ip->protocol;
+	void *packet = (char *)ip + ip->ihl * 4;
+	unsigned short src_port, dst_port;
 
-	t = &protocol;
-	*t = *((unsigned char *)(p + 23));
+	printk("HA_compare:[IP]len = %u, id= %u.\n", len, id);
 
-	t = (unsigned char *)&len;
-	*(t+1) = *((unsigned char *)(p+16));
-	*t = *((unsigned char *)(p+17));
+	if (protocol == IPPROTO_TCP) { // TCP
+		struct tcphdr *tcp = packet;
+		unsigned int ack, seq;
+		unsigned int doff;
 
-	printk("HA_compare:len = %d.\n", len);
+		src_port = htons(tcp->source);
+		dst_port = htons(tcp->dest);
+		ack = htonl(tcp->ack_seq);
+		seq = htonl(tcp->seq);
+		printk(KERN_DEBUG "HA_compare:[TCP] src=%u, dst=%u, seq = %u,"
+					" ack=%u\n", src_port, dst_port, seq,
+					ack);
 
-	if (protocol == 17) {// UDP
-		t = (unsigned char *)&src_port;
-		*(t+1) = *((unsigned char *)(p + 34));
-		*t = *((unsigned char *)(p + 35));
+		doff = tcp->doff * 4;
+		debug_print_packet(packet, doff);
 
-		t = (unsigned char *)&dst_port;
-		*(t+1) = *((unsigned char *)(p + 36));
-		*t = *((unsigned char *)(p + 37));
+	} else if (protocol == IPPROTO_UDP) { // UDP
+		struct udphdr *udp = packet;
 
-		t = (unsigned char *)&XID;
-		*(t+3) = *((unsigned char *)(p + 42));
-		*(t+2) = *((unsigned char *)(p + 43));
-		*(t+1) = *((unsigned char *)(p + 44));
-		*t = *((unsigned char *)(p + 45));
-
-		t = (unsigned char *)&stamp;
-		*(t+3) = *((unsigned char *)(p + 74));
-		*(t+2) = *((unsigned char *)(p + 75));
-		*(t+1) = *((unsigned char *)(p + 76));
-		*t = *((unsigned char *)(p + 77));
-
-		printk("HA_compare:[UDP] src=%u, dst=%u, XID=%u, stamp=%u\n",
-			src_port, dst_port, XID, stamp);
-
-		return;
-	} else if (protocol == 6) {// TCP
-
-		t = (unsigned char *)&id;
-		*(t+1) = *((unsigned char *)(p + 18));
-		*t = *((unsigned char *)(p + 19));
-
-		t = (unsigned char *)&src_port;
-		*(t+1) = *((unsigned char *)(p + 34));
-		*t = *((unsigned char *)(p + 35));
-
-		t = (unsigned char *)&dst_port;
-		*(t+1) = *((unsigned char *)(p + 36));
-		*t = *((unsigned char *)(p + 37));
-
-		t = (unsigned char *)&seq;
-		*(t+3) = *((unsigned char *)(p + 38));
-		*(t+2) = *((unsigned char *)(p + 39));
-		*(t+1) = *((unsigned char *)(p + 40));
-		*t = *((unsigned char *)(p + 41));
-
-		t = (unsigned char *)&ack;
-		*(t+3) = *((unsigned char *)(p + 42));
-		*(t+2) = *((unsigned char *)(p + 43));
-		*(t+1) = *((unsigned char *)(p + 44));
-		*t = *((unsigned char *)(p + 45));
-
-		doff = ((*(unsigned char *)(p + 46) & 0xf0) >> 4) * 4;
-
-		debug_print_ip(p+14);
-		printk(KERN_DEBUG "HA_compare:[TCP] src=%u, dst=%u, seq = %u, ack=%u\n",
-					src_port, dst_port, seq, ack);
-
-		for (i = 34; i < 34+20; i++)
-			n[i-34] = *((unsigned char *)(p + i));
-		printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
-			n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7]);
-		printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
-			n[8], n[9], n[10], n[11], n[12], n[13], n[14], n[15]);
-		printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\n",
-			n[16], n[17], n[18], n[19]);
-//		printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
-//			n[16], n[17], n[18], n[19], n[20], n[21], n[22], n[23]);
-//		printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
-//			n[24], n[25], n[26], n[27], n[28], n[29], n[30], n[31]);
-		/* TCP options */
-		for (i = 54; i< doff + 34; i++) {
-			int j;
-			if (p[i] == 0)
-				break;
-
-			if (p[i] == 1) {
-				/* nop */
-				printk(KERN_DEBUG "HA_compare: nop\n");
-				continue;
-			}
-
-			printk(KERN_DEBUG "HA_compare:");
-			for (j = i; j < i + p[i+1]; j++) {
-				printk(KERN_CONT " %02x", (unsigned int)p[j]);
-			}
-			printk(KERN_CONT "\n");
-
-			i += p[i+1] - 1;
-		}
-	}
-	else
+		src_port = htons(udp->source);
+		dst_port = htons(udp->dest);
+		printk("HA_compare:[UDP] src=%u, dst=%u\n", src_port, dst_port);
+	} else
 		printk("HA_compare: unkown protocol: %u\n", protocol);
 }
 
-static int same(const struct sk_buff *p, const struct sk_buff *q)
+static void reset_compare_status(void)
 {
-	int idx, lenp, lenq, len;
-	unsigned char *cp1, *cp2, *t;
-	unsigned char *bufp, *bufq;
+	same_count = 0;
+}
 
-	lenp = p->len;
-	lenq = q->len;
+static void print_header(void)
+{
+	printk("HA_compare: same=%u, last_id=%u\n", same_count, last_id);
+}
 
-	/*Only compare the eth header, ip header, tcp header firstly*/
-	lenp = (lenp > 50 ? 50 : lenp);
-	lenq = (lenq > 50 ? 50 : lenq);
+static int
+compare_other_packet(const void *master, const void *slaver, int length)
+{
+	return memcmp(master, slaver, length) ? 0 : 1;
+}
 
-	bufp = p->data;
-	bufq = q->data;
+static int
+compare_arp_packet(const char *master, const char *slaver, int length)
+{
+	/* TODO */
+	return compare_other_packet(master, slaver, length);
+}
 
-	len = lenp < lenq ? lenp : lenq;
+static int
+compare_tcp_packet(struct tcphdr *master, struct tcphdr *slaver,
+		   int length)
+{
+	int ret;
 
-	for (idx = 0; idx < len; idx++) {
-		if ( idx == 50 || idx == 51)
-			continue;
-		cp1 = (unsigned char*)(bufp + idx);
-		cp2 = (unsigned char*)(bufq + idx);
-		if (*cp1 != *cp2) {
-#if 1
-			printk("HA_compare: same=%u, last id=%u\n", same_count, last_id);
-			same_count = 0;
-			printk(KERN_DEBUG "HA_compare: diff at pos %d\n", idx);
-			printk(KERN_DEBUG "HA_compare: Master pkt:\n");
-			debug_print(bufp);
-			printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");
-			debug_print(bufq);
-			return 0;
-#else
-			return 1;
-#endif
-		}
+	ret = memcmp(master, slaver, 16);
+	if (ret) {
+		pr_warn("HA_compare: tcp header is different\n");
+		return 0;
 	}
 
-	t = (unsigned char *)&last_id;
-	*(t+1) = *((unsigned char *)(bufp + 18));
-	*t = *((unsigned char *)(bufp + 19));
-
-	same_count++;
 	return 1;
 }
 
+static int
+compare_ip_packet(struct iphdr *master, struct iphdr *slaver, int length)
+{
+	int ret;
+	void *master_packet, *slaver_packet;
+
+	if (unlikely(master->ihl * 4 > length)) {
+		pr_warn("HA_compare: master iphdr is corrupted\n");
+		return 0;
+	}
+
+	if (unlikely(slaver->ihl * 4 > length)) {
+		pr_warn("HA_compare: slaver iphdr is corrupted\n");
+		return 0;
+	}
+
+	if (unlikely(master->ihl != slaver->ihl)) {
+		pr_warn("HA_compare: iphdr length is different\n");
+		pr_warn("HA_compare: master ihl: %u\n", master->ihl);
+		pr_warn("HA_compare: slaver ihl: %u\n", slaver->ihl);
+		return 0;
+	}
+
+	ret = memcmp(master, slaver, master->ihl * 4);
+	if (ret) {
+		print_header();
+		pr_warn("HA_compare: iphdr is different\n");
+		printk(KERN_DEBUG "HA_compare: Master pkt:\n");
+		debug_print_ip(master);
+		printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");
+		debug_print_ip(slaver);
+		return 0;
+	}
+
+	master_packet = (char *)master + master->ihl * 4;
+	slaver_packet = (char *)slaver + slaver->ihl * 4;
+	length -= master->ihl * 4;
+	switch(master->protocol) {
+	case IPPROTO_TCP:
+		ret = compare_tcp_packet(master_packet, slaver_packet, length);
+		break;
+	case IPPROTO_UDP:
+		/* TODO */
+	default:
+//		pr_info("unknown protocol: %u", ntohs(master->protocol));
+		ret = compare_other_packet(master_packet, slaver_packet, length);
+	}
+	if (!ret) {
+		print_header();
+		printk(KERN_DEBUG "HA_compare: Master pkt:\n");
+		debug_print_ip(master);
+		printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");
+		debug_print_ip(slaver);
+	}
+	last_id = master->id;
+
+	return ret;
+}
+
+static int
+compare_skb(struct sk_buff *master, struct sk_buff *slaver)
+{
+	struct ethhdr *eth_master = (struct ethhdr *)master->data;
+	struct ethhdr *eth_slaver = (struct ethhdr *)slaver->data;
+	unsigned int master_length = master->len;
+	unsigned int slaver_length = slaver->len;
+	void *master_packet = master->data + sizeof(struct ethhdr);
+	void *slaver_packet = slaver->data + sizeof(struct ethhdr);
+	int ret, length;
+
+	if (unlikely(master_length < sizeof(struct ethhdr))) {
+		pr_warn("HA_compare: master packet is corrupted\n");
+		goto different;
+	}
+
+	if (unlikely(slaver_length < sizeof(struct ethhdr))) {
+		pr_warn("HA_compare: slaver packet is corrupted\n");
+		goto different;
+	}
+
+	length = min(master_length, slaver_length) - sizeof(struct ethhdr);
+
+	if (unlikely(eth_master->h_proto != eth_slaver->h_proto)) {
+		pr_warn("HA_compare: protocol in eth header is different\n");
+		pr_warn("HA_compare: master's protocol: %d\n", ntohs(eth_master->h_proto));
+		pr_warn("HA_compare: slaver's protocol: %d\n", ntohs(eth_slaver->h_proto));
+		goto different;
+	}
+
+	switch(ntohs(eth_master->h_proto)) {
+	case ETH_P_IP:
+		ret = compare_ip_packet(master_packet, slaver_packet, length);
+		break;
+	case ETH_P_ARP:
+		ret = compare_arp_packet(master_packet, slaver_packet, length);
+		break;
+	default:
+//		pr_debug("HA_compare: unexpected protocol: %d\n", eth_master->h_proto);
+		ret = compare_other_packet(master_packet, slaver_packet, length);
+	}
+	if (!ret) {
+		pr_warn("HA_compare: compare_xxx_packet() fails %04x\n", ntohs(eth_master->h_proto));
+		goto different;
+	}
+
+	same_count++;
+	return ret;
+
+different:
+	reset_compare_status();
+	return 0;
+}
 static void clear_slaver_queue(void)
 {
 	int i;
@@ -509,7 +549,7 @@ void update(int qlen)
 		spin_unlock(&slaver_queue->qlock_blo);
 		spin_unlock(&master_queue->qlock_blo);
 
-		if (same(skb_m, skb_s)) {
+		if (compare_skb(skb_m, skb_s)) {
 			/*
 			 *  Packets are the same, put skb_m to master_queue->rel for releasing,
 			 *  and also put skb_s to slaver_queue->rel, it will be freed by enqueue
