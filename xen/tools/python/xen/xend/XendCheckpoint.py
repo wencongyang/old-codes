@@ -407,12 +407,6 @@ class RestoreHandler:
             log.debug("calling xc.domain_resume %d" % dominfo.domid)
             log.debug("calling ResumeDomain")
             ResumeDomain(dominfo.domid)
-            if self.is_hvm:
-                util.runcmd('xenstore write /local/domain/0/device-model/%d/command continue' % dominfo.domid)
-                while True:
-                    state=util.runcmd('xenstore read /local/domain/0/device-model/%d/state' % dominfo.domid)
-                    if state.strip('\n') == "running":
-                        break
 
         if self.colo and not finish:
             self.log("write", "xc_restore", "resume")

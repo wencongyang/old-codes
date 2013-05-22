@@ -33,6 +33,8 @@ struct restore_colo_data
     int *pfn_err;
     char *vm_mm;
     struct xs_handle *xsh;
+    char command_path[50];
+    char state_path[50];
 
     /* debug */
     FILE *fp;
@@ -95,6 +97,11 @@ hvm:
         PERROR("Cound not open xs daemon");
         goto err;
     }
+
+    snprintf(colo_data->command_path, 50,
+             "/local/domain/0/device-model/%d/command", comm_data->dom);
+    snprintf(colo_data->state_path, 50,
+             "/local/domain/0/device-model/%d/state", comm_data->dom);
 
 skip_hvm:
     dirty_pages = xc_hypercall_buffer_alloc_pages(xch, dirty_pages, NRPAGES(BITMAP_SIZE));
@@ -680,6 +687,54 @@ static int update_pfn_type(xc_interface *xch, uint32_t dom, int count, xen_pfn_t
     return 0;
 }
 
+static int wait_qemu_dm(struct restore_colo_data *colo_data)
+{
+    struct xs_handle *xs = colo_data->xsh;
+    int ret;
+    char *path = colo_data->state_path;
+    int fd;
+    fd_set set;
+    unsigned int num;
+    char **vec;
+    xs_transaction_t th;
+    char *buf;
+    unsigned int len;
+
+    ret = xs_watch(xs, path, "colo");
+    if (!ret)
+        return 1;
+
+    fd = xs_fileno(xs);
+    while (1) {
+        ret = 1;
+        FD_ZERO(&set);
+        FD_SET(fd, &set);
+        if (select(fd + 1, &set, NULL, NULL, NULL) > 0 && FD_ISSET(fd, &set)) {
+            vec = xs_read_watch(xs, &num);
+            if (!vec)
+                goto out;
+
+            fprintf(colo_data->fp, "vec contents: %s|%s\n", vec[XS_WATCH_PATH], vec[XS_WATCH_TOKEN]);
+            fflush(colo_data->fp);
+            th = xs_transaction_start(xs);
+            buf = xs_read(xs, th, vec[XS_WATCH_PATH], &len);
+            xs_transaction_end(xs, th, false);
+            if (!buf)
+                goto out;
+
+            fprintf(colo_data->fp, "read \"%s\" from %s\n", buf, vec[XS_WATCH_PATH]);
+            fflush(colo_data->fp);
+            ret = strcmp(buf, "running");
+            if (!ret)
+                break;
+        }
+    }
+
+out:
+    xs_unwatch(xs, path, "colo");
+    return ret;
+}
+
 /* we are ready to start the guest when this functions is called. We
  * will return until we need to do a new checkpoint or some error occurs.
  *
@@ -756,6 +811,16 @@ int finish_colo(struct restore_data *comm_data, void *data)
     }
     fprintf(colo_data->fp, "read %s from python\n", str);
     fflush(colo_data->fp);
+
+    if (!colo_data->first_time && comm_data->hvm) {
+        xs_write(colo_data->xsh, XBT_NULL, colo_data->command_path,
+                 "continue", 8);
+        rc = wait_qemu_dm(colo_data);
+        if (rc != 0) {
+            ERROR("waiting qemu-dm resume");
+            return -1;
+        }
+    }
 
     while(1) {
         rc = syscall(NR_wait_resume);
