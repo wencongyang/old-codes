@@ -416,7 +416,7 @@ class RestoreHandler:
 
         if self.colo and not finish:
             self.log("write", "xc_restore", "resume")
-            child.tochild.write("resume\n")
+            child.tochild.write("resume")
             child.tochild.flush()
             buf = child.fromchild.readline()
             if buf != "resume\n":
@@ -436,7 +436,7 @@ class RestoreHandler:
             self.log("read", "master", "continue")
 
             self.log("write", "xc_restore", "suspend")
-            child.tochild.write("suspend\n")
+            child.tochild.write("suspend")
             child.tochild.flush()
             buf = child.fromchild.readline()
             if buf != "suspend\n":
@@ -456,7 +456,7 @@ class RestoreHandler:
             dominfo.console_port = self.console_port
 
             self.log("write", "xc_restore", "start")
-            child.tochild.write("start\n")
+            child.tochild.write("start")
             child.tochild.flush()
 
             self.firsttime = False

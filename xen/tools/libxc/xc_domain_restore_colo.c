@@ -747,7 +747,8 @@ int finish_colo(struct restore_data *comm_data, void *data)
     }
 
     /* wait domain resume, then connect the suspend evtchn */
-    scanf("%s", str);
+    read_exact(0, str, 6);
+    str[6] = '\0';
     if (strcmp(str, "resume"))
     {
         ERROR("read %s, expect resume", str);
@@ -786,7 +787,8 @@ int finish_colo(struct restore_data *comm_data, void *data)
     }
 
     /* wait for the next checkpoint */
-    scanf("%s", str);
+    read_exact(0, str, 7);
+    str[7] = '\0';
     if (strcmp(str, "suspend"))
     {
         ERROR("wait for a new checkpoint fails");
@@ -818,8 +820,8 @@ int finish_colo(struct restore_data *comm_data, void *data)
     printf("suspend\n");
     fflush(stdout);
 
-    scanf("%s", str);
-
+    read_exact(0, str, 5);
+    str[5] = '\0';
     if (strcmp(str, "start"))
         return -1;
 
