@@ -204,7 +204,6 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   callbacks.postcopy = postcopy_trampoline;
   callbacks.checkpoint = checkpoint_trampoline;
   callbacks.post_sendstate = post_sendstate_trampoline;
-  callbacks.check = check_trampoline;
   callbacks.data = self;
 
   self->threadstate = PyEval_SaveThread();
@@ -523,8 +522,11 @@ static void wait_new_checkpoint(CheckpointObject *self)
         if (err == 0)
             break;
 
-        if (err == -1 && errno != ERESTART) {
-            fprintf(stderr, "ioctl() returns -1, errno: %d\n", errno);
+        if (err == -1) {
+            if (errno != ETIME && errno != ERESTART) {
+                fprintf(stderr, "ioctl() returns -1, errno: %d\n", errno);
+                break;
+            }
         }
 
         if (!self->check_cb)
