@@ -25,6 +25,10 @@
 #include <linux/udp.h>
 #include "hash.h"
 
+bool ignore_id = 1;
+module_param(ignore_id, bool, 0644);
+MODULE_PARM_DESC(ignore_id, "bypass id difference");
+
 typedef void (*PTRFUN)(int id);
 int cmp_open(struct inode*, struct file*);
 int cmp_release(struct inode*, struct file*);
@@ -348,17 +352,32 @@ compare_ip_packet(struct iphdr *master, struct iphdr *slaver, int length)
 		return 0;
 	}
 
-	if (unlikely(master->ihl != slaver->ihl)) {
-		pr_warn("HA_compare: iphdr length is different\n");
-		pr_warn("HA_compare: master ihl: %u\n", master->ihl);
-		pr_warn("HA_compare: slaver ihl: %u\n", slaver->ihl);
-		return 0;
+#define compare(elem)							\
+	if (unlikely(master->elem != slaver->elem)) {			\
+		pr_warn("HA_compare: iphdr's %s is different\n",	\
+			#elem);\
+		pr_warn("HA_compare: master %s: %u\n", #elem,		\
+			master->elem);					\
+		pr_warn("HA_compare: slaver %s: %u\n", #elem,		\
+			slaver->elem);					\
+		print_header();						\
+		printk(KERN_DEBUG "HA_compare: Master pkt:\n");		\
+		debug_print_ip(master);					\
+		printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");		\
+		debug_print_ip(slaver);					\
+		return 0;						\
 	}
 
-	ret = memcmp(master, slaver, master->ihl * 4);
-	if (ret) {
+	compare(version);
+	compare(ihl);
+	compare(protocol);
+	compare(saddr);
+	compare(daddr);
+
+	/* IP options */
+	if (memcmp((char *)master+20, (char*)slaver+20, master->ihl*4 - 20)) {
+		pr_warn("HA_compare: iphdr option is different\n");
 		print_header();
-		pr_warn("HA_compare: iphdr is different\n");
 		printk(KERN_DEBUG "HA_compare: Master pkt:\n");
 		debug_print_ip(master);
 		printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");
@@ -385,10 +404,22 @@ compare_ip_packet(struct iphdr *master, struct iphdr *slaver, int length)
 		debug_print_ip(master);
 		printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");
 		debug_print_ip(slaver);
+		return 0;
 	}
+	compare(tos);
+	compare(tot_len);
+	compare(frag_off);
+	compare(ttl);
+	if (!ignore_id) {
+		compare(id);
+		compare(check);
+	}
+
+#undef compare
+
 	last_id = master->id;
 
-	return ret;
+	return 1;
 }
 
 static int
