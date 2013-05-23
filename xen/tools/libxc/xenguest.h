@@ -100,6 +100,8 @@ struct restore_callbacks {
      * to the guest. Update the guest's pagetable if necessary.
      */
     int (*flush_memory)(struct restore_data *comm_data, void *data);
+    /* callback to clear a page */
+    int (*hvm_clear_page)(struct restore_data *comm_data, void *data, unsigned long pfn);
     /* callback to update the guest's p2m table */
     int (*update_p2m)(struct restore_data *comm_data, void *data);
     /* callback to finish restore process. It is called before xc_domain_restore()

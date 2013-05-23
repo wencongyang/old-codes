@@ -8,6 +8,7 @@ extern int restore_colo_init(struct restore_data *, void **);
 extern void restore_colo_free(struct restore_data *, void *);
 extern char* get_page(struct restore_data *, void *, unsigned long);
 extern int flush_memory(struct restore_data *, void *);
+extern int colo_hvm_clear_page(struct restore_data *, void *, unsigned long pfn);
 extern int update_p2m_table(struct restore_data *, void *);
 extern int finish_colo(struct restore_data *, void *);
 

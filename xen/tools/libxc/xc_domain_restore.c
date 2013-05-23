@@ -1938,10 +1938,16 @@ getpages:
     fprintf(fp, "dump_qemu finishs\n");
     fflush(fp);
 
+#define hvm_xc_clear_domain_page(x,d,p) ({					\
+    (callbacks && callbacks->hvm_clear_page) ?					\
+      callbacks->hvm_clear_page(&callbacks->comm_data, callbacks->data, p)	\
+    : xc_clear_domain_page(x,d,p);						\
+})
+
     /* These comms pages need to be zeroed at the start of day */
-    if ( xc_clear_domain_page(xch, dom, tailbuf.u.hvm.magicpfns[0]) ||
-         xc_clear_domain_page(xch, dom, tailbuf.u.hvm.magicpfns[1]) ||
-         xc_clear_domain_page(xch, dom, tailbuf.u.hvm.magicpfns[2]) )
+    if ( hvm_xc_clear_domain_page(xch, dom, tailbuf.u.hvm.magicpfns[0]) ||
+         hvm_xc_clear_domain_page(xch, dom, tailbuf.u.hvm.magicpfns[1]) ||
+         hvm_xc_clear_domain_page(xch, dom, tailbuf.u.hvm.magicpfns[2]) )
     {
         PERROR("error zeroing magic pages");
         goto out;
@@ -1977,7 +1983,7 @@ skip_set_hvm_param:
     callbacks->comm_data.store_mfn = *store_mfn;
 
     if ( console_pfn ) {
-        if ( xc_clear_domain_page(xch, dom, console_pfn) ) {
+        if ( hvm_xc_clear_domain_page(xch, dom, console_pfn) ) {
             PERROR("error zeroing console page");
             goto out;
         }

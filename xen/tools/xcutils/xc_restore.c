@@ -70,6 +70,7 @@ main(int argc, char **argv)
         callback.free = restore_colo_free;
         callback.get_page = get_page;
         callback.flush_memory = flush_memory;
+        callback.hvm_clear_page = hvm ? colo_hvm_clear_page : NULL;
         callback.update_p2m = update_p2m_table;
         callback.finish_restotre = finish_colo;
         callback.data = NULL;

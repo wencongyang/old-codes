@@ -590,6 +590,18 @@ int flush_memory(struct restore_data *comm_data, void *data)
     return 0;
 }
 
+int colo_hvm_clear_page(struct restore_data *comm_data,
+                        void *data, unsigned long pfn)
+{
+    struct restore_colo_data *colo_data = data;
+
+    if (!comm_data->hvm || !colo_data->vm_mm)
+        return -1;
+
+    memset(colo_data->vm_mm + pfn * PAGE_SIZE, 0, PAGE_SIZE);
+    return 0;
+}
+
 int update_p2m_table(struct restore_data *comm_data, void *data)
 {
     struct restore_colo_data *colo_data = data;
