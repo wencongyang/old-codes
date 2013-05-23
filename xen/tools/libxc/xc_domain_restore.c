@@ -44,6 +44,7 @@ struct restore_ctx {
     int completed; /* Set when a consistent image is available */
     int last_checkpoint; /* Set when we should commit to the current checkpoint when it completes. */
     struct domain_info_context dinfo;
+    struct restore_callbacks *callbacks;
 };
 
 #define HEARTBEAT_MS 1000
@@ -59,7 +60,8 @@ static ssize_t rdexact(xc_interface *xch, struct restore_ctx *ctx,
 
     while ( offset < size )
     {
-        if ( ctx->completed ) {
+        /* when ctx->callbacks, heartbeat is implement outside */
+        if ( ctx->completed && !ctx->callbacks ) {
             /* expect a heartbeat every HEARBEAT_MS ms maximum */
             tv.tv_sec = HEARTBEAT_MS / 1000;
             tv.tv_usec = (HEARTBEAT_MS % 1000) * 1000;
@@ -1311,6 +1313,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         }
         data = callbacks->data;
     }
+    ctx->callbacks = callbacks;
 
     xc_report_progress_start(xch, "Reloading memory pages", dinfo->p2m_size);
 
