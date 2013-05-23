@@ -657,6 +657,7 @@ typedef struct {
     void* pages;
     /* pages is of length nr_physpages, pfn_types is of length nr_pages */
     unsigned int nr_physpages, nr_pages;
+    unsigned int max_pages;
 
     /* Types of the pfns in the current region */
     unsigned long* pfn_types;
@@ -847,12 +848,13 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
             ERROR("Could not allocate page buffer");
             return -1;
         }
-    } else {
+    } else if (buf->nr_physpages > buf->max_pages) {
         if (!(ptmp = realloc(buf->pages, buf->nr_physpages * PAGE_SIZE))) {
             ERROR("Could not reallocate page buffer");
             return -1;
         }
         buf->pages = ptmp;
+        buf->max_pages = buf->nr_physpages;
     }
     if ( RDEXACT(fd, buf->pages + oldcount * PAGE_SIZE, countpages * PAGE_SIZE) ) {
         PERROR("Error when reading pages");
