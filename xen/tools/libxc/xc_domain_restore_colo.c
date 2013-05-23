@@ -722,30 +722,29 @@ int finish_colo(struct restore_data *comm_data, void *data)
     printf("store-mfn %li\n", comm_data->store_mfn);
     printf("console-mfn %li\n", comm_data->console_mfn);
 
-    /* we need to know which pages are dirty to restore the guest */
-    if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY, NULL,
-                          0, NULL, 0, NULL) < 0 )
-    {
-        rc = xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_OFF, NULL, 0,
-                               NULL, 0, NULL);
-        if (rc >= 0)
-        {
-            rc = xc_shadow_control(xch, dom,
-                                   XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY, NULL,
-                                   0, NULL, 0, NULL);
-        }
-        if (rc < 0)
-        {
-            ERROR("enabling logdirty fails");
-            return -1;
-        }
-    }
-
     /* notify python code checkpoint finish */
     printf("finish\n");
     fflush(stdout);
     fprintf(colo_data->fp, "write finish to python\n");
     fflush(colo_data->fp);
+
+    if (colo_data->first_time) {
+        /* we need to know which pages are dirty to restore the guest */
+        if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY,
+                              NULL, 0, NULL, 0, NULL) < 0 )
+        {
+            ERROR("enabling logdirty fails");
+            return -1;
+        }
+    } else {
+        if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_CLEAN,
+                              HYPERCALL_BUFFER(dirty_pages), dinfo->p2m_size,
+                              NULL, 0, NULL) != dinfo->p2m_size)
+        {
+            ERROR("clean slaver dirty fails");
+            return -1;
+        }
+    }
 
     /* wait domain resume, then connect the suspend evtchn */
     scanf("%s", str);
@@ -830,15 +829,6 @@ int finish_colo(struct restore_data *comm_data, void *data)
                           NULL, 0, NULL) != dinfo->p2m_size)
     {
         ERROR("getting slaver dirty fails");
-        return -1;
-    }
-
-    if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_OFF, NULL, 0, NULL,
-                          0, NULL) < 0 )
-    {
-        fprintf(colo_data->fp, "disabling dirty-log fails\n");
-        fflush(colo_data->fp);
-        ERROR("disabling dirty-log fails");
         return -1;
     }
 
