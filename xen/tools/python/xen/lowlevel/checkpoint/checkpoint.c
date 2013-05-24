@@ -499,9 +499,6 @@ static int pre_checkpoint(CheckpointObject *self)
 {
     xc_interface *xch = self->cps.xch;
 
-    if (!self->first_time)
-        return 0;
-
     self->dev_fd = open("/dev/HA_compare", O_RDWR);
     if (self->dev_fd < 0) {
         PERROR("opening /dev/HA_compare fails");
@@ -690,7 +687,7 @@ static int checkpoint_trampoline(void* data)
 
   PyObject* result;
 
-  if (self->colo) {
+  if (self->colo && self->first_time) {
     if (pre_checkpoint(self) < 0) {
       fprintf(stderr, "pre_checkpoint() fails\n");
       return -1;
