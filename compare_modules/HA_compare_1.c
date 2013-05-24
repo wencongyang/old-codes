@@ -29,6 +29,10 @@ bool ignore_id = 1;
 module_param(ignore_id, bool, 0644);
 MODULE_PARM_DESC(ignore_id, "bypass id difference");
 
+bool ignore_ack_packet = 1;
+module_param(ignore_ack_packet, bool, 0644);
+MODULE_PARM_DESC(ignore_ack_packet, "bypass ack only packet");
+
 typedef void (*PTRFUN)(int id);
 int cmp_open(struct inode*, struct file*);
 int cmp_release(struct inode*, struct file*);
@@ -335,6 +339,9 @@ compare_arp_packet(struct compare_info *m, struct compare_info *s)
 static int
 compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 {
+	int m_len, s_len;
+	int ret = 0;
+
 #define compare(elem)							\
 	if (unlikely(m->tcp->elem != s->tcp->elem)) {			\
 		pr_warn("HA_compare: tcp header's %s is different\n",	\
@@ -345,6 +352,16 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 	/* source port and dest port*/
 	compare(source);
 	compare(dest);
+
+	if (ignore_ack_packet) {
+		m_len = m->length - m->tcp->doff * 4;
+		s_len = s->length - s->tcp->doff * 4;
+		if (m_len == 0 && s_len != 0)
+			ret |= BYPASS_MASTER;
+
+		if (m_len != 0 && s_len == 0)
+			ret |= DROP_SLAVER;
+	}
 
 	/* Sequence Number */
 	compare(seq);
@@ -368,7 +385,7 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 
 #undef compare
 
-	return SAME_PACKET;
+	return ret ?:SAME_PACKET;
 }
 
 static int
@@ -412,9 +429,16 @@ compare_ip_packet(struct compare_info *m, struct compare_info *s)
 	}
 
 	m->ip_packet = (char *)m->ip + m->ip->ihl * 4;
-	m->length -= m->ip->ihl * 4;
+	if (m->length <= htons(m->ip->tot_len))
+		m->length -= m->ip->ihl * 4;
+	else
+		m->length = htons(m->ip->tot_len) - m->ip->ihl * 4;
 	s->ip_packet = (char *)s->ip + s->ip->ihl * 4;
-	s->length -= s->ip->ihl * 4;
+	if (s->length <= htons(s->ip->tot_len))
+		s->length -= s->ip->ihl * 4;
+	else
+		s->length = htons(s->ip->tot_len) - s->ip->ihl * 4;
+
 	switch(m->ip->protocol) {
 	case IPPROTO_TCP:
 		ret = compare_tcp_packet(m, s);
@@ -434,6 +458,10 @@ compare_ip_packet(struct compare_info *m, struct compare_info *s)
 		print_debuginfo(m, s);
 		return 0;
 	}
+
+	if (ret != SAME_PACKET)
+		return ret;
+
 	compare(tos);
 	compare(tot_len);
 	compare(frag_off);
