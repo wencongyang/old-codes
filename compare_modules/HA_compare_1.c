@@ -278,11 +278,6 @@ static void reset_compare_status(void)
 	same_count = 0;
 }
 
-static void print_header(void)
-{
-	printk("HA_compare: same=%u, last_id=%u\n", same_count, last_id);
-}
-
 /* compare_xxx_packet() returns:
  *   0: do a new checkpoint
  *   1: bypass the packet from master,
@@ -294,25 +289,54 @@ static void print_header(void)
 #define		DROP_SLAVER		0x02
 #define		SAME_PACKET		0x04
 
-static int
-compare_other_packet(const void *master, const void *slaver, int length)
+struct compare_info {
+	struct sk_buff *skb;
+	struct ethhdr *eth;
+	union {
+		void *packet;
+		struct iphdr *ip;
+	};
+	union {
+		void *ip_packet;
+		struct tcphdr *tcp;
+		struct udphdr *udp;
+	};
+	unsigned int length;
+
+	/* only for tcp */
+	unsigned int last_seq;
+};
+
+static void print_debuginfo(struct compare_info *m, struct compare_info *s)
 {
-	return memcmp(master, slaver, length) ? 0 : SAME_PACKET;
+	printk("HA_compare: same=%u, last_id=%u\n", same_count, last_id);
+	printk(KERN_DEBUG "HA_compare: Master pkt:\n");
+	debug_print_ip(m->ip);
+	printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");
+	debug_print_ip(s->ip);
 }
 
 static int
-compare_arp_packet(const char *master, const char *slaver, int length)
+compare_other_packet(void *m, void *s, int length)
 {
+	return memcmp(m, s, length) ? 0 : SAME_PACKET;
+}
+
+static int
+compare_arp_packet(struct compare_info *m, struct compare_info *s)
+{
+	if (m->length != s->length)
+		return 0;
+
 	/* TODO */
-	return compare_other_packet(master, slaver, length);
+	return compare_other_packet(m->packet, s->packet, m->length);
 }
 
 static int
-compare_tcp_packet(struct tcphdr *master, struct tcphdr *slaver,
-		   int length)
+compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 {
 #define compare(elem)							\
-	if (unlikely(master->elem != slaver->elem)) {			\
+	if (unlikely(m->tcp->elem != s->tcp->elem)) {			\
 		pr_warn("HA_compare: tcp header's %s is different\n",	\
 			#elem);						\
 		return 0;						\
@@ -329,7 +353,7 @@ compare_tcp_packet(struct tcphdr *master, struct tcphdr *slaver,
 	compare(doff);
 
 	/* flags */
-	if(memcmp((char *)master+13, (char *)slaver+13, 1)) {
+	if(memcmp((char *)m->tcp+13, (char *)s->tcp+13, 1)) {
 		pr_warn("HA_compare: tcp header's flags is different\n");
 		return 0;
 	}
@@ -338,7 +362,7 @@ compare_tcp_packet(struct tcphdr *master, struct tcphdr *slaver,
 	compare(window);
 
 	/* Acknowledgment Number */
-	if (master->ack) {
+	if (m->tcp->ack) {
 		compare(ack_seq);
 	}
 
@@ -348,34 +372,29 @@ compare_tcp_packet(struct tcphdr *master, struct tcphdr *slaver,
 }
 
 static int
-compare_ip_packet(struct iphdr *master, struct iphdr *slaver, int length)
+compare_ip_packet(struct compare_info *m, struct compare_info *s)
 {
 	int ret;
-	void *master_packet, *slaver_packet;
 
-	if (unlikely(master->ihl * 4 > length)) {
+	if (unlikely(m->ip->ihl * 4 > m->length)) {
 		pr_warn("HA_compare: master iphdr is corrupted\n");
 		return 0;
 	}
 
-	if (unlikely(slaver->ihl * 4 > length)) {
+	if (unlikely(s->ip->ihl * 4 > s->length)) {
 		pr_warn("HA_compare: slaver iphdr is corrupted\n");
 		return 0;
 	}
 
 #define compare(elem)							\
-	if (unlikely(master->elem != slaver->elem)) {			\
+	if (unlikely(m->ip->elem != s->ip->elem)) {			\
 		pr_warn("HA_compare: iphdr's %s is different\n",	\
 			#elem);\
 		pr_warn("HA_compare: master %s: %u\n", #elem,		\
-			master->elem);					\
+			m->ip->elem);					\
 		pr_warn("HA_compare: slaver %s: %u\n", #elem,		\
-			slaver->elem);					\
-		print_header();						\
-		printk(KERN_DEBUG "HA_compare: Master pkt:\n");		\
-		debug_print_ip(master);					\
-		printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");		\
-		debug_print_ip(slaver);					\
+			s->ip->elem);					\
+		print_debuginfo(m, s);					\
 		return 0;						\
 	}
 
@@ -386,35 +405,33 @@ compare_ip_packet(struct iphdr *master, struct iphdr *slaver, int length)
 	compare(daddr);
 
 	/* IP options */
-	if (memcmp((char *)master+20, (char*)slaver+20, master->ihl*4 - 20)) {
+	if (memcmp((char *)m->ip+20, (char*)s->ip+20, m->ip->ihl*4 - 20)) {
 		pr_warn("HA_compare: iphdr option is different\n");
-		print_header();
-		printk(KERN_DEBUG "HA_compare: Master pkt:\n");
-		debug_print_ip(master);
-		printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");
-		debug_print_ip(slaver);
+		print_debuginfo(m, s);
 		return 0;
 	}
 
-	master_packet = (char *)master + master->ihl * 4;
-	slaver_packet = (char *)slaver + slaver->ihl * 4;
-	length -= master->ihl * 4;
-	switch(master->protocol) {
+	m->ip_packet = (char *)m->ip + m->ip->ihl * 4;
+	m->length -= m->ip->ihl * 4;
+	s->ip_packet = (char *)s->ip + s->ip->ihl * 4;
+	s->length -= s->ip->ihl * 4;
+	switch(m->ip->protocol) {
 	case IPPROTO_TCP:
-		ret = compare_tcp_packet(master_packet, slaver_packet, length);
+		ret = compare_tcp_packet(m, s);
 		break;
 	case IPPROTO_UDP:
 		/* TODO */
 	default:
 //		pr_info("unknown protocol: %u", ntohs(master->protocol));
-		ret = compare_other_packet(master_packet, slaver_packet, length);
+		if (m->length != s->length) {
+			pr_warn("HA_compare: the length of packet is different\n");
+			print_debuginfo(m, s);
+			return 0;
+		}
+		ret = compare_other_packet(m->ip_packet, s->ip_packet, m->length);
 	}
 	if (!ret) {
-		print_header();
-		printk(KERN_DEBUG "HA_compare: Master pkt:\n");
-		debug_print_ip(master);
-		printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");
-		debug_print_ip(slaver);
+		print_debuginfo(m, s);
 		return 0;
 	}
 	compare(tos);
@@ -428,54 +445,58 @@ compare_ip_packet(struct iphdr *master, struct iphdr *slaver, int length)
 
 #undef compare
 
-	last_id = master->id;
+	last_id = htons(m->ip->id);
 
 	return SAME_PACKET;
 }
 
 static int
-compare_skb(struct sk_buff *master, struct sk_buff *slaver)
+compare_skb(struct compare_info *m, struct compare_info *s)
 {
-	struct ethhdr *eth_master = (struct ethhdr *)master->data;
-	struct ethhdr *eth_slaver = (struct ethhdr *)slaver->data;
-	unsigned int master_length = master->len;
-	unsigned int slaver_length = slaver->len;
-	void *master_packet = master->data + sizeof(struct ethhdr);
-	void *slaver_packet = slaver->data + sizeof(struct ethhdr);
-	int ret, length;
+	int ret;
 
-	if (unlikely(master_length < sizeof(struct ethhdr))) {
+	m->eth = (struct ethhdr *)m->skb->data;
+	s->eth = (struct ethhdr *)s->skb->data;
+	m->length = m->skb->len;
+	s->length = s->skb->len;
+
+	if (unlikely(m->length < sizeof(struct ethhdr))) {
 		pr_warn("HA_compare: master packet is corrupted\n");
 		goto different;
 	}
 
-	if (unlikely(slaver_length < sizeof(struct ethhdr))) {
+	if (unlikely(s->length < sizeof(struct ethhdr))) {
 		pr_warn("HA_compare: slaver packet is corrupted\n");
 		goto different;
 	}
 
-	length = min(master_length, slaver_length) - sizeof(struct ethhdr);
-
-	if (unlikely(eth_master->h_proto != eth_slaver->h_proto)) {
+	if (unlikely(m->eth->h_proto != s->eth->h_proto)) {
 		pr_warn("HA_compare: protocol in eth header is different\n");
-		pr_warn("HA_compare: master's protocol: %d\n", ntohs(eth_master->h_proto));
-		pr_warn("HA_compare: slaver's protocol: %d\n", ntohs(eth_slaver->h_proto));
+		pr_warn("HA_compare: master's protocol: %d\n", ntohs(m->eth->h_proto));
+		pr_warn("HA_compare: slaver's protocol: %d\n", ntohs(s->eth->h_proto));
 		goto different;
 	}
 
-	switch(ntohs(eth_master->h_proto)) {
+	m->packet = (char *)m->eth + sizeof(struct ethhdr);
+	s->packet = (char *)s->eth + sizeof(struct ethhdr);
+
+	switch(ntohs(m->eth->h_proto)) {
 	case ETH_P_IP:
-		ret = compare_ip_packet(master_packet, slaver_packet, length);
+		ret = compare_ip_packet(m, s);
 		break;
 	case ETH_P_ARP:
-		ret = compare_arp_packet(master_packet, slaver_packet, length);
+		ret = compare_arp_packet(m, s);
 		break;
 	default:
 //		pr_debug("HA_compare: unexpected protocol: %d\n", eth_master->h_proto);
-		ret = compare_other_packet(master_packet, slaver_packet, length);
+		if (m->length != s->length) {
+			pr_warn("HA_compare: the length of packet is different\n");
+			goto different;
+		}
+		ret = compare_other_packet(m->packet, s->packet, m->length);
 	}
 	if (!ret) {
-		pr_warn("HA_compare: compare_xxx_packet() fails %04x\n", ntohs(eth_master->h_proto));
+		pr_warn("HA_compare: compare_xxx_packet() fails %04x\n", ntohs(m->eth->h_proto));
 		goto different;
 	}
 
@@ -566,6 +587,7 @@ void update(int qlen)
 	unsigned int this_loop = 0;
 	int i;
 	int ret;
+	struct compare_info info_m, info_s;
 
 	/*
 	 *  Compare starts untill two Qdisc are created.
@@ -622,7 +644,9 @@ void update(int qlen)
 		spin_unlock(&slaver_queue->qlock_blo);
 		spin_unlock(&master_queue->qlock_blo);
 
-		ret = compare_skb(skb_m, skb_s);
+		info_m.skb = skb_m;
+		info_s.skb = skb_s;
+		ret = compare_skb(&info_m, &info_s);
 		if (ret) {
 			if (ret & BYPASS_MASTER) {
 				spin_lock(&master_queue->qlock_rel);
