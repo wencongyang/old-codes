@@ -296,13 +296,38 @@ static int
 compare_tcp_packet(struct tcphdr *master, struct tcphdr *slaver,
 		   int length)
 {
-	int ret;
+#define compare(elem)							\
+	if (unlikely(master->elem != slaver->elem)) {			\
+		pr_warn("HA_compare: tcp header's %s is different\n",	\
+			#elem);						\
+		return 0;						\
+	}
 
-	ret = memcmp(master, slaver, 16);
-	if (ret) {
-		pr_warn("HA_compare: tcp header is different\n");
+	/* source port and dest port*/
+	compare(source);
+	compare(dest);
+
+	/* Sequence Number */
+	compare(seq);
+
+	/* data offset */
+	compare(doff);
+
+	/* flags */
+	if(memcmp((char *)master+13, (char *)slaver+13, 1)) {
+		pr_warn("HA_compare: tcp header's flags is different\n");
 		return 0;
 	}
+
+	/* tcp window size */
+	compare(window);
+
+	/* Acknowledgment Number */
+	if (master->ack) {
+		compare(ack_seq);
+	}
+
+#undef compare
 
 	return 1;
 }
