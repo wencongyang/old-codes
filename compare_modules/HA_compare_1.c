@@ -283,10 +283,21 @@ static void print_header(void)
 	printk("HA_compare: same=%u, last_id=%u\n", same_count, last_id);
 }
 
+/* compare_xxx_packet() returns:
+ *   0: do a new checkpoint
+ *   1: bypass the packet from master,
+ *   2: drop the packet from slaver
+ *   3: bypass the packet from master, and drop the packet from slaver
+ */
+
+#define		BYPASS_MASTER		0x01
+#define		DROP_SLAVER		0x02
+#define		SAME_PACKET		0x04
+
 static int
 compare_other_packet(const void *master, const void *slaver, int length)
 {
-	return memcmp(master, slaver, length) ? 0 : 1;
+	return memcmp(master, slaver, length) ? 0 : SAME_PACKET;
 }
 
 static int
@@ -333,7 +344,7 @@ compare_tcp_packet(struct tcphdr *master, struct tcphdr *slaver,
 
 #undef compare
 
-	return 1;
+	return SAME_PACKET;
 }
 
 static int
@@ -419,7 +430,7 @@ compare_ip_packet(struct iphdr *master, struct iphdr *slaver, int length)
 
 	last_id = master->id;
 
-	return 1;
+	return SAME_PACKET;
 }
 
 static int
@@ -468,13 +479,17 @@ compare_skb(struct sk_buff *master, struct sk_buff *slaver)
 		goto different;
 	}
 
-	same_count++;
+	if (ret == SAME_PACKET) {
+		same_count++;
+		ret = DROP_SLAVER | BYPASS_MASTER;
+	}
 	return ret;
 
 different:
 	reset_compare_status();
 	return 0;
 }
+
 static void clear_slaver_queue(void)
 {
 	int i;
@@ -550,6 +565,8 @@ void update(int qlen)
 	unsigned long start;
 	unsigned int this_loop = 0;
 	int i;
+	int ret;
+
 	/*
 	 *  Compare starts untill two Qdisc are created.
 	 */
@@ -605,23 +622,31 @@ void update(int qlen)
 		spin_unlock(&slaver_queue->qlock_blo);
 		spin_unlock(&master_queue->qlock_blo);
 
-		if (compare_skb(skb_m, skb_s)) {
-			/*
-			 *  Packets are the same, put skb_m to master_queue->rel for releasing,
-			 *  and also put skb_s to slaver_queue->rel, it will be freed by enqueue
-			 *  routine of sch_slaver.
-			 */
-			spin_lock(&master_queue->qlock_rel);
-			spin_lock(&slaver_queue->qlock_rel);
+		ret = compare_skb(skb_m, skb_s);
+		if (ret) {
+			if (ret & BYPASS_MASTER) {
+				spin_lock(&master_queue->qlock_rel);
+				__skb_queue_tail(&master_queue->rel, skb_m);
+				spin_unlock(&master_queue->qlock_rel);
+				netif_schedule_queue(master_queue->sch->dev_queue);
+			} else {
+				spin_lock(&master_queue->qlock_blo);
+				__skb_queue_head(&master_queue->blo.e[i].queue, skb_m);
+				master_queue->blo.e[i].qlen++;
+				spin_unlock(&master_queue->qlock_blo);
+			}
 
-			__skb_queue_tail(&master_queue->rel, skb_m);
-			__skb_queue_tail(&slaver_queue->rel, skb_s);
-
-			spin_unlock(&master_queue->qlock_rel);
-			spin_unlock(&slaver_queue->qlock_rel);
-
-			netif_schedule_queue(master_queue->sch->dev_queue);
-			netif_schedule_queue(slaver_queue->sch->dev_queue);
+			if (ret & DROP_SLAVER) {
+				spin_lock(&slaver_queue->qlock_rel);
+				__skb_queue_tail(&slaver_queue->rel, skb_s);
+				spin_unlock(&slaver_queue->qlock_rel);
+				netif_schedule_queue(slaver_queue->sch->dev_queue);
+			} else {
+				spin_lock(&slaver_queue->qlock_blo);
+				__skb_queue_head(&slaver_queue->blo.e[i].queue, skb_s);
+				slaver_queue->blo.e[i].qlen++;
+				spin_unlock(&slaver_queue->qlock_blo);
+			}
 			//printk("netif_schedule%u.\n", cnt);
 		} else {
 			/*
