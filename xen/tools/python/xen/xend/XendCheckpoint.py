@@ -424,10 +424,21 @@ class RestoreHandler:
             write_exact(fd, "resume", "failed to write resume done")
 
             # wait new checkpoint
-            buf = read_exact(fd, 8, "failed to read continue flag")
-            if buf != "continue":
-                return False
-            self.log("read", "master", "continue")
+            while True:
+                buf = read_exact(fd, 8, "failed to read dirtypg_/continue flag")
+                if buf == "dirtypg_":
+                    self.log("write", "xc_restore", "dirtypg")
+                    child.tochild.write("dirtypg")
+                    child.tochild.flush()
+                    buf = child.fromchild.readline()
+                    if buf != "dirtypg_done\n":
+                        return False
+                    self.log("read", "xc_restore", "dirtypg_done")
+                    continue
+                if buf != "continue":
+                    return False
+                self.log("read", "master", "continue")
+                break
 
             self.log("write", "xc_restore", "suspend")
             child.tochild.write("suspend")

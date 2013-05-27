@@ -1122,6 +1122,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     unsigned long mfn, pfn;
     unsigned int prev_pc;
     int nraces = 0;
+    int dirtypg = 0;
 
     /* The new domain's shared-info frame number. */
     unsigned long shared_info_frame;
@@ -1343,6 +1344,12 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         DBGPRINTF("batch %d\n",j);
 
         if ( j == 0 ) {
+            if (dirtypg) {
+                /* notify python code to read "dirtypage_" or "continue" */
+                printf("dirtypg_done\n");
+                fflush(stdout);
+                goto out_wait_checkpoint;
+            }
             /* catch vcpu updates */
             if (pagebuf.new_ctxt_format) {
                 vcpumap = pagebuf.vcpumap;
@@ -1901,22 +1908,7 @@ getpages:
         munmap(ctx->live_p2m, P2M_FL_ENTRIES * PAGE_SIZE);
     }
 
-    if ( callbacks && callbacks->finish_restotre )
-    {
-        rc = callbacks->finish_restotre(comm_data, data);
-        if ( rc == 1 )
-            goto getpages;
-
-        if ( rc < 0 )
-        {
-            ERROR("Er1ror doing callbacks->finish_restotre()");
-            goto out;
-        }
-    }
-
-    DPRINTF("Domain ready to be built.\n");
-    rc = 0;
-    goto out;
+    goto out_restore;
 
   finish_hvm:
     if ( callbacks && callbacks->flush_memory )
@@ -2011,22 +2003,46 @@ skip_set_hvm_param:
     fprintf(fp, "setting the HVM context\n");
     fflush(fp);
 
+out_restore:
     if ( callbacks && callbacks->finish_restotre )
     {
         rc = callbacks->finish_restotre(&callbacks->comm_data, callbacks->data);
-        fprintf(fp, "finish_restore returns %d\n", frc);
+        fprintf(fp, "finish_restore returns %d\n", rc);
         fflush(fp);
         if ( rc < 0 )
         {
             PERROR("Error finishing restore");
             goto out;
         }
+    }
 
+out_wait_checkpoint:
+    if ( callbacks && callbacks->wait_checkpoint )
+    {
+        rc = callbacks->wait_checkpoint(&callbacks->comm_data, callbacks->data);
+        fprintf(fp, "wait_checkpoint returns %d\n", rc);
+        fflush(fp);
+        if ( rc < 0 )
+        {
+            PERROR("Error fwait_checkpoint");
+            goto out;
+        }
+
+        if (rc == 2) {
+            if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
+                PERROR("error when buffering batch, finishing");
+                rc = -1;
+                goto out;
+            }
+            dirtypg = 1;
+            goto loadpages;
+        }
+
+        dirtypg = 0;
         if ( rc == 1 )
             goto getpages;
     }
 
-    /* HVM success! */
     rc = 0;
 
  out:

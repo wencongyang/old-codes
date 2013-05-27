@@ -109,10 +109,16 @@ struct restore_callbacks {
      *
      * Return value:
      *   -1: error
-     *    0: continue to start vm
-     *    1: continue to do a checkpoint
+     *    1: success
      */
     int (*finish_restotre)(struct restore_data *comm_data, void *data);
+    /* Return value:
+     *   -1: error
+     *    0: continue to start vm
+     *    1: continue to do a checkpoint
+     *    2: dirty page transmission
+     */
+    int (*wait_checkpoint)(struct restore_data *comm_data, void *data);
 
     /* xc_domain_restore() init it */
     struct restore_data comm_data;

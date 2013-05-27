@@ -975,6 +975,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     struct domain_info_context *dinfo = &ctx->dinfo;
 
     int completed = 0;
+    int dirtypg = 0;
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -1466,6 +1467,20 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         total_sent += sent_this_iter;
 
+        if (dirtypg == 2) {
+            batch = 0;
+            if ( wrexact(io_fd, &batch, sizeof(unsigned int)) )
+            {
+                PERROR("Error when writing to state file (2)");
+                goto out;
+            }
+            if ( outbuf_flush(xch, &ob, io_fd) < 0 ) {
+                PERROR("Error when flushing output buffer");
+                 rc = 1;
+            }
+            goto wait_cp;
+        }
+
         if ( last_iter )
         {
             print_stats( xch, dom, sent_this_iter, &stats, 1);
@@ -1914,9 +1929,22 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     if ( !rc && callbacks->postcopy )
         callbacks->postcopy(callbacks->data);
 
+wait_cp:
     /* checkpoint_cb can spend arbitrarily long in between rounds */
-    if (!rc && callbacks->checkpoint &&
-        callbacks->checkpoint(callbacks->data) > 0)
+    if (!rc && callbacks->checkpoint)
+        dirtypg = callbacks->checkpoint(callbacks->data);
+
+    if (dirtypg == 2) {
+        if ( xc_shadow_control(xch, dom,
+                               XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
+                               dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
+        {
+            PERROR("Error flushing shadow PT");
+        }
+        goto copypages;
+    }
+
+    if (dirtypg > 0)
     {
         /* reset stats timer */
         print_stats(xch, dom, 0, &stats, 0);

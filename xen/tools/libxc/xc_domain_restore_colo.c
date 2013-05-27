@@ -41,6 +41,7 @@ struct restore_colo_data
 };
 
 /* we restore only one vm in a process, so it is same to use global variable */
+DECLARE_HYPERCALL_BUFFER(unsigned long, slaver_dirty_pages);
 DECLARE_HYPERCALL_BUFFER(unsigned long, dirty_pages);
 
 int restore_colo_init(struct restore_data *comm_data, void **data)
@@ -104,12 +105,13 @@ hvm:
              "/local/domain/0/device-model/%d/state", comm_data->dom);
 
 skip_hvm:
+    slaver_dirty_pages = xc_hypercall_buffer_alloc_pages(xch, slaver_dirty_pages, NRPAGES(BITMAP_SIZE));
     dirty_pages = xc_hypercall_buffer_alloc_pages(xch, dirty_pages, NRPAGES(BITMAP_SIZE));
     colo_data->dirty_pages = dirty_pages;
 
     size = dinfo->p2m_size * PAGE_SIZE;
     colo_data->pagebase = malloc(size);
-    if (!colo_data->dirty_pages || !colo_data->pagebase) {
+    if (!slaver_dirty_pages || !colo_data->dirty_pages || !colo_data->pagebase) {
         PERROR("Could not allocate memory for restore colo data");
         goto err;
     }
@@ -157,6 +159,9 @@ void restore_colo_free(struct restore_data *comm_data, void *data)
     free(colo_data->pfn_batch_slaver);
     free(colo_data->pfn_type_batch_slaver);
     free(colo_data->p2m_frame_list_temp);
+    if (slaver_dirty_pages)
+        xc_hypercall_buffer_free_pages(comm_data->xch, slaver_dirty_pages,
+                                       NRPAGES(BITMAP_SIZE));
     if (dirty_pages)
         xc_hypercall_buffer_free_pages(comm_data->xch, dirty_pages,
                                        NRPAGES(BITMAP_SIZE));
@@ -761,8 +766,7 @@ out:
  *
  * return value:
  * -1: error
- *  0: continue to start vm
- *  1: continue to do a checkpoint
+ *  1: success
  */
 int finish_colo(struct restore_data *comm_data, void *data)
 {
@@ -771,13 +775,7 @@ int finish_colo(struct restore_data *comm_data, void *data)
     uint32_t dom = comm_data->dom;
     struct domain_info_context *dinfo = comm_data->dinfo;
     xc_evtchn *xce = colo_data->xce;
-    unsigned long *pfn_batch_slaver = colo_data->pfn_batch_slaver;
-    unsigned long *pfn_type_batch_slaver = colo_data->pfn_type_batch_slaver;
-    unsigned long *pfn_type_slaver = colo_data->pfn_type_slaver;
-    struct xs_handle *xsh = colo_data->xsh;
-    DECLARE_HYPERCALL;
 
-    unsigned long i, j;
     int rc;
     char str[10];
     int remote_port;
@@ -805,7 +803,7 @@ int finish_colo(struct restore_data *comm_data, void *data)
         }
     } else {
         if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_CLEAN,
-                              HYPERCALL_BUFFER(dirty_pages), dinfo->p2m_size,
+                              HYPERCALL_BUFFER(slaver_dirty_pages), dinfo->p2m_size,
                               NULL, 0, NULL) != dinfo->p2m_size)
         {
             ERROR("clean slaver dirty fails");
@@ -863,9 +861,42 @@ int finish_colo(struct restore_data *comm_data, void *data)
         colo_data->local_port = local_port;
     }
 
+    memset(colo_data->dirty_pages, 0x0, BITMAP_SIZE);
+    return 1;
+}
+
+/*
+ * return value:
+ * -1: error
+ *  0: continue to start vm
+ *  1: continue to do a checkpoint
+ *  2: dirty page transmission
+ */
+int colo_wait_checkpoint(struct restore_data *comm_data, void *data)
+{
+    struct restore_colo_data *colo_data = data;
+    xc_interface *xch = comm_data->xch;
+    uint32_t dom = comm_data->dom;
+    struct domain_info_context *dinfo = comm_data->dinfo;
+    xc_evtchn *xce = colo_data->xce;
+    unsigned long *pfn_batch_slaver = colo_data->pfn_batch_slaver;
+    unsigned long *pfn_type_batch_slaver = colo_data->pfn_type_batch_slaver;
+    unsigned long *pfn_type_slaver = colo_data->pfn_type_slaver;
+    struct xs_handle *xsh = colo_data->xsh;
+    DECLARE_HYPERCALL;
+
+    unsigned long i, j;
+    int rc;
+    char str[10];
+    int local_port = colo_data->local_port;
+    unsigned long *bitmap_all, *bitmap_slaver;
+
     /* wait for the next checkpoint */
     read_exact(0, str, 7);
     str[7] = '\0';
+    if (!strcmp(str, "dirtypg"))
+        return 2;
+
     if (strcmp(str, "suspend"))
     {
         ERROR("wait for a new checkpoint fails");
@@ -902,14 +933,20 @@ int finish_colo(struct restore_data *comm_data, void *data)
     if (strcmp(str, "start"))
         return -1;
 
-    memset(colo_data->dirty_pages, 0x0, BITMAP_SIZE);
+    /* memset(colo_data->slaver_dirty_pages, 0x0, BITMAP_SIZE); */
     if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_CLEAN,
-                          HYPERCALL_BUFFER(dirty_pages), dinfo->p2m_size,
+                          HYPERCALL_BUFFER(slaver_dirty_pages), dinfo->p2m_size,
                           NULL, 0, NULL) != dinfo->p2m_size)
     {
         ERROR("getting slaver dirty fails");
         return -1;
     }
+
+    j = (BITMAP_SIZE + sizeof(long) - 1) / sizeof(long);
+    bitmap_all = (unsigned long *)(dirty_pages);
+    bitmap_slaver = (unsigned long *)(slaver_dirty_pages);
+    for (i = 0; i < j; i++)
+        bitmap_all[i] |= bitmap_slaver[i];
 
     if (comm_data->hvm) {
         colo_data->first_time = 0;
