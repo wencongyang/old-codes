@@ -23,6 +23,7 @@
 #include <linux/ip.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
+#include <linux/if_arp.h>
 #include "hash.h"
 
 bool ignore_id = 1;
@@ -281,6 +282,28 @@ static void debug_print_ip(const struct iphdr *ip)
 		printk("HA_compare: unkown protocol: %u\n", protocol);
 }
 
+struct arp_reply {
+	unsigned char		ar_sha[ETH_ALEN];
+	unsigned char		ar_sip[4];
+	unsigned char		ar_tha[ETH_ALEN];
+	unsigned char		ar_tip[4];
+};
+
+static void debug_print_arp(const struct arphdr *arp)
+{
+	struct arp_reply *temp;
+
+	printk("HA_compare:[ARP] ar_hrd=%u, ar_pro=%u\n",
+		htons(arp->ar_hrd), htons(arp->ar_pro));
+	printk("HA_compare:[ARP] ar_hln=%u, ar_pln=%u, ar_op=%u\n",
+		arp->ar_hln, arp->ar_pln, htons(arp->ar_op));
+	if (htons(arp->ar_op) == ARPOP_REPLY) {
+		temp = (struct arp_reply *)((char*)arp + sizeof(struct arphdr));
+		printk("HA_compare:[ARP] ar_sha: %pM, ar_sip: %pI4\n", temp->ar_sha, temp->ar_sip);
+		printk("HA_compare:[ARP] ar_tha: %pM, ar_tip: %pI4\n", temp->ar_tha, temp->ar_tip);
+	}
+}
+
 static void reset_compare_status(void)
 {
 	same_count = 0;
@@ -537,6 +560,9 @@ compare_skb(struct compare_info *m, struct compare_info *s)
 		goto different;
 	}
 
+	if (m->length < 60 && s->length == 60)
+		s->length = m->length;
+
 	if (unlikely(m->eth->h_proto != s->eth->h_proto)) {
 		pr_warn("HA_compare: protocol in eth header is different\n");
 		pr_warn("HA_compare: master's protocol: %d\n", ntohs(m->eth->h_proto));
@@ -546,6 +572,8 @@ compare_skb(struct compare_info *m, struct compare_info *s)
 
 	m->packet = (char *)m->eth + sizeof(struct ethhdr);
 	s->packet = (char *)s->eth + sizeof(struct ethhdr);
+	m->length -= sizeof(struct ethhdr);
+	s->length -= sizeof(struct ethhdr);
 
 	switch(ntohs(m->eth->h_proto)) {
 	case ETH_P_IP:
@@ -553,6 +581,12 @@ compare_skb(struct compare_info *m, struct compare_info *s)
 		break;
 	case ETH_P_ARP:
 		ret = compare_arp_packet(m, s);
+		if (!ret) {
+			printk("HA_compare: master packet, len=%d\n", m->length);
+			debug_print_arp(m->packet);
+			printk("HA_compare: slaver packet, len=%d\n", s->length);
+			debug_print_arp(s->packet);
+		}
 		break;
 	default:
 //		pr_debug("HA_compare: unexpected protocol: %d\n", eth_master->h_proto);
