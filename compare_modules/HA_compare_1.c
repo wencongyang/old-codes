@@ -33,6 +33,10 @@ bool ignore_ack_packet = 1;
 module_param(ignore_ack_packet, bool, 0644);
 MODULE_PARM_DESC(ignore_ack_packet, "bypass ack only packet");
 
+bool ignore_retransmitted_packet = 1;
+module_param(ignore_retransmitted_packet, bool, 0644);
+MODULE_PARM_DESC(ignore_retransmitted_packet, "bypass retransmitted packets");
+
 typedef void (*PTRFUN)(int id);
 int cmp_open(struct inode*, struct file*);
 int cmp_release(struct inode*, struct file*);
@@ -340,6 +344,7 @@ static int
 compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 {
 	int m_len, s_len;
+	unsigned int m_seq, s_seq;
 	int ret = 0;
 
 #define compare(elem)							\
@@ -353,9 +358,41 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 	compare(source);
 	compare(dest);
 
+	m_len = m->length - m->tcp->doff * 4;
+	s_len = s->length - s->tcp->doff * 4;
+	m_seq = htonl(m->tcp->seq);
+	s_seq = htonl(s->tcp->seq);
+
+	/* Sequence Number */
+	if (m->tcp->syn) {
+		compare(seq);
+		m->last_seq = m_seq;
+	} else {
+
+		if (ignore_retransmitted_packet) {
+			if ((m_len != 0 && m_seq == m->last_seq) ||
+			    ((m_seq - m->last_seq) & (1<<31)))
+				/* retransmitted packets */
+				ret |= BYPASS_MASTER;
+			if ((s_len != 0 && s_seq == m->last_seq) ||
+			    ((s_seq - m->last_seq) & (1<<31)))
+				/* retransmitted packets */
+				ret |= DROP_SLAVER;
+		}
+
+		if (ret)
+			goto out;
+
+		compare(seq);
+	}
+
+	/* flags */
+	if(memcmp((char *)m->tcp+13, (char *)s->tcp+13, 1)) {
+		pr_warn("HA_compare: tcp header's flags is different\n");
+		return 0;
+	}
+
 	if (ignore_ack_packet) {
-		m_len = m->length - m->tcp->doff * 4;
-		s_len = s->length - s->tcp->doff * 4;
 		if (m_len == 0 && s_len != 0)
 			ret |= BYPASS_MASTER;
 
@@ -363,17 +400,14 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 			ret |= DROP_SLAVER;
 	}
 
+	if (!ret && m_len != 0)
+		m->last_seq = m_seq;
+
 	/* Sequence Number */
 	compare(seq);
 
 	/* data offset */
 	compare(doff);
-
-	/* flags */
-	if(memcmp((char *)m->tcp+13, (char *)s->tcp+13, 1)) {
-		pr_warn("HA_compare: tcp header's flags is different\n");
-		return 0;
-	}
 
 	/* tcp window size */
 	compare(window);
@@ -386,6 +420,11 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 #undef compare
 
 	return ret ?:SAME_PACKET;
+
+out:
+	if (ret & BYPASS_MASTER)
+		m->tcp->ack_seq = min(m->tcp->ack_seq, s->tcp->ack_seq);
+	return ret;
 }
 
 static int
@@ -674,6 +713,7 @@ void update(int qlen)
 
 		info_m.skb = skb_m;
 		info_s.skb = skb_s;
+		info_m.last_seq = master_queue->blo.e[i].last_seq;
 		ret = compare_skb(&info_m, &info_s);
 		if (ret) {
 			if (ret & BYPASS_MASTER) {
@@ -699,6 +739,7 @@ void update(int qlen)
 				slaver_queue->blo.e[i].qlen++;
 				spin_unlock(&slaver_queue->qlock_blo);
 			}
+			master_queue->blo.e[i].last_seq = info_m.last_seq;
 			//printk("netif_schedule%u.\n", cnt);
 		} else {
 			/*
@@ -716,6 +757,7 @@ void update(int qlen)
 				set_bit(HASTATE_INCHECKPOINT_NR, &state);
 				wake_up_interruptible(&queue);
 			}
+			break;
 		}
 
 	}

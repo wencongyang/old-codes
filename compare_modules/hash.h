@@ -13,6 +13,7 @@
 struct Q_elem {	
 	int qlen;
 	struct sk_buff_head queue;
+	uint32_t last_seq;
 //	uint32_t last_jiffies;
 };
 
