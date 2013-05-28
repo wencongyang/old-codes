@@ -332,6 +332,10 @@ struct compare_info {
 		struct tcphdr *tcp;
 		struct udphdr *udp;
 	};
+	union {
+		void *tcp_packet;
+		void *udp_packet;
+	};
 	unsigned int length;
 
 	/* only for tcp */
@@ -340,7 +344,7 @@ struct compare_info {
 
 static void print_debuginfo(struct compare_info *m, struct compare_info *s)
 {
-	printk("HA_compare: same=%u, last_id=%u\n", same_count, last_id);
+	printk("HA_compare: same=%u, last_id=%u, last_seq=%u\n", same_count, last_id, m->last_seq);
 	printk(KERN_DEBUG "HA_compare: Master pkt:\n");
 	debug_print_ip(m->ip);
 	printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");
@@ -438,6 +442,16 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 	/* Acknowledgment Number */
 	if (m->tcp->ack) {
 		compare(ack_seq);
+	}
+
+	if (m_len != 0 && s_len != 0) {
+		m->tcp_packet = m->ip_packet + m->tcp->doff * 4;
+		s->tcp_packet = s->ip_packet + s->tcp->doff * 4;
+		ret = compare_other_packet(m->tcp_packet, s->tcp_packet, min(m_len, s_len));
+		if (ret == 0) {
+			pr_warn("HA_compare: tcp data is different\n");
+			return 0;
+		}
 	}
 
 #undef compare
