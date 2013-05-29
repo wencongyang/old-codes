@@ -422,6 +422,7 @@ static int install_fw_network(CheckpointObject *self)
     xc_interface *xch = self->cps.xch;
     int status;
     int rc;
+    char vif[20];
 
     pid = vfork();
     if (pid < 0) {
@@ -439,7 +440,9 @@ static int install_fw_network(CheckpointObject *self)
         return 0;
     }
 
-    execl("/etc/xen/scripts/network-colo", "network-colo", "master", "install", "vif1.0", "eth0", NULL);
+    snprintf(vif, 20, "vif%u.0", self->cps.domid);
+
+    execl("/etc/xen/scripts/network-colo", "network-colo", "master", "install", vif, "eth0", NULL);
     PERROR("execl fails");
     return -1;
 }
