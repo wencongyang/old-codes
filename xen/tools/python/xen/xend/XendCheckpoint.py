@@ -412,57 +412,10 @@ class RestoreHandler:
             self.log("write", "xc_restore", "resume")
             child.tochild.write("resume")
             child.tochild.flush()
-            buf = child.fromchild.readline()
-            if buf != "resume\n":
-                log.debug("read %s from xc_restore", buf.rstrip())
-                return False
-            self.log("read", "xc_restore", "resume")
-            if self.firsttime:
-                util.runcmd("/etc/xen/scripts/network-colo slaver install vif%s.0 eth0" % dominfo.domid)
-            # notify master side VM resumed
-            self.log("write", "master", "resume")
-            write_exact(fd, "resume", "failed to write resume done")
-
-            # wait new checkpoint
-            while True:
-                buf = read_exact(fd, 8, "failed to read dirtypg_/continue flag")
-                if buf == "dirtypg_":
-                    self.log("write", "xc_restore", "dirtypg")
-                    child.tochild.write("dirtypg")
-                    child.tochild.flush()
-                    buf = child.fromchild.readline()
-                    if buf != "dirtypg_done\n":
-                        return False
-                    self.log("read", "xc_restore", "dirtypg_done")
-                    continue
-                if buf != "continue":
-                    return False
-                self.log("read", "master", "continue")
-                break
-
-            self.log("write", "xc_restore", "suspend")
-            child.tochild.write("suspend")
-            child.tochild.flush()
-            buf = child.fromchild.readline()
-            if buf != "suspend\n":
-                return False
-            self.log("read", "xc_restore", "suspend")
-
-            # notify master side suspend done.
-            self.log("write", "master", "suspend")
-            write_exact(fd, "suspend", "failed to write suspend done")
-            buf = read_exact(fd, 5, "failed to read start flag")
-            if buf != "start":
-                return False
-            self.log("read", "master", "start")
 
             log.debug("dom info port: %s %s" % (dominfo.store_port, dominfo.console_port))
             dominfo.store_port = self.store_port
             dominfo.console_port = self.console_port
-
-            self.log("write", "xc_restore", "start")
-            child.tochild.write("start")
-            child.tochild.flush()
 
             self.firsttime = False
 

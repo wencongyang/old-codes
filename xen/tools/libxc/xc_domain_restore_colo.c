@@ -1,5 +1,7 @@
 #include <xc_save_restore_colo.h>
 #include <xs.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define NR_wait_resume 312
 
@@ -752,6 +754,38 @@ out:
     return ret;
 }
 
+static int install_fw_network(struct restore_data *comm_data)
+{
+    pid_t pid;
+    xc_interface *xch = comm_data->xch;
+    int status;
+    int rc;
+
+    char vif[20];
+
+    snprintf(vif, sizeof(vif), "vif%u.0", comm_data->dom);
+
+    pid = vfork();
+    if (pid < 0) {
+        ERROR("vfork fails");
+        return -1;
+    }
+
+    if (pid > 0) {
+        rc = waitpid(pid, &status, 0);
+        if (rc != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            ERROR("getting child status fails");
+            return -1;
+        }
+
+        return 0;
+    }
+
+    execl("/etc/xen/scripts/network-colo", "network-colo", "slaver", "install", vif, "eth0", NULL);
+    ERROR("execl fails");
+    return -1;
+}
+
 /* we are ready to start the guest when this functions is called. We
  * will return until we need to do a new checkpoint or some error occurs.
  *
@@ -759,10 +793,6 @@ out:
  * python code                  restore code        comment
  *                  <====       "finish\n"
  * "resume\n"       ====>                           guest is resumed
- *                  <====       "resume\n"          postresume is done
- * "suspend\n"      ====>                           a new checkpoint begins
- *                  <====       "suspend\n"         guest is suspended
- * "start\n"        ====>                           getting dirty pages begins
  *
  * return value:
  * -1: error
@@ -838,9 +868,13 @@ int finish_colo(struct restore_data *comm_data, void *data)
             break;
     }
 
-    /* notify python code vm is resumed */
-    printf("resume\n");
-    fflush(stdout);
+    if (colo_data->first_time) {
+	if (install_fw_network(comm_data) < 0)
+            return -1;
+    }
+
+    /* notify master vm is resumed */
+    write_exact(comm_data->io_fd, "resume", 6);
 
     if (colo_data->first_time) {
         sleep(10);
@@ -892,12 +926,12 @@ int colo_wait_checkpoint(struct restore_data *comm_data, void *data)
     unsigned long *bitmap_all, *bitmap_slaver;
 
     /* wait for the next checkpoint */
-    read_exact(0, str, 7);
-    str[7] = '\0';
-    if (!strcmp(str, "dirtypg"))
+    read_exact(comm_data->io_fd, str, 8);
+    str[8] = '\0';
+    if (!strcmp(str, "dirtypg_"))
         return 2;
 
-    if (strcmp(str, "suspend"))
+    if (strcmp(str, "continue"))
     {
         ERROR("wait for a new checkpoint fails");
         /* start the guest now? */
@@ -924,11 +958,9 @@ int colo_wait_checkpoint(struct restore_data *comm_data, void *data)
         return -1;
     }
 
-    /* notify python code suspend is done */
-    printf("suspend\n");
-    fflush(stdout);
-
-    read_exact(0, str, 5);
+    /* notify master suspend is done */
+    write_exact(comm_data->io_fd, "suspend", 7);
+    read_exact(comm_data->io_fd, str, 5);
     str[5] = '\0';
     if (strcmp(str, "start"))
         return -1;

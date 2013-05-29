@@ -76,6 +76,7 @@ struct restore_data
     xc_interface *xch;
     uint32_t dom;
     struct domain_info_context *dinfo;
+    int io_fd;
     int hvm;
     unsigned long *pfn_type;
     struct xc_mmu *mmu;

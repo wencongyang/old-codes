@@ -1295,6 +1295,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         callbacks->comm_data.xch = xch;
         callbacks->comm_data.dom = dom;
         callbacks->comm_data.dinfo = dinfo;
+        callbacks->comm_data.io_fd = io_fd;
         callbacks->comm_data.hvm = hvm;
         callbacks->comm_data.pfn_type = pfn_type;
         callbacks->comm_data.mmu = mmu;
@@ -1344,12 +1345,8 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         DBGPRINTF("batch %d\n",j);
 
         if ( j == 0 ) {
-            if (dirtypg) {
-                /* notify python code to read "dirtypage_" or "continue" */
-                printf("dirtypg_done\n");
-                fflush(stdout);
+            if (dirtypg)
                 goto out_wait_checkpoint;
-            }
             /* catch vcpu updates */
             if (pagebuf.new_ctxt_format) {
                 vcpumap = pagebuf.vcpumap;
