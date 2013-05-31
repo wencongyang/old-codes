@@ -823,7 +823,7 @@ int finish_colo(struct restore_data *comm_data, void *data)
     fprintf(colo_data->fp, "write finish to python\n");
     fflush(colo_data->fp);
 
-    if (colo_data->first_time) {
+    if (colo_data->first_time || !comm_data->hvm) {
         /* we need to know which pages are dirty to restore the guest */
         if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY,
                               NULL, 0, NULL, 0, NULL) < 0 )
@@ -869,7 +869,7 @@ int finish_colo(struct restore_data *comm_data, void *data)
     }
 
     if (colo_data->first_time) {
-	if (install_fw_network(comm_data) < 0)
+        if (install_fw_network(comm_data) < 0)
             return -1;
     }
 
@@ -984,6 +984,16 @@ int colo_wait_checkpoint(struct restore_data *comm_data, void *data)
         colo_data->first_time = 0;
         return 1;
     }
+
+    if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_OFF, NULL, 0, NULL,
+                          0, NULL) < 0 )
+    {
+        fprintf(colo_data->fp, "disabling dirty-log fails\n");
+        fflush(colo_data->fp);
+        ERROR("disabling dirty-log fails");
+        return -1;
+    }
+
 
     j = 0;
     for (i = 0; i < colo_data->max_mem_pfn; i++)
