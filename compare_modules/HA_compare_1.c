@@ -164,7 +164,7 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			return -2;
 		}
 #if 1
-		ret = wait_event_interruptible_timeout(queue, test_bit(HASTATE_PENDING_NR, &state), 500);
+		ret = wait_event_interruptible_timeout(queue, test_bit(HASTATE_PENDING_NR, &state), 10);
 		if (ret == 0)
 			return -ETIME;
 
