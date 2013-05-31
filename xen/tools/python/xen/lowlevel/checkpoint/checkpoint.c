@@ -40,12 +40,15 @@ typedef struct {
   int first_time;
   int dev_fd;
   int dirtypg;
+  int pipe[2];
+  pid_t pid;
 } CheckpointObject;
 
 static int suspend_trampoline(void* data);
 static int postcopy_trampoline(void* data);
 static int checkpoint_trampoline(void* data);
 static int post_sendstate_trampoline(void *data);
+static int prepare_process(CheckpointObject *self);
 
 static PyObject* Checkpoint_new(PyTypeObject* type, PyObject* args,
                                PyObject* kwargs)
@@ -193,6 +196,14 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   self->first_time = 1;
   self->dirtypg = 0;
 
+  if (self->colo) {
+    rc = prepare_process(self);
+    if (rc < 0) {
+      PyErr_SetString(PyExc_TypeError, "prepare_process() fails");
+      return NULL;
+    }
+  }
+
   if (check_cb && check_cb != Py_None) {
     if (!PyCallable_Check(check_cb)) {
       PyErr_SetString(PyExc_TypeError, "check callback not callable");
@@ -316,6 +327,61 @@ PyMODINIT_FUNC initcheckpoint(void) {
 
 /* colo functions */
 
+static int prepare_process(CheckpointObject *self)
+{
+    int rc;
+    pid_t pid;
+    char c;
+    PyObject* result;
+    int pipefd[2][2];
+
+    /* We can't use fork() after calling xc_domain_save(). So prepare a
+     * child process here.
+     */
+
+    rc = pipe(pipefd[0]);
+    if (rc < 0)
+        return rc;
+    rc = pipe(pipefd[1]);
+    if (rc < 0)
+        return rc;
+
+    pid = fork();
+    if (pid < 0)
+        return -1;
+
+    if (pid > 0) {
+        self->pid = pid;
+        /* parent: use pipefd[0][0] to read, and pipefd[1][1] to write */
+        self->pipe[0] = pipefd[0][0];
+        self->pipe[1] = pipefd[1][1];
+        return 0;
+    }
+
+    /* child: use pipefd[1][0] to read, and pipefd[0][1] to write */
+    self->pipe[0] = pipefd[1][0];
+    self->pipe[1] = pipefd[0][1];
+    read_exact(self->pipe[0], &c, 1);
+
+    result = PyObject_CallFunction(self->setup_cb, NULL);
+
+    if (!result) {
+        rc = 1;
+        goto out;
+    }
+
+    if (result == Py_None || PyObject_IsTrue(result))
+        rc = 0;
+    else
+        rc = 1;
+
+    Py_DECREF(result);
+
+out:
+    write_exact(self->pipe[1], rc ? "1" : "0", 1);
+    exit(0);
+}
+
 /* master                   slaver          comment
  * "continue"   ===>
  *              <===        "suspend"       guest is suspended
@@ -418,33 +484,23 @@ static int notify_slaver_resume(CheckpointObject *self)
 
 static int install_fw_network(CheckpointObject *self)
 {
-    pid_t pid;
-    xc_interface *xch = self->cps.xch;
-    int status;
     int rc;
-    char vif[20];
+    char c;
 
-    pid = vfork();
-    if (pid < 0) {
-        PERROR("vfork fails");
-        return -1;
-    }
+    rc = write_exact(self->pipe[1], "c", 1);
+    if (rc < 0)
+        return rc;
 
-    if (pid > 0) {
-        rc = waitpid(pid, &status, 0);
-        if (rc != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-            ERROR("getting child status fails");
-            return -1;
-        }
+    rc = read_exact(self->pipe[0], &c, 1);
+    if (rc < 0)
+        return rc;
 
-        return 0;
-    }
+    waitpid(self->pid, NULL, 0);
 
-    snprintf(vif, 20, "vif%u.0", self->cps.domid);
+    if ( c == '1')
+        return 1;
 
-    execl("/etc/xen/scripts/network-colo", "network-colo", "master", "install", vif, "eth0", NULL);
-    PERROR("execl fails");
-    return -1;
+    return 0;
 }
 
 static int wait_slaver_resume(CheckpointObject *self)
