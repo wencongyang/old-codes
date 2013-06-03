@@ -95,8 +95,18 @@ static int hypercall_buffer_cache_free(xc_interface *xch, void *p, int nr_pages)
     return rc;
 }
 
+static void linux_privcmd_free_hypercall_buffer(void *ptr, int npages)
+{
+    /* Recover the VMA flags. Maybe it's not necessary */
+    madvise(ptr, npages * XC_PAGE_SIZE, MADV_DOFORK);
+
+    munmap(ptr, npages * XC_PAGE_SIZE);
+}
+
 static void do_hypercall_buffer_free_pages(void *ptr, int nr_pages)
 {
+    linux_privcmd_free_hypercall_buffer(ptr, nr_pages);
+    return;
 #ifndef __sun__
     (void) munlock(ptr, nr_pages * PAGE_SIZE);
 #endif
@@ -132,11 +142,27 @@ void xc__hypercall_buffer_cache_release(xc_interface *xch)
     hypercall_buffer_cache_unlock(xch);
 }
 
+static void *linux_privcmd_alloc_hypercall_buffer(xc_interface *xch, int npages)
+{
+    size_t size = npages * XC_PAGE_SIZE;
+    void *p;
+
+    /* Address returned by mmap is page aligned. */
+    p = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_LOCKED, -1, 0);
+
+    /* Do not copy the VMA to child process on fork. Avoid the page being COW
+       on hypercall. */
+    madvise(p, npages * XC_PAGE_SIZE, MADV_DONTFORK);
+    return p;
+}
+
 void *xc__hypercall_buffer_alloc_pages(xc_interface *xch, xc_hypercall_buffer_t *b, int nr_pages)
 {
     size_t size = nr_pages * PAGE_SIZE;
     void *p = hypercall_buffer_cache_alloc(xch, nr_pages);
 
+    if (!p)
+        p = linux_privcmd_alloc_hypercall_buffer(xch, nr_pages);
     if ( !p ) {
 #if defined(_POSIX_C_SOURCE) && !defined(__sun__)
         int ret;
