@@ -24,6 +24,7 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/if_arp.h>
+#include <net/tcp.h>
 #include "hash.h"
 
 bool ignore_id = 1;
@@ -651,11 +652,33 @@ static void clear_slaver_queue(void)
 	spin_unlock(&slaver_queue->qlock_blo);
 }
 
+static int get_seq(struct sk_buff *skb, uint32_t *seq)
+{
+	struct iphdr *ip;
+	struct tcphdr *tcp;
+	struct ethhdr *eth = (void *)skb->data;
+
+	if (htons(eth->h_proto) != ETH_P_IP)
+		return 0;
+
+	ip = (struct iphdr *)((char *)eth + sizeof(struct ethhdr));
+	if (ip->protocol != IPPROTO_TCP)
+		return 0;
+
+	tcp = (struct tcphdr *)((char *)ip + ip->ihl * 4);
+	if (ip->tot_len - ip->ihl * 4 <= tcp->doff * 4)
+		return 0;
+
+	*seq = htonl(tcp->seq);
+	return 1;
+}
+
 static void move_master_queue(void)
 {
 	int i;
 	struct sk_buff *skb;
 	struct hash_head *h = &master_queue->blo;
+	uint32_t seq;
 
 	spin_lock(&master_queue->qlock_blo);
 	spin_lock(&wqlock);
@@ -663,6 +686,8 @@ static void move_master_queue(void)
 	for (i = 0; i < HASH_NR; i++) {
 		skb = __skb_dequeue(&h->e[i].queue);
 		while (skb != NULL) {
+			if (get_seq(skb, &seq) && after(seq, h->e[i].last_seq))
+				h->e[i].last_seq = seq;
 			__skb_queue_tail(&wait_for_release, skb);
 			skb = __skb_dequeue(&h->e[i].queue);
 		}
