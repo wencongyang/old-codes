@@ -38,6 +38,10 @@ bool ignore_retransmitted_packet = 1;
 module_param(ignore_retransmitted_packet, bool, 0644);
 MODULE_PARM_DESC(ignore_retransmitted_packet, "bypass retransmitted packets");
 
+bool compare_tcp_data = 0;
+module_param(compare_tcp_data, bool, 0644);
+MODULE_PARM_DESC(compare_tcp_data, "compare tcp data");
+
 typedef void (*PTRFUN)(int id);
 int cmp_open(struct inode*, struct file*);
 int cmp_release(struct inode*, struct file*);
@@ -444,7 +448,7 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 		compare(ack_seq);
 	}
 
-	if (m_len != 0 && s_len != 0) {
+	if (compare_tcp_data && m_len != 0 && s_len != 0) {
 		m->tcp_packet = m->ip_packet + m->tcp->doff * 4;
 		s->tcp_packet = s->ip_packet + s->tcp->doff * 4;
 		ret = compare_other_packet(m->tcp_packet, s->tcp_packet, min(m_len, s_len));
