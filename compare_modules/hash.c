@@ -5,7 +5,6 @@ void hash_init(struct hash_head *h)
 	int i;
 
 	for (i = 0; i < HASH_NR; i++) {
-		h->e[i].qlen = 0;
 		skb_queue_head_init(&h->e[i].queue);
 	}
 }
@@ -50,8 +49,7 @@ int insert(struct hash_head *h, struct sk_buff *skb)
 
 	fetch_key(skb, &src, &dst);
 	i = dst % HASH_NR;
-	h->e[i].qlen++;
 	__skb_queue_tail(&h->e[i].queue, skb);
 
-	return h->e[i].qlen;
+	return 0;
 }

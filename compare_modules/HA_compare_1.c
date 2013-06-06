@@ -670,7 +670,6 @@ static void clear_slaver_queue(void)
 			kfree_skb(skb);
 			skb = __skb_dequeue(&h->e[i].queue);
 		}
-		slaver_queue->blo.e[i].qlen = 0;
 	}
 
 	spin_unlock(&slaver_queue->qlock_blo);
@@ -715,7 +714,6 @@ static void move_master_queue(void)
 			__skb_queue_tail(&wait_for_release, skb);
 			skb = __skb_dequeue(&h->e[i].queue);
 		}
-		master_queue->blo.e[i].qlen = 0;
 	}
 
 	spin_unlock(&wqlock);
@@ -806,9 +804,6 @@ void update(int qlen)
 		skb_m = __skb_dequeue(&master_queue->blo.e[i].queue);
 		skb_s = __skb_dequeue(&slaver_queue->blo.e[i].queue);
 
-		master_queue->blo.e[i].qlen--;
-		slaver_queue->blo.e[i].qlen--;
-
 		spin_unlock(&slaver_queue->qlock_blo);
 		spin_unlock(&master_queue->qlock_blo);
 
@@ -825,7 +820,6 @@ void update(int qlen)
 			} else {
 				spin_lock(&master_queue->qlock_blo);
 				__skb_queue_head(&master_queue->blo.e[i].queue, skb_m);
-				master_queue->blo.e[i].qlen++;
 				spin_unlock(&master_queue->qlock_blo);
 			}
 
@@ -837,7 +831,6 @@ void update(int qlen)
 			} else {
 				spin_lock(&slaver_queue->qlock_blo);
 				__skb_queue_head(&slaver_queue->blo.e[i].queue, skb_s);
-				slaver_queue->blo.e[i].qlen++;
 				spin_unlock(&slaver_queue->qlock_blo);
 			}
 			master_queue->blo.e[i].last_seq = info_m.last_seq;
