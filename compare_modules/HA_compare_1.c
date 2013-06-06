@@ -774,9 +774,6 @@ void update(int qlen)
 		if (test_bit(HASTATE_INCHECKPOINT_NR, &state))
 			break;
 
-		spin_lock(&master_queue->qlock_blo);
-		spin_lock(&slaver_queue->qlock_blo);
-
 		for (i = 0; i < HASH_NR; i++) {
 			skb = skb_peek(&master_queue->blo.e[i].queue);
 			if (skb != NULL) {
@@ -787,11 +784,8 @@ void update(int qlen)
 
 		}
 
-		if (i >= HASH_NR) {
-			spin_unlock(&slaver_queue->qlock_blo);
-			spin_unlock(&master_queue->qlock_blo);
+		if (i >= HASH_NR)
 			break;
-		}
 
 		if (flag == 0) {
 			flag = 1;
@@ -800,6 +794,9 @@ void update(int qlen)
 
 		this_loop++;
 		statis._loops_tot++;
+
+		spin_lock(&master_queue->qlock_blo);
+		spin_lock(&slaver_queue->qlock_blo);
 
 		skb_m = __skb_dequeue(&master_queue->blo.e[i].queue);
 		skb_s = __skb_dequeue(&slaver_queue->blo.e[i].queue);
@@ -812,7 +809,7 @@ void update(int qlen)
 		info_m.last_seq = master_queue->blo.e[i].last_seq;
 		ret = compare_skb(&info_m, &info_s);
 		if (ret) {
-			if (ret & BYPASS_MASTER) {
+			if (likely(ret & BYPASS_MASTER)) {
 				spin_lock(&master_queue->qlock_rel);
 				__skb_queue_tail(&master_queue->rel, skb_m);
 				spin_unlock(&master_queue->qlock_rel);
@@ -823,7 +820,7 @@ void update(int qlen)
 				spin_unlock(&master_queue->qlock_blo);
 			}
 
-			if (ret & DROP_SLAVER) {
+			if (likely(ret & DROP_SLAVER)) {
 				spin_lock(&slaver_queue->qlock_rel);
 				__skb_queue_tail(&slaver_queue->rel, skb_s);
 				spin_unlock(&slaver_queue->qlock_rel);
