@@ -1400,7 +1400,8 @@ static void colo_fix_tcp_packet(struct sk_buff *skb)
 	struct iphdr *iph = (void *)skb->data;
 	struct tcphdr *tcph;
 	uint16_t window, new_window;
-	uint16_t check, delta;
+	uint16_t delta;
+	uint32_t new_check;
 
 	if (iph->protocol != IPPROTO_TCP)
 		/* not tcp packet, do nothing */
@@ -1415,9 +1416,14 @@ static void colo_fix_tcp_packet(struct sk_buff *skb)
 
 	if (unlikely(new_window < sizeof(struct tcphdr) + MAX_TCP_OPTION_SPACE))
 		return;
-	delta = window - new_window;
 	tcph->window = htons(new_window);
-	tcph->check = htons(ntohs(tcph->check) + delta);
+	if (skb->ip_summed == CHECKSUM_PARTIAL)
+		return;
+
+	delta = htons(window - new_window);
+	new_check = tcph->check + delta;
+
+	tcph->check = (__force __sum16)(new_check + new_check >= 0xFFFF);
 }
 
 static void xen_netbk_tx_submit(struct xen_netbk *netbk)
