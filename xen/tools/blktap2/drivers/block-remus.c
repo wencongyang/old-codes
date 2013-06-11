@@ -1835,6 +1835,7 @@ static int tdremus_open(td_driver_t *driver, const char *name,
 {
 	struct tdremus_state *s = (struct tdremus_state *)driver->data;
 	int rc;
+	uint16_t uuid = driver->info.uuid;
 
 	RPRINTF("opening %s\n", name);
 
@@ -1842,7 +1843,7 @@ static int tdremus_open(td_driver_t *driver, const char *name,
 	 * need to know the vbd's id. Fortunately, for tapdisk2 this is hard-coded as
 	 * 0 (see tapdisk2.c)
 	 */
-	device_vbd = tapdisk_server_get_vbd(0);
+	device_vbd = tapdisk_server_get_vbd(uuid);
 
 	memset(s, 0, sizeof(*s));
 	s->server_fd.fd = -1;

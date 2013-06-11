@@ -116,6 +116,7 @@ struct td_disk_info {
 	td_sector_t                  size;
         uint64_t                     sector_size;
 	uint32_t                     info;
+	uint16_t                     uuid;
 };
 
 struct td_request {

@@ -414,6 +414,7 @@ __tapdisk_vbd_open_vdi(td_vbd_t *vbd, td_flag_t extra_flags)
 		/* set the parent_info to the first diskinfo on the stack */
 		tmp = tapdisk_vbd_first_image(vbd);
 		parent_info = &tmp->info;
+		parent_info->uuid = vbd->uuid;
 	}
 
 	if (td_flag_test(vbd->flags, TD_OPEN_LOG_DIRTY)) {
