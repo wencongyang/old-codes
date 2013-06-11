@@ -695,11 +695,12 @@ static int mwrite(int fd, void* buf, size_t len)
 		if (rc > 0)
 			cur += rc;
 
+again:
 		FD_ZERO(&wfds);
 		FD_SET(fd, &wfds);
 		if (!(rc = select(fd + 1, NULL, &wfds, NULL, &tv))) {
 			RPRINTF("time out during write\n");
-			return -1;
+			goto again;
 		} else if (rc < 0) {
 			RPRINTF("error during select: %d\n", errno);
 			return -1;
