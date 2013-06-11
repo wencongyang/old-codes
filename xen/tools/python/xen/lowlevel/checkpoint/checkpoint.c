@@ -485,7 +485,7 @@ static int colo_postresume(CheckpointObject *self)
     } else {
         fprintf(stderr, "notify compare module to resume\n");
         ioctl(dev_fd, COMP_IOCTRESUME);
-        syscall(NR_vif_block, 1);
+        syscall(NR_vif_block, 0);
     }
 
     return 0;
