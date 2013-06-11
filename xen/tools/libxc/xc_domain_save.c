@@ -1211,6 +1211,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         skip_this_iter = 0;
         N = 0;
 
+#define dont_skip (last_iter && (dirtypg != 2))
         while ( N < dinfo->p2m_size )
         {
             xc_report_progress_step(xch, N, dinfo->p2m_size);
@@ -1270,14 +1271,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                 }
                 else
                 {
-                    if ( !last_iter &&
+                    if ( !dont_skip &&
                          test_bit(n, to_send) &&
                          test_bit(n, to_skip) )
                         skip_this_iter++; /* stats keeping */
 
                     if ( !((test_bit(n, to_send) && !test_bit(n, to_skip)) ||
-                           (test_bit(n, to_send) && last_iter) ||
-                           (test_bit(n, to_fix)  && last_iter)) )
+                           (test_bit(n, to_send) && dont_skip) ||
+                           (test_bit(n, to_fix)  && dont_skip)) )
                         continue;
 
                     /*
@@ -1929,14 +1930,16 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     if ( !rc && callbacks->postcopy )
         callbacks->postcopy(callbacks->data);
 
+     memset(to_skip, 0x0, BITMAP_SIZE);
 wait_cp:
     /* checkpoint_cb can spend arbitrarily long in between rounds */
     if (!rc && callbacks->checkpoint)
         dirtypg = callbacks->checkpoint(callbacks->data);
 
     if (dirtypg == 2) {
+        memcpy(to_send, to_skip, BITMAP_SIZE);
         if ( xc_shadow_control(xch, dom,
-                               XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
+                               XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_skip),
                                dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
         {
             PERROR("Error flushing shadow PT");
@@ -1965,6 +1968,17 @@ wait_cp:
                                dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
         {
             PERROR("Error flushing shadow PT");
+        }
+
+        {
+            int merge_i, merge_j;
+            unsigned long *merge_to_send, *merge_to_skip;
+
+            merge_j = (BITMAP_SIZE + sizeof(long) - 1) / sizeof(long);
+            merge_to_send = (unsigned long *)(to_send);
+            merge_to_skip = (unsigned long *)(to_skip);
+            for (merge_i = 0; merge_i < merge_j; merge_i++)
+                merge_to_send[merge_i] |= merge_to_skip[merge_i];
         }
 
         goto copypages;
