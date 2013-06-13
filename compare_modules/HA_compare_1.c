@@ -43,6 +43,10 @@ bool compare_tcp_data = 0;
 module_param(compare_tcp_data, bool, 0644);
 MODULE_PARM_DESC(compare_tcp_data, "compare tcp data");
 
+bool ignore_tcp_window = 0;
+module_param(ignore_tcp_window, bool, 0644);
+MODULE_PARM_DESC(ignore_tcp_window, "ignore tcp window");
+
 typedef void (*PTRFUN)(int id);
 int cmp_open(struct inode*, struct file*);
 int cmp_release(struct inode*, struct file*);
@@ -372,6 +376,20 @@ compare_arp_packet(struct compare_info *m, struct compare_info *s)
 	return compare_other_packet(m->packet, s->packet, m->length);
 }
 
+static void
+update_tcp_window(struct compare_info *m, struct compare_info *s)
+{
+	uint16_t m_window = htons(m->tcp->window);
+	uint16_t s_window = htons(s->tcp->window);
+
+	m->tcp->window = htons(min(m_window, s_window));
+	if (s_window >= m_window)
+		return;
+
+	inet_proto_csum_replace2(&m->tcp->check, m->skb, m->tcp->window,
+				 s->tcp->window, 0);
+}
+
 static int
 compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 {
@@ -442,7 +460,8 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 	compare(doff);
 
 	/* tcp window size */
-	compare(window);
+	if (!ignore_tcp_window)
+		compare(window);
 
 	/* Acknowledgment Number */
 	if (m->tcp->ack) {
@@ -461,11 +480,16 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 
 #undef compare
 
+	if (ignore_tcp_window && (!ret || ret &BYPASS_MASTER))
+		update_tcp_window(m, s);
+
 	return ret ?:SAME_PACKET;
 
 out:
-	if (ret & BYPASS_MASTER)
+	if (ret & BYPASS_MASTER) {
 		m->tcp->ack_seq = min(m->tcp->ack_seq, s->tcp->ack_seq);
+		update_tcp_window(m, s);
+	}
 	return ret;
 }
 
