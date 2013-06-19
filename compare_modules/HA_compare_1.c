@@ -65,15 +65,11 @@ int fail = 0;
 
 struct proc_dir_entry* proc_entry;
 struct statistic_data {
-	unsigned int _update;   	// call counts of update()
-	unsigned int _update_m; 	// call counts of update() from master,
-						// also means number of enqueue skbs.
-	unsigned int _update_s; 	// call counts of update() from slaver,
-						// also means number of enqueue skbs.
-	unsigned int _update_eff;	// time of update() do comparasion really
-	unsigned int _loops_tot;	// totally loops time
-	//unsigned int _loops_avg;	// average loops each update()
-	unsigned int _loops_last;	// last loops in update()
+	unsigned int update;   	// call counts of update()
+	unsigned int in_soft_irq;
+	unsigned long long total_time;
+	unsigned long long last_time;
+	unsigned long long max_time;
 } statis;
 
 struct sched_data {
@@ -770,12 +766,10 @@ void update(int qlen)
 	struct sk_buff *skb_m;
 	struct sk_buff *skb_s;
 	struct sk_buff *skb;
-	int flag = 0;
-	unsigned long start;
-	unsigned int this_loop = 0;
 	int i;
 	int ret;
 	struct compare_info info_m, info_s;
+	struct timespec start, end, delta;
 
 	/*
 	 *  Compare starts untill two Qdisc are created.
@@ -785,12 +779,14 @@ void update(int qlen)
 		return;
 	}
 
-	statis._update++;
-
 	if (test_and_set_bit(HASTATE_RUNNING_NR, &state))
 		return;
 
-	start = jiffies;
+	getnstimeofday(&start);
+	statis.update++;
+
+	if (in_softirq())
+		statis.in_soft_irq++;
 
 	while (1) {
 		if (test_bit(HASTATE_INCHECKPOINT_NR, &state))
@@ -808,14 +804,6 @@ void update(int qlen)
 
 		if (i >= HASH_NR)
 			break;
-
-		if (flag == 0) {
-			flag = 1;
-			statis._update_eff++;
-		}
-
-		this_loop++;
-		statis._loops_tot++;
 
 		spin_lock(&master_queue->qlock_blo);
 		spin_lock(&slaver_queue->qlock_blo);
@@ -874,8 +862,15 @@ void update(int qlen)
 		}
 
 	}
-	statis._loops_last = this_loop;
+
 	clear_bit(HASTATE_RUNNING_NR, &state);
+
+	getnstimeofday(&end);
+	delta = timespec_sub(end, start);
+	statis.last_time = delta.tv_sec * 1000000000 + delta.tv_nsec;
+	if (statis.last_time > statis.max_time)
+		statis.max_time = statis.last_time;
+	statis.total_time += statis.last_time;
 }
 
 int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *data)
@@ -883,11 +878,8 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	struct sk_buff *skb;
 	int i;
 
-	if (statis._update_eff == 0)
-		statis._update_eff = 1;
-	printk("STAT: update=%u, update_m=%u, update_s=%u, update_eff=%u, loops_tot=%u, loops_avg=%u, loops_last=%u.\n",
-		statis._update, statis._update_m, statis._update_s, statis._update_eff, statis._loops_tot,
-		statis._loops_tot/statis._update_eff, statis._loops_last);
+	printk("STAT: update=%u, in_soft_irq=%u, total_time=%llu, last_time=%llu, max_time=%llu\n",
+		statis.update, statis.in_soft_irq, statis.total_time, statis.last_time, statis.max_time);
 	printk("STAT Debug info:\n");
 	printk("\nSTAT: status=%lx.\n", state);
 
