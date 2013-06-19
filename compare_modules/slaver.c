@@ -18,15 +18,13 @@ EXPORT_SYMBOL(s_compare_update);
 
 static int slaver_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
-	int qlen;
-
 	if (!skb_remove_foreign_references(skb)) {
 		printk(KERN_DEBUG "error removing foreign ref\n");
 		return qdisc_reshape_fail(skb, sch);
 	}
 
 	spin_lock(&slaver_queue->qlock_blo);
-	qlen = insert(&slaver_queue->blo, skb);
+	insert(&slaver_queue->blo, skb);
 	sch->qstats.backlog += qdisc_pkt_len(skb);
 	qdisc_bstats_update(sch, skb);
 	spin_unlock(&slaver_queue->qlock_blo);
@@ -35,7 +33,7 @@ static int slaver_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 	 *  Notify the compare module a new packet arrives.
 	 */
 	if (s_compare_update != NULL)
-		s_compare_update(qlen);
+		s_compare_update();
 
 	return NET_XMIT_SUCCESS;
 }
@@ -70,9 +68,7 @@ static int slaver_init(struct Qdisc *sch, struct nlattr *opt)
 	slaver_queue = q;
 	hash_init(&slaver_queue->blo);
 	skb_queue_head_init(&slaver_queue->rel);
-	skb_queue_head_init(&slaver_queue->nfs);
 	spin_lock_init(&q->qlock_blo);
-	spin_lock_init(&q->qlock_nfs);
 	spin_lock_init(&q->qlock_rel);
 	slaver_queue->sch = sch;
 

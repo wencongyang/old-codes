@@ -17,15 +17,13 @@ EXPORT_SYMBOL(m_compare_update);
 
 static int master_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
-	int qlen;
-
 	if (!skb_remove_foreign_references(skb)) {
 		printk(KERN_DEBUG "error removing foreign ref\n");
 		return qdisc_reshape_fail(skb, sch);
 	}
 
 	spin_lock(&master_queue->qlock_blo);
-	qlen = insert(&master_queue->blo, skb);
+	insert(&master_queue->blo, skb);
 	sch->qstats.backlog += qdisc_pkt_len(skb);
 	qdisc_bstats_update(sch, skb);
 	spin_unlock(&master_queue->qlock_blo);
@@ -34,7 +32,7 @@ static int master_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 	 *  Notify the compare module a new packet arrives.
 	 */
 	if (m_compare_update != NULL)
-		m_compare_update(qlen);
+		m_compare_update();
 
 	return NET_XMIT_SUCCESS;
 }
@@ -64,10 +62,8 @@ static int master_init(struct Qdisc *sch, struct nlattr *opt)
 	master_queue = q;
 	hash_init(&master_queue->blo);
 	skb_queue_head_init(&master_queue->rel);
-	skb_queue_head_init(&master_queue->nfs);
 	spin_lock_init(&q->qlock_blo);
 	spin_lock_init(&q->qlock_rel);
-	spin_lock_init(&q->qlock_nfs);
 	master_queue->sch = sch;
 
 	return 0;

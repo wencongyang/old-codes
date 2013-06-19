@@ -7,13 +7,10 @@
 #include <net/pkt_sched.h>
 
 #define HASH_NR 	1000
-#define MAPSIZE		65536
-#define MAXQ		100
 
 struct Q_elem {	
 	struct sk_buff_head queue;
 	uint32_t last_seq;
-//	uint32_t last_jiffies;
 };
 
 struct hash_head {
@@ -21,4 +18,4 @@ struct hash_head {
 };
 
 void hash_init(struct hash_head *h);
-int insert(struct hash_head *h, struct sk_buff *skb);
+void insert(struct hash_head *h, struct sk_buff *skb);

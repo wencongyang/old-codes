@@ -95,7 +95,7 @@ extern PTRFUN m_compare_update;
 static void clear_slaver_queue(void);
 static void move_master_queue(void);
 static void release_queue(void);
-void update(int id);
+void update(void);
 
 wait_queue_head_t queue;
 int cmp_major=0, cmp_minor=0;
@@ -751,7 +751,7 @@ static void release_queue(void)
 }
 
 
-void update(int qlen)
+void update(void)
 {
 	struct sk_buff *skb_m;
 	struct sk_buff *skb_s;

@@ -42,7 +42,7 @@ int fetch_key(const struct sk_buff *skb, unsigned short *src, unsigned short *ds
 }
 
 
-int insert(struct hash_head *h, struct sk_buff *skb)
+void insert(struct hash_head *h, struct sk_buff *skb)
 {
 	unsigned short src, dst;
 	int i;
@@ -51,5 +51,5 @@ int insert(struct hash_head *h, struct sk_buff *skb)
 	i = dst % HASH_NR;
 	__skb_queue_tail(&h->e[i].queue, skb);
 
-	return 0;
+	return;
 }
