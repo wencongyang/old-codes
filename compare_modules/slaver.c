@@ -6,19 +6,8 @@
  *  YeWei - 2011/9/1
  */
 #include "hash.h"
+#include "comm.h"
 
-typedef void (*PTRFUN)(int);
-
-struct sched_data {
-	struct hash_head blo; /* packets not compared */
-	struct sk_buff_head rel; /* packets compared successfully */
-	struct sk_buff_head nfs; /* packets to nfs server */
-	struct Qdisc *sch;
-
-	spinlock_t qlock_blo;
-	spinlock_t qlock_rel;
-	spinlock_t qlock_nfs;
-};
 struct sched_data *slaver_queue = NULL;
 EXPORT_SYMBOL(slaver_queue);
 

@@ -25,7 +25,9 @@
 #include <linux/udp.h>
 #include <linux/if_arp.h>
 #include <net/tcp.h>
+
 #include "hash.h"
+#include "comm.h"
 
 bool ignore_id = 1;
 module_param(ignore_id, bool, 0644);
@@ -51,7 +53,6 @@ bool ignore_ack_difference = 0;
 module_param(ignore_ack_difference, bool, 0644);
 MODULE_PARM_DESC(ignore_ack_difference, "ignore ack difference");
 
-typedef void (*PTRFUN)(int id);
 int cmp_open(struct inode*, struct file*);
 int cmp_release(struct inode*, struct file*);
 long cmp_ioctl(struct file*, unsigned int, unsigned long);
@@ -71,17 +72,6 @@ struct statistic_data {
 	unsigned long long last_time;
 	unsigned long long max_time;
 } statis;
-
-struct sched_data {
-	struct hash_head blo;
-	struct sk_buff_head rel;
-	struct sk_buff_head nfs; /* packets to nfs server */
-	struct Qdisc *sch;
-
-	spinlock_t qlock_blo;
-	spinlock_t qlock_rel;
-	spinlock_t qlock_nfs;
-};
 
 struct sk_buff_head wait_for_release;
 spinlock_t wqlock;
