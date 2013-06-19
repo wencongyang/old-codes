@@ -15,11 +15,6 @@ EXPORT_SYMBOL(master_queue);
 PTRFUN m_compare_update = NULL;
 EXPORT_SYMBOL(m_compare_update);
 
-static int skb_remove_foreign_references(struct sk_buff *skb)
-{
-	return !skb_linearize(skb);
-}
-
 static int master_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
 	int qlen;

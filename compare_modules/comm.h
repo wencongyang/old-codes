@@ -10,3 +10,8 @@ struct sched_data {
 	spinlock_t qlock_rel;
 	spinlock_t qlock_nfs;
 };
+
+static inline int skb_remove_foreign_references(struct sk_buff *skb)
+{
+	return !skb_linearize(skb);
+}

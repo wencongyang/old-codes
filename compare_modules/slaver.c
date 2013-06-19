@@ -16,11 +16,6 @@ extern struct sched_data *master_queue;
 PTRFUN s_compare_update = NULL;
 EXPORT_SYMBOL(s_compare_update);
 
-static int skb_remove_foreign_references(struct sk_buff *skb)
-{
-	return !skb_linearize(skb);
-}
-
 static int slaver_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
 	int qlen;
