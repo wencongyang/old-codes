@@ -883,13 +883,11 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	printk("STAT Debug info:\n");
 	printk("\nSTAT: status=%lx.\n", state);
 
-	spin_lock(&master_queue->qlock_blo);
 	for (i = 0; i < HASH_NR; i++) {
 		skb = skb_peek(&master_queue->blo.e[i].queue);
 		if (skb != NULL)
 			printk("STAT: m_blo[%d] not empty.\n", i);
 	}
-	spin_unlock(&master_queue->qlock_blo);
 
 	spin_lock(&master_queue->qlock_rel);
 	skb = skb_peek(&master_queue->rel);
@@ -897,13 +895,11 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 		printk("STAT: m_rel not empty.\n");
 	spin_unlock(&master_queue->qlock_rel);
 
-	spin_lock(&slaver_queue->qlock_blo);
 	for (i = 0; i < HASH_NR; i++) {
 		skb = skb_peek(&slaver_queue->blo.e[i].queue);
 		if (skb != NULL)
 			printk("STAT: s_blo[%d] not empty.\n", i);
 	}
-	spin_unlock(&slaver_queue->qlock_blo);
 
 	spin_lock(&slaver_queue->qlock_rel);
 	skb = skb_peek(&slaver_queue->rel);
