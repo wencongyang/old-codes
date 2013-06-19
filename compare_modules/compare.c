@@ -669,18 +669,15 @@ static void clear_slaver_queue(void)
 	struct sk_buff *skb;
 	struct hash_head *h = &slaver_queue->blo;
 
-	spin_lock(&slaver_queue->qlock_blo);
 
 	for (i = 0; i < HASH_NR; i++) {
-		skb = __skb_dequeue(&h->e[i].queue);
+		skb = skb_dequeue(&h->e[i].queue);
 		while (skb != NULL) {
 			slaver_queue->sch->qstats.backlog -= qdisc_pkt_len(skb);
 			kfree_skb(skb);
-			skb = __skb_dequeue(&h->e[i].queue);
+			skb = skb_dequeue(&h->e[i].queue);
 		}
 	}
-
-	spin_unlock(&slaver_queue->qlock_blo);
 }
 
 static int get_seq(struct sk_buff *skb, uint32_t *seq)
@@ -711,21 +708,19 @@ static void move_master_queue(void)
 	struct hash_head *h = &master_queue->blo;
 	uint32_t seq;
 
-	spin_lock(&master_queue->qlock_blo);
 	spin_lock(&wqlock);
 
 	for (i = 0; i < HASH_NR; i++) {
-		skb = __skb_dequeue(&h->e[i].queue);
+		skb = skb_dequeue(&h->e[i].queue);
 		while (skb != NULL) {
 			if (get_seq(skb, &seq) && after(seq, h->e[i].last_seq))
 				h->e[i].last_seq = seq;
 			__skb_queue_tail(&wait_for_release, skb);
-			skb = __skb_dequeue(&h->e[i].queue);
+			skb = skb_dequeue(&h->e[i].queue);
 		}
 	}
 
 	spin_unlock(&wqlock);
-	spin_unlock(&master_queue->qlock_blo);
 }
 
 static void release_queue(void)
@@ -795,14 +790,8 @@ void update(void)
 		if (i >= HASH_NR)
 			break;
 
-		spin_lock(&master_queue->qlock_blo);
-		spin_lock(&slaver_queue->qlock_blo);
-
-		skb_m = __skb_dequeue(&master_queue->blo.e[i].queue);
-		skb_s = __skb_dequeue(&slaver_queue->blo.e[i].queue);
-
-		spin_unlock(&slaver_queue->qlock_blo);
-		spin_unlock(&master_queue->qlock_blo);
+		skb_m = skb_dequeue(&master_queue->blo.e[i].queue);
+		skb_s = skb_dequeue(&slaver_queue->blo.e[i].queue);
 
 		info_m.skb = skb_m;
 		info_s.skb = skb_s;
@@ -815,9 +804,7 @@ void update(void)
 				spin_unlock(&master_queue->qlock_rel);
 				netif_schedule_queue(master_queue->sch->dev_queue);
 			} else {
-				spin_lock(&master_queue->qlock_blo);
-				__skb_queue_head(&master_queue->blo.e[i].queue, skb_m);
-				spin_unlock(&master_queue->qlock_blo);
+				skb_queue_head(&master_queue->blo.e[i].queue, skb_m);
 			}
 
 			if (likely(ret & DROP_SLAVER)) {
@@ -826,9 +813,7 @@ void update(void)
 				spin_unlock(&slaver_queue->qlock_rel);
 				netif_schedule_queue(slaver_queue->sch->dev_queue);
 			} else {
-				spin_lock(&slaver_queue->qlock_blo);
-				__skb_queue_head(&slaver_queue->blo.e[i].queue, skb_s);
-				spin_unlock(&slaver_queue->qlock_blo);
+				skb_queue_head(&slaver_queue->blo.e[i].queue, skb_s);
 			}
 			master_queue->blo.e[i].last_seq = info_m.last_seq;
 			//printk("netif_schedule%u.\n", cnt);

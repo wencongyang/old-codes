@@ -23,11 +23,9 @@ static int slaver_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 		return qdisc_reshape_fail(skb, sch);
 	}
 
-	spin_lock(&slaver_queue->qlock_blo);
 	insert(&slaver_queue->blo, skb);
 	sch->qstats.backlog += qdisc_pkt_len(skb);
 	qdisc_bstats_update(sch, skb);
-	spin_unlock(&slaver_queue->qlock_blo);
 
 	/*
 	 *  Notify the compare module a new packet arrives.
@@ -68,7 +66,6 @@ static int slaver_init(struct Qdisc *sch, struct nlattr *opt)
 	slaver_queue = q;
 	hash_init(&slaver_queue->blo);
 	skb_queue_head_init(&slaver_queue->rel);
-	spin_lock_init(&q->qlock_blo);
 	spin_lock_init(&q->qlock_rel);
 	slaver_queue->sch = sch;
 

@@ -49,7 +49,7 @@ void insert(struct hash_head *h, struct sk_buff *skb)
 
 	fetch_key(skb, &src, &dst);
 	i = dst % HASH_NR;
-	__skb_queue_tail(&h->e[i].queue, skb);
+	skb_queue_tail(&h->e[i].queue, skb);
 
 	return;
 }

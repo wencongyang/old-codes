@@ -5,7 +5,6 @@ struct sched_data {
 	struct sk_buff_head rel; /* packest compared successfully */
 	struct Qdisc* sch;
 
-	spinlock_t qlock_blo;
 	spinlock_t qlock_rel;
 };
 
