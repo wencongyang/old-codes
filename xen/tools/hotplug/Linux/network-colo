@@ -15,6 +15,8 @@ pif=$4
 ifb1=$5
 ifb2=$6
 
+qlen=40960
+
 module="HA_compare"
 device="HA_compare"
 path="/root/yewei/source/pure/code"
@@ -22,6 +24,9 @@ path="/root/yewei/source/pure/code"
 # start_master ifbx
 function start_master() {
     echo "start master"
+
+    # In colo mode, we don't use gso, gro...
+    ip link set dev $vif qlen $qlen
 
     # copy and foward input packets to $pif
     tc qdisc add dev $vif root handle 1: prio
@@ -32,9 +37,6 @@ function start_master() {
     tc qdisc add dev $vif ingress
     tc filter add dev $vif parent ffff: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $1
     tc filter add dev $vif parent ffff: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $1
-
-    # In colo mode, we don't use gso, gro...
-    ip link set dev $1 qlen 4096
 }
 
 function stop_master() {
@@ -101,6 +103,7 @@ function install_master() {
         exit 1
     fi
     ip link set ifb$index1 up
+    ip link set ifb$index1 qlen $qlen
     tc qdisc add dev ifb$index1 root handle 1: master
 
     select_ifb
@@ -110,9 +113,11 @@ function install_master() {
         exit 1
     fi
     ip link set ifb$index2 up
+    ip link set ifb$index2 qlen $qlen
     tc qdisc add dev ifb$index2 root handle 1: slaver
 
     ifconfig $pif promisc
+    ip link set $pif qlen $qlen
 
     # forward packets from $pif to ifb$index2
     tc qdisc add dev $pif ingress
@@ -151,12 +156,14 @@ function uninstall_master() {
 function install_slaver()
 {
     ifconfig $pif promisc
+    ip link set $pif qlen $qlen
 
     # forward packets from $pif to $vif
     tc qdisc add dev $pif ingress
     tc filter add dev eth0 parent ffff: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $vif
     tc filter add dev eth0 parent ffff: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $vif
 
+    ip link set $vif qlen $qlen
     # forward packets from $vif to $pif
     tc qdisc add dev $vif ingress
     tc filter add dev $vif parent ffff: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $pif
