@@ -6,7 +6,7 @@
 #include <linux/skbuff.h>
 #include <net/pkt_sched.h>
 
-#define HASH_NR 	1000
+#define HASH_NR 	10000
 
 struct Q_elem {
 	struct sk_buff_head queue;
