@@ -452,9 +452,12 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 
 		if (m_len != 0 && s_len == 0)
 			ret |= DROP_SLAVER;
+
+		if (ret)
+			goto out;
 	}
 
-	if (!ret && m_len != 0)
+	if (m_len != 0)
 		m->last_seq = m_seq;
 
 	/* Sequence Number */
