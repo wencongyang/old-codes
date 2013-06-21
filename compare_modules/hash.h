@@ -8,7 +8,7 @@
 
 #define HASH_NR 	1000
 
-struct Q_elem {	
+struct Q_elem {
 	struct sk_buff_head queue;
 	uint32_t last_seq;
 };
@@ -18,4 +18,4 @@ struct hash_head {
 };
 
 void hash_init(struct hash_head *h);
-void insert(struct hash_head *h, struct sk_buff *skb);
+int insert(struct hash_head *h, struct sk_buff *skb);

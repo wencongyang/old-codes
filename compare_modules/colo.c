@@ -3,6 +3,7 @@
 
 /* qidsc: master */
 struct sched_data *master_queue = NULL;
+struct sched_data *slaver_queue = NULL;
 EXPORT_SYMBOL(master_queue);
 
 PTRFUN m_compare_update = NULL;
@@ -10,20 +11,26 @@ EXPORT_SYMBOL(m_compare_update);
 
 static int master_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
+	int index;
+	struct Q_elem *m, *s;
+
 	if (!skb_remove_foreign_references(skb)) {
 		printk(KERN_DEBUG "error removing foreign ref\n");
 		return qdisc_reshape_fail(skb, sch);
 	}
 
-	insert(&master_queue->blo, skb);
+	index = insert(&master_queue->blo, skb);
 	sch->qstats.backlog += qdisc_pkt_len(skb);
 	qdisc_bstats_update(sch, skb);
 
 	/*
 	 *  Notify the compare module a new packet arrives.
 	 */
-	if (m_compare_update != NULL)
-		m_compare_update();
+	if (m_compare_update != NULL && slaver_queue != NULL) {
+		m = &master_queue->blo.e[index];
+		s = &slaver_queue->blo.e[index];
+		m_compare_update(m, s);
+	}
 
 	return NET_XMIT_SUCCESS;
 }
@@ -70,7 +77,6 @@ struct Qdisc_ops master_qdisc_ops = {
 };
 
 /* qdisc: slaver */
-struct sched_data *slaver_queue = NULL;
 EXPORT_SYMBOL(slaver_queue);
 
 PTRFUN s_compare_update = NULL;
@@ -78,20 +84,26 @@ EXPORT_SYMBOL(s_compare_update);
 
 static int slaver_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
+	int index;
+	struct Q_elem *m, *s;
+
 	if (!skb_remove_foreign_references(skb)) {
 		printk(KERN_DEBUG "error removing foreign ref\n");
 		return qdisc_reshape_fail(skb, sch);
 	}
 
-	insert(&slaver_queue->blo, skb);
+	index = insert(&slaver_queue->blo, skb);
 	sch->qstats.backlog += qdisc_pkt_len(skb);
 	qdisc_bstats_update(sch, skb);
 
 	/*
 	 *  Notify the compare module a new packet arrives.
 	 */
-	if (s_compare_update != NULL)
-		s_compare_update();
+	if (s_compare_update != NULL && master_queue != NULL) {
+		m = &master_queue->blo.e[index];
+		s = &slaver_queue->blo.e[index];
+		s_compare_update(m, s);
+	}
 
 	return NET_XMIT_SUCCESS;
 }

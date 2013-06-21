@@ -1,4 +1,4 @@
-typedef void (*PTRFUN)(void);
+typedef void (*PTRFUN)(struct Q_elem *m, struct Q_elem *s);
 
 struct sched_data {
 	struct hash_head blo; /* packets not compared */

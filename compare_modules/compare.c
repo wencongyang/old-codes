@@ -95,7 +95,7 @@ extern PTRFUN m_compare_update;
 static void clear_slaver_queue(void);
 static void move_master_queue(void);
 static void release_queue(void);
-void update(void);
+void update(struct Q_elem *m, struct Q_elem *s);
 
 wait_queue_head_t queue;
 int cmp_major=0, cmp_minor=0;
@@ -746,23 +746,14 @@ static void release_queue(void)
 }
 
 
-void update(void)
+void update(struct Q_elem *m, struct Q_elem *s)
 {
 	struct sk_buff *skb_m;
 	struct sk_buff *skb_s;
 	struct sk_buff *skb;
-	int i;
 	int ret;
 	struct compare_info info_m, info_s;
 	struct timespec start, end, delta;
-
-	/*
-	 *  Compare starts untill two Qdisc are created.
-	 */
-	if (master_queue == NULL || slaver_queue == NULL) {
-		printk("HA_compare: ignore skb in checkpoint due to qdisc not ready.\n");
-		return;
-	}
 
 	if (test_and_set_bit(HASTATE_RUNNING_NR, &state))
 		return;
@@ -777,25 +768,19 @@ void update(void)
 		if (test_bit(HASTATE_INCHECKPOINT_NR, &state))
 			break;
 
-		for (i = 0; i < HASH_NR; i++) {
-			skb = skb_peek(&master_queue->blo.e[i].queue);
-			if (skb != NULL) {
-				skb = skb_peek(&slaver_queue->blo.e[i].queue);
-				if (skb != NULL)
-					break;
-			}
-
-		}
-
-		if (i >= HASH_NR)
+		skb = skb_peek(&m->queue);
+		if (!skb)
+			break;
+		skb = skb_peek(&s->queue);
+		if (!skb)
 			break;
 
-		skb_m = skb_dequeue(&master_queue->blo.e[i].queue);
-		skb_s = skb_dequeue(&slaver_queue->blo.e[i].queue);
+		skb_m = skb_dequeue(&m->queue);
+		skb_s = skb_dequeue(&s->queue);
 
 		info_m.skb = skb_m;
 		info_s.skb = skb_s;
-		info_m.last_seq = master_queue->blo.e[i].last_seq;
+		info_m.last_seq = m->last_seq;
 		ret = compare_skb(&info_m, &info_s);
 		if (ret) {
 			if (likely(ret & BYPASS_MASTER)) {
@@ -804,7 +789,7 @@ void update(void)
 				spin_unlock(&master_queue->qlock_rel);
 				netif_schedule_queue(master_queue->sch->dev_queue);
 			} else {
-				skb_queue_head(&master_queue->blo.e[i].queue, skb_m);
+				skb_queue_head(&m->queue, skb_m);
 			}
 
 			if (likely(ret & DROP_SLAVER)) {
@@ -813,9 +798,9 @@ void update(void)
 				spin_unlock(&slaver_queue->qlock_rel);
 				netif_schedule_queue(slaver_queue->sch->dev_queue);
 			} else {
-				skb_queue_head(&slaver_queue->blo.e[i].queue, skb_s);
+				skb_queue_head(&s->queue, skb_s);
 			}
-			master_queue->blo.e[i].last_seq = info_m.last_seq;
+			m->last_seq = info_m.last_seq;
 			//printk("netif_schedule%u.\n", cnt);
 		} else {
 			/*
