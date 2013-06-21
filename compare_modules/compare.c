@@ -457,7 +457,7 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 			goto out;
 	}
 
-	if (m_len != 0)
+	if (m_len != 0 || m->tcp->fin)
 		m->last_seq = m_seq;
 
 	/* Sequence Number */
