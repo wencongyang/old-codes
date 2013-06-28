@@ -126,7 +126,7 @@ static struct xc_interface_core *xc_interface_open_common(xentoollog_logger *log
     xch->error_handler   = logger;           xch->error_handler_tofree   = 0;
     xch->dombuild_logger = dombuild_logger;  xch->dombuild_logger_tofree = 0;
 
-    xch->hypercall_buffer_cache_nr = 0;
+    memset(xch->hypercall_buffer_cache_nr, 0, sizeof(xch->hypercall_buffer_cache_nr));
 
     xch->hypercall_buffer_total_allocations = 0;
     xch->hypercall_buffer_total_releases = 0;

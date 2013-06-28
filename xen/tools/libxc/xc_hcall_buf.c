@@ -56,13 +56,13 @@ static void *hypercall_buffer_cache_alloc(xc_interface *xch, int nr_pages)
     if ( xch->hypercall_buffer_current_allocations > xch->hypercall_buffer_maximum_allocations )
         xch->hypercall_buffer_maximum_allocations = xch->hypercall_buffer_current_allocations;
 
-    if ( nr_pages > 1 )
+    if ( nr_pages > HYPERCALL_BUFFER_CACHE_TYPE )
     {
         xch->hypercall_buffer_cache_toobig++;
     }
-    else if ( xch->hypercall_buffer_cache_nr > 0 )
+    else if ( xch->hypercall_buffer_cache_nr[nr_pages-1] > 0 )
     {
-        p = xch->hypercall_buffer_cache[--xch->hypercall_buffer_cache_nr];
+        p = xch->hypercall_buffer_cache[nr_pages-1][--xch->hypercall_buffer_cache_nr[nr_pages-1]];
         xch->hypercall_buffer_cache_hits++;
     }
     else
@@ -84,9 +84,9 @@ static int hypercall_buffer_cache_free(xc_interface *xch, void *p, int nr_pages)
     xch->hypercall_buffer_total_releases++;
     xch->hypercall_buffer_current_allocations--;
 
-    if ( nr_pages == 1 && xch->hypercall_buffer_cache_nr < HYPERCALL_BUFFER_CACHE_SIZE )
+    if ( nr_pages <= HYPERCALL_BUFFER_CACHE_TYPE && xch->hypercall_buffer_cache_nr[nr_pages-1] < HYPERCALL_BUFFER_CACHE_SIZE )
     {
-        xch->hypercall_buffer_cache[xch->hypercall_buffer_cache_nr++] = p;
+        xch->hypercall_buffer_cache[nr_pages-1][xch->hypercall_buffer_cache_nr[nr_pages-1]++] = p;
         rc = 1;
     }
 
@@ -117,6 +117,7 @@ static void do_hypercall_buffer_free_pages(void *ptr, int nr_pages)
 void xc__hypercall_buffer_cache_release(xc_interface *xch)
 {
     void *p;
+    int i;
 
     hypercall_buffer_cache_lock(xch);
 
@@ -127,16 +128,18 @@ void xc__hypercall_buffer_cache_release(xc_interface *xch)
               xch->hypercall_buffer_current_allocations,
               xch->hypercall_buffer_maximum_allocations);
     DBGPRINTF("hypercall buffer: cache current size:%d",
-              xch->hypercall_buffer_cache_nr);
+              xch->hypercall_buffer_cache_nr[0]);
     DBGPRINTF("hypercall buffer: cache hits:%d misses:%d toobig:%d",
               xch->hypercall_buffer_cache_hits,
               xch->hypercall_buffer_cache_misses,
               xch->hypercall_buffer_cache_toobig);
 
-    while ( xch->hypercall_buffer_cache_nr > 0 )
-    {
-        p = xch->hypercall_buffer_cache[--xch->hypercall_buffer_cache_nr];
-        do_hypercall_buffer_free_pages(p, 1);
+    for (i = 0; i < HYPERCALL_BUFFER_CACHE_TYPE; i++) {
+        while ( xch->hypercall_buffer_cache_nr[i] > 0 )
+        {
+            p = xch->hypercall_buffer_cache[i][--xch->hypercall_buffer_cache_nr[i]];
+            do_hypercall_buffer_free_pages(p, 1);
+        }
     }
 
     hypercall_buffer_cache_unlock(xch);
