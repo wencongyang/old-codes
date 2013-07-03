@@ -358,7 +358,8 @@ void xenvif_disconnect(struct xenvif *vif)
 		if (is_resumed && netif_running(dev))
 			xenvif_down(vif);
 		rtnl_unlock();
-		xenvif_put(vif);
+		if (is_resumed)
+			xenvif_put(vif);
 	}
 
 	atomic_dec(&vif->refcnt);
