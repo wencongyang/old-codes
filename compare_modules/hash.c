@@ -1,4 +1,6 @@
 #include "hash.h"
+#include <linux/ip.h>
+#include <net/ip.h>
 
 void hash_init(struct hash_head *h)
 {
@@ -9,35 +11,89 @@ void hash_init(struct hash_head *h)
 	}
 }
 
-int fetch_key(const struct sk_buff *skb, unsigned short *src, unsigned short *dst)
+/* copied from kernel, old kernel doesn't have the API skb_flow_dissect() */
+struct flow_keys {
+	/* (src,dst) must be grouped, in the same way than in IP header */
+	__be32 src;
+	__be32 dst;
+	union {
+		__be32 ports;
+		__be16 port16[2];
+	};
+	u16 thoff;
+	u8 ip_proto;
+};
+
+/* copy saddr & daddr, possibly using 64bit load/store
+ * Equivalent to :	flow->src = iph->saddr;
+ *			flow->dst = iph->daddr;
+ */
+static void iph_to_flow_copy_addrs(struct flow_keys *flow, const struct iphdr *iph)
 {
-	unsigned char protocol;
-	int len, port;
-	unsigned char *t;
-	unsigned char *p = skb->data;
+	BUILD_BUG_ON(offsetof(typeof(*flow), dst) !=
+		     offsetof(typeof(*flow), src) + sizeof(flow->src));
+	memcpy(&flow->src, &iph->saddr, sizeof(flow->src) + sizeof(flow->dst));
+}
 
-	t = (unsigned char*)&len;
-	*t = *((unsigned char *)(p + 14));
+bool skb_flow_dissect(const struct sk_buff *skb, struct flow_keys *flow)
+{
+	int poff, nhoff = skb_network_offset(skb);
+	u8 ip_proto;
+	__be16 proto = skb->protocol;
 
-	len &= 0xf;
-	len = len * 4;
+	memset(flow, 0, sizeof(*flow));
 
-	port = 14 + len;
+	switch (proto) {
+	case __constant_htons(ETH_P_IP): {
+		const struct iphdr *iph;
+		struct iphdr _iph;
 
-	t = (unsigned char*)&protocol;
-	*t = *((unsigned char *)(p + 23));
+		iph = skb_header_pointer(skb, nhoff, sizeof(_iph), &_iph);
+		if (!iph)
+			return false;
 
-	if (protocol == 17 || protocol == 6) {
-		t = (unsigned char*)src;
-		*(t+1) = *((unsigned char *)(p + port));
-		*t = *((unsigned char *)(p + port + 1));
-		t = (unsigned char*)dst;
-		*(t+1) = *((unsigned char *)(p + port + 2));
-		*t = *((unsigned char *)(p + port + 3));
-		return 1;
+		if (ip_is_fragment(iph))
+			ip_proto = 0;
+		else if (iph->protocol != 0)
+			ip_proto = iph->protocol;
+		else
+			return false;
+		iph_to_flow_copy_addrs(flow, iph);
+		nhoff += iph->ihl * 4;
+		break;
+	}
+	default:
+		return false;
 	}
 
-	*src = *dst = 0;
+	flow->ip_proto = ip_proto;
+	poff = proto_ports_offset(ip_proto);
+	if (poff >= 0) {
+		__be32 *ports, _ports;
+
+		nhoff += poff;
+		ports = skb_header_pointer(skb, nhoff, sizeof(_ports), &_ports);
+		if (ports)
+			flow->ports = *ports;
+	}
+
+	flow->thoff = (u16) nhoff;
+
+	return true;
+}
+
+
+int fetch_key(const struct sk_buff *skb, unsigned short *src, unsigned short *dst)
+{
+	struct flow_keys keys;
+
+	if (skb_flow_dissect(skb, &keys)) {
+		*src = htons(keys.port16[0]);
+		*dst = htons(keys.port16[1]);
+	} else {
+		*src = *dst = 0;
+	}
+
 	return 0;
 }
 

@@ -1,7 +1,7 @@
 obj-m := sch_colo.o HA_compare.o
 
 sch_colo-objs := colo.o hash.o
-HA_compare-objs := compare.o hash.o
+HA_compare-objs := compare.o
 KERNELBUILD := /lib/modules/`uname -r`/build
 default:
 	make -C $(KERNELBUILD) M=$(shell pwd) modules
