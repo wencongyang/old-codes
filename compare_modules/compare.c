@@ -90,8 +90,7 @@ struct _cmp_dev {
 
 extern struct sched_data *master_queue;
 extern struct sched_data *slaver_queue;
-extern PTRFUN s_compare_update;
-extern PTRFUN m_compare_update;
+extern PTRFUN compare_update;
 static void clear_slaver_queue(void);
 static void move_master_queue(void);
 static void release_queue(void);
@@ -916,8 +915,7 @@ static int __init compare_module_init(void)
 	sema_init(&cmp_dev.sem, 1);
 	init_waitqueue_head(&queue);
 
-	s_compare_update = update;
-	m_compare_update = update;
+	compare_update = update;
 	skb_queue_head_init(&wait_for_release);
 	spin_lock_init(&wqlock);
 
@@ -937,8 +935,7 @@ static void __exit compare_module_exit(void)
 	/* free a device id */
 	unregister_chrdev_region(MKDEV(cmp_major, cmp_minor), 1);
 
-	s_compare_update = NULL;
-	m_compare_update = NULL;
+	compare_update = NULL;
 
 	remove_proc_entry("HA_compare", NULL);
 }

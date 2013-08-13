@@ -10,7 +10,9 @@
 
 struct Q_elem {
 	struct sk_buff_head queue;
+	struct sk_buff_head slaver_queue;
 	uint32_t last_seq;
+	uint32_t s_last_seq;
 };
 
 struct hash_head {
