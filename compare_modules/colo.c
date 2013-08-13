@@ -1,6 +1,20 @@
 #include "hash.h"
 #include "comm.h"
 
+enum {
+	TCA_COLO_UNSPEC,
+	TCA_COLO_IDX,
+	__TCA_COLO_MAX,
+};
+
+//#define TCA_COLO_MAX	(__TCA_COLO_MAX - 1)
+#define TCA_COLO_MAX 10
+
+struct colo_idx {
+	uint32_t this_idx;
+	uint32_t other_idx;
+};
+
 /* qidsc: master */
 struct sched_data *master_queue = NULL;
 struct sched_data *slaver_queue = NULL;
@@ -55,8 +69,23 @@ static struct sk_buff *master_dequeue(struct Qdisc* sch)
 static int master_init(struct Qdisc *sch, struct nlattr *opt)
 {
 	struct sched_data *q = qdisc_priv(sch);
+	struct nlattr *tb[TCA_COLO_MAX + 1];
+	int err;
+	struct colo_idx *idx;
 
 	printk(KERN_DEBUG "master_init\n");
+	err = nla_parse_nested(tb, TCA_COLO_MAX, opt, NULL);
+	if (err)
+		return err;
+
+	if (tb[TCA_COLO_IDX] == NULL) {
+		pr_err("missing slaver dev index\n");
+		return -EINVAL;
+	}
+
+	idx = nla_data(tb[TCA_COLO_IDX]);
+	pr_info("master_idx is: %d, slaver_idx is: %d\n", idx->this_idx, idx->other_idx);
+
 	master_queue = q;
 	hash_init(&master_queue->blo);
 	skb_queue_head_init(&master_queue->rel);
@@ -133,8 +162,23 @@ static struct sk_buff *slaver_dequeue(struct Qdisc* sch)
 static int slaver_init(struct Qdisc *sch, struct nlattr *opt)
 {
 	struct sched_data *q = qdisc_priv(sch);
+	struct nlattr *tb[TCA_COLO_MAX + 1];
+	int err;
+	struct colo_idx *idx;
 
 	printk(KERN_DEBUG "slaver_init\n");
+	err = nla_parse_nested(tb, TCA_COLO_MAX, opt, NULL);
+	if (err)
+		return err;
+
+	if (tb[TCA_COLO_IDX] == NULL) {
+		pr_err("missing master dev index\n");
+		return -EINVAL;
+	}
+
+	idx = nla_data(tb[TCA_COLO_IDX]);
+	pr_info("master_idx is: %d, slaver_idx is: %d\n", idx->other_idx, idx->this_idx);
+
 	slaver_queue = q;
 	hash_init(&slaver_queue->blo);
 	skb_queue_head_init(&slaver_queue->rel);
