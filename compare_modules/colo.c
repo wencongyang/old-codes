@@ -22,6 +22,11 @@ EXPORT_SYMBOL(compare_update);
 struct hash_head *colo_hash_head;
 EXPORT_SYMBOL(colo_hash_head);
 
+static inline int skb_remove_foreign_references(struct sk_buff *skb)
+{
+	return !skb_linearize(skb);
+}
+
 static struct hash_head *alloc_hash(struct colo_idx *idx, int flags)
 {
 	struct hash_head *h;
@@ -72,14 +77,14 @@ out:
 static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
 	struct sched_data *q = qdisc_priv(sch);
-	int index;
+	struct hash_value *hash_value;
 
 	if (!skb_remove_foreign_references(skb)) {
 		printk(KERN_DEBUG "error removing foreign ref\n");
 		return qdisc_reshape_fail(skb, sch);
 	}
 
-	index = insert(q->blo, skb, q->flags);
+	hash_value = insert(q->blo, skb, q->flags);
 	sch->qstats.backlog += qdisc_pkt_len(skb);
 	qdisc_bstats_update(sch, skb);
 
@@ -87,7 +92,7 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 	 *  Notify the compare module a new packet arrives.
 	 */
 	if (compare_update)
-		compare_update(q->blo, index);
+		compare_update(hash_value);
 
 	return NET_XMIT_SUCCESS;
 }

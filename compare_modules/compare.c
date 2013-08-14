@@ -91,7 +91,7 @@ extern struct hash_head *colo_hash_head;
 static void clear_slaver_queue(struct hash_head *h);
 static void move_master_queue(struct hash_head *h);
 static void release_queue(struct hash_head *h);
-void update(struct hash_head *h, int index);
+void update(struct hash_value *h);
 
 wait_queue_head_t queue;
 int cmp_major=0, cmp_minor=0;
@@ -737,7 +737,7 @@ static void release_queue(struct hash_head *h)
 }
 
 
-void update(struct hash_head *h, int index)
+void update(struct hash_value *hash_value)
 {
 	struct sk_buff *skb_m;
 	struct sk_buff *skb_s;
@@ -745,7 +745,7 @@ void update(struct hash_head *h, int index)
 	int ret;
 	struct compare_info info_m, info_s;
 	struct timespec start, end, delta;
-	struct Q_elem *hash_value = &h->e[index];
+	struct hash_head *h = hash_value->head;
 
 	if (test_and_set_bit(HASTATE_RUNNING_NR, &state))
 		return;

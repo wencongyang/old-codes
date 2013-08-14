@@ -10,6 +10,7 @@ void hash_init(struct hash_head *h)
 	for (i = 0; i < HASH_NR; i++) {
 		skb_queue_head_init(&h->e[i].master_queue);
 		skb_queue_head_init(&h->e[i].slaver_queue);
+		h->e[i].head = h;
 	}
 
 	INIT_LIST_HEAD(&h->list);
@@ -103,7 +104,7 @@ int fetch_key(const struct sk_buff *skb, unsigned short *src, unsigned short *ds
 }
 
 
-int insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags)
+struct hash_value *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags)
 {
 	unsigned short src, dst;
 	int i;
@@ -115,5 +116,5 @@ int insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags)
 	else
 		skb_queue_tail(&h->e[i].slaver_queue, skb);
 
-	return i;
+	return &h->e[i];
 }

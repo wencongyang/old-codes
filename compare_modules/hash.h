@@ -15,15 +15,18 @@ struct colo_idx {
 	uint32_t slaver_idx;
 };
 
-struct Q_elem {
+struct hash_head;
+
+struct hash_value {
 	struct sk_buff_head master_queue;
 	struct sk_buff_head slaver_queue;
+	struct hash_head *head;
 	uint32_t m_last_seq;
 	uint32_t s_last_seq;
 };
 
 struct hash_head {
-	struct Q_elem e[HASH_NR];
+	struct hash_value e[HASH_NR];
 	struct colo_idx idx;
 	struct sk_buff_head wait_for_release;
 	struct sched_data *master_data;
@@ -33,4 +36,4 @@ struct hash_head {
 };
 
 void hash_init(struct hash_head *h);
-int insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags);
+struct hash_value *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags);

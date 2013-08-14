@@ -1,4 +1,4 @@
-typedef void (*PTRFUN)(struct hash_head *h, int index);
+typedef void (*PTRFUN)(struct hash_value *hash_value);
 
 struct sched_data {
 	struct hash_head *blo; /* packets not compared */
@@ -8,8 +8,3 @@ struct sched_data {
 
 	spinlock_t qlock_rel;
 };
-
-static inline int skb_remove_foreign_references(struct sk_buff *skb)
-{
-	return !skb_linearize(skb);
-}
