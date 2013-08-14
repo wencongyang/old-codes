@@ -6,9 +6,14 @@ void hash_init(struct hash_head *h)
 {
 	int i;
 
+	memset(h, 0, sizeof(*h));
 	for (i = 0; i < HASH_NR; i++) {
-		skb_queue_head_init(&h->e[i].queue);
+		skb_queue_head_init(&h->e[i].master_queue);
+		skb_queue_head_init(&h->e[i].slaver_queue);
 	}
+
+	INIT_LIST_HEAD(&h->list);
+	skb_queue_head_init(&h->wait_for_release);
 }
 
 /* copied from kernel, old kernel doesn't have the API skb_flow_dissect() */
@@ -98,14 +103,17 @@ int fetch_key(const struct sk_buff *skb, unsigned short *src, unsigned short *ds
 }
 
 
-int insert(struct hash_head *h, struct sk_buff *skb)
+int insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags)
 {
 	unsigned short src, dst;
 	int i;
 
 	fetch_key(skb, &src, &dst);
 	i = dst % HASH_NR;
-	skb_queue_tail(&h->e[i].queue, skb);
+	if (flags & IS_MASTER)
+		skb_queue_tail(&h->e[i].master_queue, skb);
+	else
+		skb_queue_tail(&h->e[i].slaver_queue, skb);
 
 	return i;
 }

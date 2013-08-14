@@ -73,9 +73,6 @@ struct statistic_data {
 	unsigned long long max_time;
 } statis;
 
-struct sk_buff_head wait_for_release;
-spinlock_t wqlock;
-
 struct file_operations cmp_fops = {
 	.owner = THIS_MODULE,
 	.open = cmp_open,
@@ -88,13 +85,13 @@ struct _cmp_dev {
 	struct cdev cdev;
 } cmp_dev;
 
-extern struct sched_data *master_queue;
-extern struct sched_data *slaver_queue;
 extern PTRFUN compare_update;
-static void clear_slaver_queue(void);
-static void move_master_queue(void);
-static void release_queue(void);
-void update(struct Q_elem *m, struct Q_elem *s);
+extern struct hash_head *colo_hash_head;
+
+static void clear_slaver_queue(struct hash_head *h);
+static void move_master_queue(struct hash_head *h);
+static void release_queue(struct hash_head *h);
+void update(struct hash_head *h, int index);
 
 wait_queue_head_t queue;
 int cmp_major=0, cmp_minor=0;
@@ -195,15 +192,15 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		 */
 		printk(KERN_NOTICE "HA_compare: --------both side suspended.\n");
 
-		move_master_queue();
-		clear_slaver_queue();
+		move_master_queue(colo_hash_head);
+		clear_slaver_queue(colo_hash_head);
 		break;
 	case COMP_IOCTRESUME:
 		/*
 		 *  Checkpoint finish, relese skb in temporary queue
 		 */
 		printk(KERN_NOTICE "HA_compare: --------checkpoint finish.\n");
-		release_queue();
+		release_queue(colo_hash_head);
 		rel_count = 0;
 
 		break;
@@ -665,19 +662,17 @@ different:
 	return 0;
 }
 
-static void clear_slaver_queue(void)
+static void clear_slaver_queue(struct hash_head *h)
 {
 	int i;
 	struct sk_buff *skb;
-	struct hash_head *h = &slaver_queue->blo;
-
 
 	for (i = 0; i < HASH_NR; i++) {
-		skb = skb_dequeue(&h->e[i].queue);
+		skb = skb_dequeue(&h->e[i].slaver_queue);
 		while (skb != NULL) {
-			slaver_queue->sch->qstats.backlog -= qdisc_pkt_len(skb);
+			h->slaver_data->sch->qstats.backlog -= qdisc_pkt_len(skb);
 			kfree_skb(skb);
-			skb = skb_dequeue(&h->e[i].queue);
+			skb = skb_dequeue(&h->e[i].slaver_queue);
 		}
 	}
 }
@@ -703,52 +698,46 @@ static int get_seq(struct sk_buff *skb, uint32_t *seq)
 	return 1;
 }
 
-static void move_master_queue(void)
+static void move_master_queue(struct hash_head *h)
 {
 	int i;
 	struct sk_buff *skb;
-	struct hash_head *h = &master_queue->blo;
 	uint32_t seq;
 
-	spin_lock(&wqlock);
-
 	for (i = 0; i < HASH_NR; i++) {
-		skb = skb_dequeue(&h->e[i].queue);
+		skb = skb_dequeue(&h->e[i].master_queue);
 		while (skb != NULL) {
-			if (get_seq(skb, &seq) && after(seq, h->e[i].last_seq))
-				h->e[i].last_seq = seq;
-			__skb_queue_tail(&wait_for_release, skb);
-			skb = skb_dequeue(&h->e[i].queue);
+			if (get_seq(skb, &seq) && after(seq, h->e[i].m_last_seq))
+				h->e[i].m_last_seq = seq;
+			skb_queue_tail(&h->wait_for_release, skb);
+			skb = skb_dequeue(&h->e[i].master_queue);
 		}
 	}
-
-	spin_unlock(&wqlock);
 }
 
-static void release_queue(void)
+static void release_queue(struct hash_head *h)
 {
 	struct sk_buff *skb;
 	int flag = 0;
+	unsigned long flags;
 
-	spin_lock(&master_queue->qlock_rel);
-	spin_lock(&wqlock);
+	spin_lock_irqsave(&h->master_data->qlock_rel, flags);
 
-	skb = __skb_dequeue(&wait_for_release);
+	skb = skb_dequeue(&h->wait_for_release);
 	while (skb != NULL) {
 		flag = 1;
 		++rel_count;
-		__skb_queue_tail(&master_queue->rel, skb);
-		skb = __skb_dequeue(&wait_for_release);
+		__skb_queue_tail(&h->master_data->rel, skb);
+		skb = skb_dequeue(&h->wait_for_release);
 	}
 
-	spin_unlock(&wqlock);
-	spin_unlock(&master_queue->qlock_rel);
+	spin_unlock_irqrestore(&h->master_data->qlock_rel, flags);
 	if (flag)
-		netif_schedule_queue(master_queue->sch->dev_queue);
+		netif_schedule_queue(h->master_data->sch->dev_queue);
 }
 
 
-void update(struct Q_elem *m, struct Q_elem *s)
+void update(struct hash_head *h, int index)
 {
 	struct sk_buff *skb_m;
 	struct sk_buff *skb_s;
@@ -756,6 +745,7 @@ void update(struct Q_elem *m, struct Q_elem *s)
 	int ret;
 	struct compare_info info_m, info_s;
 	struct timespec start, end, delta;
+	struct Q_elem *hash_value = &h->e[index];
 
 	if (test_and_set_bit(HASTATE_RUNNING_NR, &state))
 		return;
@@ -770,49 +760,47 @@ void update(struct Q_elem *m, struct Q_elem *s)
 		if (test_bit(HASTATE_INCHECKPOINT_NR, &state))
 			break;
 
-		skb = skb_peek(&m->queue);
+		skb = skb_peek(&hash_value->master_queue);
 		if (!skb)
 			break;
-		skb = skb_peek(&s->queue);
+		skb = skb_peek(&hash_value->slaver_queue);
 		if (!skb)
 			break;
 
-		skb_m = skb_dequeue(&m->queue);
-		skb_s = skb_dequeue(&s->queue);
+		skb_m = skb_dequeue(&hash_value->master_queue);
+		skb_s = skb_dequeue(&hash_value->slaver_queue);
 
 		info_m.skb = skb_m;
 		info_s.skb = skb_s;
-		info_m.last_seq = m->last_seq;
+		info_m.last_seq = hash_value->m_last_seq;
 		ret = compare_skb(&info_m, &info_s);
 		if (ret) {
 			if (likely(ret & BYPASS_MASTER)) {
-				spin_lock(&master_queue->qlock_rel);
-				__skb_queue_tail(&master_queue->rel, skb_m);
-				spin_unlock(&master_queue->qlock_rel);
-				netif_schedule_queue(master_queue->sch->dev_queue);
+				spin_lock(&h->master_data->qlock_rel);
+				__skb_queue_tail(&h->master_data->rel, skb_m);
+				spin_unlock(&h->master_data->qlock_rel);
+				netif_schedule_queue(h->master_data->sch->dev_queue);
 			} else {
-				skb_queue_head(&m->queue, skb_m);
+				skb_queue_head(&hash_value->master_queue, skb_m);
 			}
 
 			if (likely(ret & DROP_SLAVER)) {
-				spin_lock(&slaver_queue->qlock_rel);
-				__skb_queue_tail(&slaver_queue->rel, skb_s);
-				spin_unlock(&slaver_queue->qlock_rel);
-				netif_schedule_queue(slaver_queue->sch->dev_queue);
+				spin_lock(&h->slaver_data->qlock_rel);
+				__skb_queue_tail(&h->slaver_data->rel, skb_s);
+				spin_unlock(&h->slaver_data->qlock_rel);
+				netif_schedule_queue(h->slaver_data->sch->dev_queue);
 			} else {
-				skb_queue_head(&s->queue, skb_s);
+				skb_queue_head(&hash_value->slaver_queue, skb_s);
 			}
-			m->last_seq = info_m.last_seq;
+			hash_value->m_last_seq = info_m.last_seq;
 			//printk("netif_schedule%u.\n", cnt);
 		} else {
 			/*
 			 *  Put makster's skb to temporary queue, drop slaver's.
 			 */
-			spin_lock(&wqlock);
-			__skb_queue_tail(&wait_for_release, skb_m);
-			spin_unlock(&wqlock);
+			skb_queue_tail(&h->wait_for_release, skb_m);
 
-			slaver_queue->sch->qstats.backlog -= qdisc_pkt_len(skb_s);
+			h->slaver_data->sch->qstats.backlog -= qdisc_pkt_len(skb_s);
 			kfree_skb(skb_s);
 
 			/* Trigger a checkpoint, if pending bit is allready set, just ignore. */
@@ -839,6 +827,8 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 {
 	struct sk_buff *skb;
 	int i;
+	struct sched_data *master_queue = colo_hash_head->master_data;
+	struct sched_data *slaver_queue = colo_hash_head->slaver_data;
 
 	printk("STAT: update=%u, in_soft_irq=%u, total_time=%llu, last_time=%llu, max_time=%llu\n",
 		statis.update, statis.in_soft_irq, statis.total_time, statis.last_time, statis.max_time);
@@ -846,7 +836,7 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	printk("\nSTAT: status=%lx.\n", state);
 
 	for (i = 0; i < HASH_NR; i++) {
-		skb = skb_peek(&master_queue->blo.e[i].queue);
+		skb = skb_peek(&master_queue->blo->e[i].master_queue);
 		if (skb != NULL)
 			printk("STAT: m_blo[%d] not empty.\n", i);
 	}
@@ -858,7 +848,7 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	spin_unlock(&master_queue->qlock_rel);
 
 	for (i = 0; i < HASH_NR; i++) {
-		skb = skb_peek(&slaver_queue->blo.e[i].queue);
+		skb = skb_peek(&slaver_queue->blo->e[i].slaver_queue);
 		if (skb != NULL)
 			printk("STAT: s_blo[%d] not empty.\n", i);
 	}
@@ -916,8 +906,6 @@ static int __init compare_module_init(void)
 	init_waitqueue_head(&queue);
 
 	compare_update = update;
-	skb_queue_head_init(&wait_for_release);
-	spin_lock_init(&wqlock);
 
 	memset(&statis, 0, sizeof(struct statistic_data));
 	proc_entry = create_proc_entry("HA_compare", 0, NULL);
@@ -942,4 +930,4 @@ static void __exit compare_module_exit(void)
 module_init(compare_module_init);
 module_exit(compare_module_exit);
 MODULE_LICENSE("GPL");
-
+MODULE_INFO(intree, "Y");

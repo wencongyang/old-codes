@@ -1,7 +1,7 @@
-typedef void (*PTRFUN)(struct Q_elem *m, struct Q_elem *s);
+typedef void (*PTRFUN)(struct hash_head *h, int index);
 
 struct sched_data {
-	struct hash_head blo; /* packets not compared */
+	struct hash_head *blo; /* packets not compared */
 	struct sk_buff_head rel; /* packest compared successfully */
 	struct Qdisc* sch;
 	uint32_t flags;

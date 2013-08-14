@@ -11,46 +11,83 @@ enum {
 //#define TCA_COLO_MAX	(__TCA_COLO_MAX - 1)
 #define TCA_COLO_MAX 10
 
-// flags
-#define IS_MASTER	(1 << 0)
-
-struct colo_idx {
-	uint32_t this_idx;
-	uint32_t other_idx;
-};
-
 /* qidsc: colo */
-struct sched_data *master_queue = NULL;
-struct sched_data *slaver_queue = NULL;
-EXPORT_SYMBOL(master_queue);
-EXPORT_SYMBOL(slaver_queue);
+
+struct list_head queue = LIST_HEAD_INIT(queue);
+spinlock_t queue_lock;
 
 PTRFUN compare_update = NULL;
 EXPORT_SYMBOL(compare_update);
+
+struct hash_head *colo_hash_head;
+EXPORT_SYMBOL(colo_hash_head);
+
+static struct hash_head *alloc_hash(struct colo_idx *idx, int flags)
+{
+	struct hash_head *h;
+
+	spin_lock(&queue_lock);
+	list_for_each_entry(h, &queue, list) {
+		if (h->idx.master_idx != idx->master_idx ||
+		    h->idx.slaver_idx != idx->slaver_idx)
+			continue;
+
+		if (flags & IS_MASTER)
+			if (h->master)
+				h = ERR_PTR(-EBUSY);
+			else
+				h->master = 1;
+		else
+			if (h->slaver)
+				h = ERR_PTR(-EBUSY);
+			else
+				h->slaver = 1;
+
+		goto out;
+	}
+
+	h = kmalloc(sizeof(struct hash_head), GFP_ATOMIC);
+	if (!h) {
+		h = ERR_PTR(-ENOMEM);
+		goto out;
+	}
+
+	hash_init(h);
+
+	h->idx = *idx;
+	if (flags & IS_MASTER)
+		h->master = 1;
+	else
+		h->slaver = 1;
+	list_add_tail(&h->list, &queue);
+
+out:
+	if (colo_hash_head)
+		pr_warn("colo_hash_head: %p, h: %p\n", colo_hash_head, h);
+	colo_hash_head = h;
+	spin_unlock(&queue_lock);
+	return h;
+}
 
 static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
 	struct sched_data *q = qdisc_priv(sch);
 	int index;
-	struct Q_elem *m, *s;
 
 	if (!skb_remove_foreign_references(skb)) {
 		printk(KERN_DEBUG "error removing foreign ref\n");
 		return qdisc_reshape_fail(skb, sch);
 	}
 
-	index = insert(&q->blo, skb);
+	index = insert(q->blo, skb, q->flags);
 	sch->qstats.backlog += qdisc_pkt_len(skb);
 	qdisc_bstats_update(sch, skb);
 
 	/*
 	 *  Notify the compare module a new packet arrives.
 	 */
-	if (compare_update) {
-		m = &master_queue->blo.e[index];
-		s = &slaver_queue->blo.e[index];
-		compare_update(m, s);
-	}
+	if (compare_update)
+		compare_update(q->blo, index);
 
 	return NET_XMIT_SUCCESS;
 }
@@ -68,7 +105,7 @@ static struct sk_buff *colo_dequeue(struct Qdisc* sch)
 			/* Slaver: Free all packets. */
 			sch->qstats.backlog -= qdisc_pkt_len(skb);
 			kfree_skb(skb);
-			skb = __skb_dequeue(&slaver_queue->rel);
+			skb = __skb_dequeue(&q->rel);
 		}
 	}
 
@@ -88,7 +125,7 @@ static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 	struct colo_idx *idx;
 	uint32_t *flags;
 
-	printk(KERN_DEBUG "master_init\n");
+	pr_debug("colo init\n");
 	err = nla_parse_nested(tb, TCA_COLO_MAX, opt, NULL);
 	if (err)
 		return err;
@@ -100,15 +137,21 @@ static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 
 	flags = nla_data(tb[TCA_COLO_FLAGS]);
 	idx = nla_data(tb[TCA_COLO_IDX]);
-	if (*flags & IS_MASTER) {
-		pr_info("master_idx is: %d, slaver_idx is: %d\n", idx->this_idx, idx->other_idx);
-		master_queue = q;
-	} else {
-		pr_info("master_idx is: %d, slaver_idx is: %d\n", idx->other_idx, idx->this_idx);
-		slaver_queue = q;
+	if (!(*flags & IS_MASTER)) {
+		idx->master_idx = idx->master_idx ^ idx->slaver_idx;
+		idx->slaver_idx = idx->master_idx ^ idx->slaver_idx;
+		idx->master_idx = idx->master_idx ^ idx->slaver_idx;
 	}
+	pr_info("master_idx is: %d, slaver_idx is: %d, flags: %02x\n", idx->master_idx, idx->slaver_idx, *flags);
 
-	hash_init(&q->blo);
+	q->blo = alloc_hash(idx, *flags);
+	if (IS_ERR(q->blo))
+		return PTR_ERR(q->blo);
+
+	if (*flags & IS_MASTER)
+		q->blo->master_data = q;
+	else
+		q->blo->slaver_data = q;
 	skb_queue_head_init(&q->rel);
 	spin_lock_init(&q->qlock_rel);
 	q->sch = sch;
@@ -129,18 +172,15 @@ struct Qdisc_ops colo_qdisc_ops = {
 
 static int __init colo_module_init(void)
 {
-	int ret;
-
-	ret = register_qdisc(&colo_qdisc_ops);
-	return ret;
+	spin_lock_init(&queue_lock);
+	return register_qdisc(&colo_qdisc_ops);
 }
 
 static void __exit colo_module_exit(void)
 {
-	master_queue = NULL;
-	slaver_queue = NULL;
 	unregister_qdisc(&colo_qdisc_ops);
 }
 module_init(colo_module_init)
 module_exit(colo_module_exit)
 MODULE_LICENSE("GPL");
+MODULE_INFO(intree, "Y");
