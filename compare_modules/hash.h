@@ -15,6 +15,18 @@ struct colo_idx {
 	uint32_t slaver_idx;
 };
 
+struct flow_keys {
+	/* (src,dst) must be grouped, in the same way than in IP header */
+	__be32 src;
+	__be32 dst;
+	union {
+		__be32 ports;
+		__be16 port16[2];
+	};
+	u16 thoff;
+	u8 ip_proto;
+};
+
 struct hash_head;
 
 struct hash_value {
@@ -23,10 +35,13 @@ struct hash_value {
 	struct hash_head *head;
 	uint32_t m_last_seq;
 	uint32_t s_last_seq;
+
+	struct flow_keys key;
+	struct list_head list;
 };
 
 struct hash_head {
-	struct hash_value e[HASH_NR];
+	struct list_head entry[HASH_NR];
 	struct colo_idx idx;
 	struct sk_buff_head wait_for_release;
 	struct sched_data *master_data;

@@ -666,13 +666,16 @@ static void clear_slaver_queue(struct hash_head *h)
 {
 	int i;
 	struct sk_buff *skb;
+	struct hash_value *value;
 
 	for (i = 0; i < HASH_NR; i++) {
-		skb = skb_dequeue(&h->e[i].slaver_queue);
-		while (skb != NULL) {
-			h->slaver_data->sch->qstats.backlog -= qdisc_pkt_len(skb);
-			kfree_skb(skb);
-			skb = skb_dequeue(&h->e[i].slaver_queue);
+		list_for_each_entry(value, &h->entry[i], list) {
+			skb = skb_dequeue(&value->slaver_queue);
+			while (skb != NULL) {
+				h->slaver_data->sch->qstats.backlog -= qdisc_pkt_len(skb);
+				kfree_skb(skb);
+				skb = skb_dequeue(&value->slaver_queue);
+			}
 		}
 	}
 }
@@ -702,15 +705,18 @@ static void move_master_queue(struct hash_head *h)
 {
 	int i;
 	struct sk_buff *skb;
+	struct hash_value *value;
 	uint32_t seq;
 
 	for (i = 0; i < HASH_NR; i++) {
-		skb = skb_dequeue(&h->e[i].master_queue);
-		while (skb != NULL) {
-			if (get_seq(skb, &seq) && after(seq, h->e[i].m_last_seq))
-				h->e[i].m_last_seq = seq;
-			skb_queue_tail(&h->wait_for_release, skb);
-			skb = skb_dequeue(&h->e[i].master_queue);
+		list_for_each_entry(value, &h->entry[i], list) {
+			skb = skb_dequeue(&value->master_queue);
+			while (skb != NULL) {
+				if (get_seq(skb, &seq) && after(seq, value->m_last_seq))
+					value->m_last_seq = seq;
+				skb_queue_tail(&h->wait_for_release, skb);
+				skb = skb_dequeue(&value->master_queue);
+			}
 		}
 	}
 }
@@ -826,9 +832,10 @@ void update(struct hash_value *hash_value)
 int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *data)
 {
 	struct sk_buff *skb;
-	int i;
+	int i, j;
 	struct sched_data *master_queue = colo_hash_head->master_data;
 	struct sched_data *slaver_queue = colo_hash_head->slaver_data;
+	struct hash_value *value;
 
 	printk("STAT: update=%u, in_soft_irq=%u, total_time=%llu, last_time=%llu, max_time=%llu\n",
 		statis.update, statis.in_soft_irq, statis.total_time, statis.last_time, statis.max_time);
@@ -836,9 +843,13 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	printk("\nSTAT: status=%lx.\n", state);
 
 	for (i = 0; i < HASH_NR; i++) {
-		skb = skb_peek(&master_queue->blo->e[i].master_queue);
-		if (skb != NULL)
-			printk("STAT: m_blo[%d] not empty.\n", i);
+		j = 0;
+		list_for_each_entry(value, &master_queue->blo->entry[i], list) {
+			skb = skb_peek(&value->master_queue);
+			if (skb != NULL)
+				printk("STAT: m_blo[%d, %d] not empty.\n", i, j);
+			j++;
+		}
 	}
 
 	spin_lock(&master_queue->qlock_rel);
@@ -848,9 +859,13 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	spin_unlock(&master_queue->qlock_rel);
 
 	for (i = 0; i < HASH_NR; i++) {
-		skb = skb_peek(&slaver_queue->blo->e[i].slaver_queue);
-		if (skb != NULL)
-			printk("STAT: s_blo[%d] not empty.\n", i);
+		j = 0;
+		list_for_each_entry(value, &slaver_queue->blo->entry[i], list) {
+			skb = skb_peek(&value->slaver_queue);
+			if (skb != NULL)
+				printk("STAT: s_blo[%d] not empty.\n", i);
+			j++;
+		}
 	}
 
 	spin_lock(&slaver_queue->qlock_rel);

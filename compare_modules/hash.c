@@ -7,28 +7,14 @@ void hash_init(struct hash_head *h)
 	int i;
 
 	memset(h, 0, sizeof(*h));
-	for (i = 0; i < HASH_NR; i++) {
-		skb_queue_head_init(&h->e[i].master_queue);
-		skb_queue_head_init(&h->e[i].slaver_queue);
-		h->e[i].head = h;
-	}
+	for (i = 0; i < HASH_NR; i++)
+		INIT_LIST_HEAD(&h->entry[i]);
 
 	INIT_LIST_HEAD(&h->list);
 	skb_queue_head_init(&h->wait_for_release);
 }
 
 /* copied from kernel, old kernel doesn't have the API skb_flow_dissect() */
-struct flow_keys {
-	/* (src,dst) must be grouped, in the same way than in IP header */
-	__be32 src;
-	__be32 dst;
-	union {
-		__be32 ports;
-		__be16 port16[2];
-	};
-	u16 thoff;
-	u8 ip_proto;
-};
 
 /* copy saddr & daddr, possibly using 64bit load/store
  * Equivalent to :	flow->src = iph->saddr;
@@ -88,33 +74,64 @@ bool skb_flow_dissect(const struct sk_buff *skb, struct flow_keys *flow)
 	return true;
 }
 
-
-int fetch_key(const struct sk_buff *skb, unsigned short *src, unsigned short *dst)
+static struct hash_value *alloc_hash_value(struct flow_keys *key)
 {
-	struct flow_keys keys;
+	struct hash_value *value;
 
-	if (skb_flow_dissect(skb, &keys)) {
-		*src = htons(keys.port16[0]);
-		*dst = htons(keys.port16[1]);
-	} else {
-		*src = *dst = 0;
-	}
+	value = kmalloc(sizeof(*value), GFP_ATOMIC);
+	if (!value)
+		return NULL;
 
-	return 0;
+	value->key = *key;
+	INIT_LIST_HEAD(&value->list);
+	skb_queue_head_init(&value->master_queue);
+	skb_queue_head_init(&value->slaver_queue);
+	value->head = NULL;
+	value->m_last_seq = value->s_last_seq = 0;
+
+	return value;
 }
 
+static struct hash_value *get_hash_value(struct list_head *head, struct flow_keys *key)
+{
+	struct hash_value *value;
+
+	list_for_each_entry(value, head, list) {
+		if (value->key.src == key->src &&
+		    value->key.dst == key->dst &&
+		    value->key.ports == key->ports &&
+		    value->key.ip_proto == key->ip_proto)
+			return value;
+	}
+
+	return NULL;
+}
 
 struct hash_value *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags)
 {
-	unsigned short src, dst;
+	struct flow_keys key;
+	struct hash_value *value;
+	uint32_t hash;
 	int i;
 
-	fetch_key(skb, &src, &dst);
-	i = dst % HASH_NR;
-	if (flags & IS_MASTER)
-		skb_queue_tail(&h->e[i].master_queue, skb);
-	else
-		skb_queue_tail(&h->e[i].slaver_queue, skb);
+	skb_flow_dissect(skb, &key);
+	hash = jhash(&key, sizeof(key), JHASH_INITVAL);
 
-	return &h->e[i];
+	i = hash % HASH_NR;
+	value = get_hash_value(&h->entry[i], &key);
+	if (unlikely(!value)) {
+		value = alloc_hash_value(&key);
+		if (unlikely(!value))
+			return NULL;
+
+		value->head = h;
+		list_add_tail(&value->list, &h->entry[i]);
+	}
+
+	if (flags & IS_MASTER)
+		skb_queue_tail(&value->master_queue, skb);
+	else
+		skb_queue_tail(&value->slaver_queue, skb);
+
+	return value;
 }
