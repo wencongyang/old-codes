@@ -102,19 +102,16 @@ static struct sk_buff *colo_dequeue(struct Qdisc* sch)
 	struct sched_data *q = qdisc_priv(sch);
 	struct sk_buff *skb;
 
-	spin_lock(&q->qlock_rel);
 
-	skb = __skb_dequeue(&q->rel);
+	skb = skb_dequeue(&q->rel);
 	if (!(q->flags & IS_MASTER)) {
 		while (likely(skb)) {
 			/* Slaver: Free all packets. */
 			sch->qstats.backlog -= qdisc_pkt_len(skb);
 			kfree_skb(skb);
-			skb = __skb_dequeue(&q->rel);
+			skb = skb_dequeue(&q->rel);
 		}
 	}
-
-	spin_unlock(&q->qlock_rel);
 
 	if (skb)
 		sch->qstats.backlog -= qdisc_pkt_len(skb);
@@ -158,7 +155,6 @@ static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 	else
 		q->blo->slaver_data = q;
 	skb_queue_head_init(&q->rel);
-	spin_lock_init(&q->qlock_rel);
 	q->sch = sch;
 	q->flags = *flags;
 

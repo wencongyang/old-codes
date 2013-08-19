@@ -672,8 +672,7 @@ static void clear_slaver_queue(struct hash_head *h)
 		list_for_each_entry(value, &h->entry[i], list) {
 			skb = skb_dequeue(&value->slaver_queue);
 			while (skb != NULL) {
-				h->slaver_data->sch->qstats.backlog -= qdisc_pkt_len(skb);
-				kfree_skb(skb);
+				skb_queue_tail(&value->head->slaver_data->rel, skb);
 				skb = skb_dequeue(&value->slaver_queue);
 			}
 		}
@@ -725,19 +724,15 @@ static void release_queue(struct hash_head *h)
 {
 	struct sk_buff *skb;
 	int flag = 0;
-	unsigned long flags;
-
-	spin_lock_irqsave(&h->master_data->qlock_rel, flags);
 
 	skb = skb_dequeue(&h->wait_for_release);
 	while (skb != NULL) {
 		flag = 1;
 		++rel_count;
-		__skb_queue_tail(&h->master_data->rel, skb);
+		skb_queue_tail(&h->master_data->rel, skb);
 		skb = skb_dequeue(&h->wait_for_release);
 	}
 
-	spin_unlock_irqrestore(&h->master_data->qlock_rel, flags);
 	if (flag)
 		netif_schedule_queue(h->master_data->sch->dev_queue);
 }
@@ -782,18 +777,14 @@ void update(struct hash_value *hash_value)
 		ret = compare_skb(&info_m, &info_s);
 		if (ret) {
 			if (likely(ret & BYPASS_MASTER)) {
-				spin_lock(&h->master_data->qlock_rel);
-				__skb_queue_tail(&h->master_data->rel, skb_m);
-				spin_unlock(&h->master_data->qlock_rel);
+				skb_queue_tail(&h->master_data->rel, skb_m);
 				netif_schedule_queue(h->master_data->sch->dev_queue);
 			} else {
 				skb_queue_head(&hash_value->master_queue, skb_m);
 			}
 
 			if (likely(ret & DROP_SLAVER)) {
-				spin_lock(&h->slaver_data->qlock_rel);
-				__skb_queue_tail(&h->slaver_data->rel, skb_s);
-				spin_unlock(&h->slaver_data->qlock_rel);
+				skb_queue_tail(&h->slaver_data->rel, skb_s);
 				netif_schedule_queue(h->slaver_data->sch->dev_queue);
 			} else {
 				skb_queue_head(&hash_value->slaver_queue, skb_s);
@@ -806,8 +797,7 @@ void update(struct hash_value *hash_value)
 			 */
 			skb_queue_tail(&h->wait_for_release, skb_m);
 
-			h->slaver_data->sch->qstats.backlog -= qdisc_pkt_len(skb_s);
-			kfree_skb(skb_s);
+			skb_queue_tail(&h->slaver_data->rel, skb_s);
 
 			/* Trigger a checkpoint, if pending bit is allready set, just ignore. */
 			if ( !test_and_set_bit(HASTATE_PENDING_NR, &state) ) {
@@ -852,11 +842,9 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 		}
 	}
 
-	spin_lock(&master_queue->qlock_rel);
 	skb = skb_peek(&master_queue->rel);
 	if (skb != NULL)
 		printk("STAT: m_rel not empty.\n");
-	spin_unlock(&master_queue->qlock_rel);
 
 	for (i = 0; i < HASH_NR; i++) {
 		j = 0;
@@ -868,11 +856,9 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 		}
 	}
 
-	spin_lock(&slaver_queue->qlock_rel);
 	skb = skb_peek(&slaver_queue->rel);
 	if (skb != NULL)
 		printk("STAT: s_rel not empty.\n");
-	spin_unlock(&slaver_queue->qlock_rel);
 
 	return 0;
 }
