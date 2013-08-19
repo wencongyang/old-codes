@@ -16,11 +16,15 @@ enum {
 struct list_head queue = LIST_HEAD_INIT(queue);
 spinlock_t queue_lock;
 
-PTRFUN compare_update = NULL;
-EXPORT_SYMBOL(compare_update);
-
 struct hash_head *colo_hash_head;
 EXPORT_SYMBOL(colo_hash_head);
+
+struct list_head compare_head = LIST_HEAD_INIT(compare_head);
+spinlock_t compare_lock;
+wait_queue_head_t compare_queue;
+EXPORT_SYMBOL(compare_head);
+EXPORT_SYMBOL(compare_lock);
+EXPORT_SYMBOL(compare_queue);
 
 static inline int skb_remove_foreign_references(struct sk_buff *skb)
 {
@@ -91,8 +95,11 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 	/*
 	 *  Notify the compare module a new packet arrives.
 	 */
-	if (compare_update)
-		compare_update(hash_value);
+	spin_lock(&compare_lock);
+	if (list_empty(&hash_value->compare_list))
+		list_add_tail(&hash_value->compare_list, &compare_head);
+	spin_unlock(&compare_lock);
+	wake_up_interruptible(&compare_queue);
 
 	return NET_XMIT_SUCCESS;
 }
@@ -174,6 +181,8 @@ struct Qdisc_ops colo_qdisc_ops = {
 static int __init colo_module_init(void)
 {
 	spin_lock_init(&queue_lock);
+	spin_lock_init(&compare_lock);
+	init_waitqueue_head(&compare_queue);
 	return register_qdisc(&colo_qdisc_ops);
 }
 

@@ -38,6 +38,7 @@ struct hash_value {
 
 	struct flow_keys key;
 	struct list_head list;
+	struct list_head compare_list;
 };
 
 struct hash_head {

@@ -25,6 +25,7 @@
 #include <linux/udp.h>
 #include <linux/if_arp.h>
 #include <net/tcp.h>
+#include <linux/kthread.h>
 
 #include "hash.h"
 #include "comm.h"
@@ -59,6 +60,8 @@ long cmp_ioctl(struct file*, unsigned int, unsigned long);
 unsigned short last_id = 0;
 int fail = 0;
 
+struct task_struct *compare_task;
+
 #define COMP_IOC_MAGIC 		'k'
 #define COMP_IOCTWAIT 		_IO(COMP_IOC_MAGIC, 0)
 #define COMP_IOCTSUSPEND 	_IO(COMP_IOC_MAGIC, 1)
@@ -84,9 +87,6 @@ struct _cmp_dev {
 	struct semaphore sem; /* only one client can open this device */
 	struct cdev cdev;
 } cmp_dev;
-
-extern PTRFUN compare_update;
-extern struct hash_head *colo_hash_head;
 
 static void clear_slaver_queue(struct hash_head *h);
 static void move_master_queue(struct hash_head *h);
@@ -738,7 +738,7 @@ static void release_queue(struct hash_head *h)
 }
 
 
-void update(struct hash_value *hash_value)
+static void compare(struct hash_value *hash_value)
 {
 	struct sk_buff *skb_m;
 	struct sk_buff *skb_s;
@@ -817,6 +817,47 @@ void update(struct hash_value *hash_value)
 	if (statis.last_time > statis.max_time)
 		statis.max_time = statis.last_time;
 	statis.total_time += statis.last_time;
+}
+
+static struct hash_value *get_hash_value(void)
+{
+	struct hash_value *value = NULL;
+
+	spin_lock_bh(&compare_lock);
+	if (list_empty(&compare_head))
+		goto out;
+
+	value = list_first_entry(&compare_head, struct hash_value,
+				 compare_list);
+	list_del_init(&value->compare_list);
+out:
+	spin_unlock_bh(&compare_lock);
+	return value;
+}
+
+static int compare_kthread(void *data)
+{
+	struct hash_value *value;
+
+	while(!kthread_should_stop()) {
+		wait_event_interruptible(compare_queue,
+					 !list_empty(&compare_head) ||
+					 kthread_should_stop());
+
+		if (kthread_should_stop())
+			break;
+
+		while(!list_empty(&compare_head)) {
+			value = get_hash_value();
+			if (value)
+				compare(value);
+
+			if (kthread_should_stop())
+				break;
+		}
+	}
+
+	return 0;
 }
 
 int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *data)
@@ -899,32 +940,51 @@ static int __init compare_module_init(void)
 	result = cmp_setup_cdev(&cmp_dev);
 	if (result) {
 		printk(KERN_WARNING "HA_compare: can't setup device.\n");
-		unregister_chrdev_region(MKDEV(cmp_major, cmp_minor), 1);
-		return result;
+		goto err_setup;
+	}
+
+	/*
+	 * create kernel thread
+	 *
+	 * TODO:
+	 *    One thread for one guest.
+	 */
+	compare_task = kthread_create(compare_kthread, NULL, "compare/0");
+	if (IS_ERR(compare_task)) {
+		pr_err("HA_compare: can't create kernel thread\n");
+		result = PTR_ERR(compare_task);
+		goto err_thread;
 	}
 
 	sema_init(&cmp_dev.sem, 1);
 	init_waitqueue_head(&queue);
-
-	compare_update = update;
 
 	memset(&statis, 0, sizeof(struct statistic_data));
 	proc_entry = create_proc_entry("HA_compare", 0, NULL);
 	proc_entry->read_proc = read_proc;
 	proc_entry->write_proc = write_proc;
 
+	wake_up_process(compare_task);
+
 	return 0;
+
+err_thread:
+	cdev_del(&cmp_dev.cdev);
+err_setup:
+	unregister_chrdev_region(MKDEV(cmp_major, cmp_minor), 1);
+
+	return result;
 }
 
 static void __exit compare_module_exit(void)
 {
+	kthread_stop(compare_task);
+
 	/* del device */
 	cdev_del(& cmp_dev.cdev);
 
 	/* free a device id */
 	unregister_chrdev_region(MKDEV(cmp_major, cmp_minor), 1);
-
-	compare_update = NULL;
 
 	remove_proc_entry("HA_compare", NULL);
 }
