@@ -20,15 +20,11 @@
 #include <linux/sched.h>
 #include <net/pkt_sched.h>
 #include <asm/ioctl.h>
-#include <linux/ip.h>
-#include <linux/tcp.h>
-#include <linux/udp.h>
 #include <linux/if_arp.h>
-#include <net/tcp.h>
-#include <net/protocol.h>
 #include <linux/kthread.h>
+#include <net/protocol.h>
+#include <net/tcp.h>
 
-#include "hash.h"
 #include "comm.h"
 #include "compare.h"
 

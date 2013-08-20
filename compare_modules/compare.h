@@ -1,6 +1,12 @@
 #ifndef COMPARE_H
 #define COMPARE_H
 
+#include <linux/skbuff.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
+
 struct compare_info {
 	struct sk_buff *skb;
 	struct ethhdr *eth;

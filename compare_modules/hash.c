@@ -1,6 +1,7 @@
-#include "hash.h"
 #include <linux/ip.h>
 #include <net/ip.h>
+
+#include "hash.h"
 
 void hash_init(struct hash_head *h)
 {

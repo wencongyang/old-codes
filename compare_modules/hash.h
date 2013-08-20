@@ -1,10 +1,8 @@
-#include <linux/module.h>
-#include <linux/types.h>
-#include <linux/kernel.h>
-#include <linux/errno.h>
-#include <linux/netdevice.h>
+#ifndef COLO_HASH_H
+#define COLO_HASH_H
+
 #include <linux/skbuff.h>
-#include <net/pkt_sched.h>
+#include <linux/types.h>
 
 #define HASH_NR 	10000
 
@@ -28,6 +26,7 @@ struct flow_keys {
 };
 
 struct hash_head;
+struct sched_data;
 
 struct hash_value {
 	struct sk_buff_head master_queue;
@@ -53,3 +52,5 @@ struct hash_head {
 
 void hash_init(struct hash_head *h);
 struct hash_value *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags);
+
+#endif

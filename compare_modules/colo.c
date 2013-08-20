@@ -1,4 +1,7 @@
-#include "hash.h"
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <net/pkt_sched.h>
+
 #include "comm.h"
 
 enum {

@@ -1,6 +1,4 @@
 #include <linux/kernel.h>
-#include <linux/tcp.h>
-#include <net/tcp.h>
 
 #include "compare.h"
 

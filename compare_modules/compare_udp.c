@@ -1,5 +1,4 @@
 #include <linux/kernel.h>
-#include <linux/udp.h>
 
 #include "compare.h"
 
