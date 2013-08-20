@@ -25,10 +25,12 @@
 #include <linux/udp.h>
 #include <linux/if_arp.h>
 #include <net/tcp.h>
+#include <net/protocol.h>
 #include <linux/kthread.h>
 
 #include "hash.h"
 #include "comm.h"
+#include "compare.h"
 
 bool ignore_id = 1;
 module_param(ignore_id, bool, 0644);
@@ -209,72 +211,36 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-static void debug_print_packet(const unsigned char *n, unsigned int doff)
+const compare_ops_t *compare_inet_ops[MAX_INET_PROTOS];
+
+int register_compare_ops(compare_ops_t *ops, unsigned short protocol)
 {
-	int i, j;
-
-	printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
-		n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7]);
-	printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
-		n[8], n[9], n[10], n[11], n[12], n[13], n[14], n[15]);
-	printk(KERN_DEBUG "HA_compare: %02x %02x %02x %02x\n",
-		n[16], n[17], n[18], n[19]);
-
-	/* TCP options */
-	for (i = 20; i < doff; i++) {
-		if (n[i] == 0)
-			break;
-
-		if (n[i] == 1) {
-			/* nop */
-			printk(KERN_DEBUG "HA_compare: nop\n");
-			continue;
-		}
-
-		printk(KERN_DEBUG "HA_compare:");
-		for (j = i; j < i + n[i+1]; j++) {
-			printk(KERN_CONT " %02x", (unsigned int)n[j]);
-		}
-		printk(KERN_CONT "\n");
-
-		i += n[i+1] - 1;
-	}
+	return !cmpxchg((const compare_ops_t **)&compare_inet_ops[protocol],
+			NULL, ops) ? 0 : -1;
 }
+
+int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol)
+{
+	return cmpxchg((const compare_ops_t **)&compare_inet_ops[protocol],
+		       ops, NULL) == ops ? 0 : -1;
+}
+EXPORT_SYMBOL(register_compare_ops);
+EXPORT_SYMBOL(unregister_compare_ops);
 
 static void debug_print_ip(const struct iphdr *ip)
 {
 	unsigned short len = htons(ip->tot_len);
 	unsigned short id = htons(ip->id);
 	unsigned char protocol = ip->protocol;
-	void *packet = (char *)ip + ip->ihl * 4;
-	unsigned short src_port, dst_port;
+	void *data = (char *)ip + ip->ihl * 4;
+	const compare_ops_t * ops = compare_inet_ops[protocol];
 
-	printk("HA_compare:[IP]len = %u, id= %u.\n", len, id);
+	pr_debug("HA_compare:[IP]len = %u, id= %u.\n", len, id);
 
-	if (protocol == IPPROTO_TCP) { // TCP
-		struct tcphdr *tcp = packet;
-		unsigned int ack, seq;
-		unsigned int doff;
-
-		src_port = htons(tcp->source);
-		dst_port = htons(tcp->dest);
-		ack = htonl(tcp->ack_seq);
-		seq = htonl(tcp->seq);
-		printk(KERN_DEBUG "HA_compare:[TCP] src=%u, dst=%u, seq = %u,"
-					" ack=%u\n", src_port, dst_port, seq,
-					ack);
-
-		doff = tcp->doff * 4;
-		debug_print_packet(packet, doff);
-
-	} else if (protocol == IPPROTO_UDP) { // UDP
-		struct udphdr *udp = packet;
-
-		src_port = htons(udp->source);
-		dst_port = htons(udp->dest);
-		printk("HA_compare:[UDP] src=%u, dst=%u\n", src_port, dst_port);
-	} else
-		printk("HA_compare: unkown protocol: %u\n", protocol);
+	if (ops && ops->debug_print)
+		ops->debug_print(data);
+	else
+		pr_debug("HA_compare: unkown protocol: %u\n", protocol);
 }
 
 struct arp_reply {
@@ -288,14 +254,14 @@ static void debug_print_arp(const struct arphdr *arp)
 {
 	struct arp_reply *temp;
 
-	printk("HA_compare:[ARP] ar_hrd=%u, ar_pro=%u\n",
+	pr_debug("HA_compare:[ARP] ar_hrd=%u, ar_pro=%u\n",
 		htons(arp->ar_hrd), htons(arp->ar_pro));
-	printk("HA_compare:[ARP] ar_hln=%u, ar_pln=%u, ar_op=%u\n",
+	pr_debug("HA_compare:[ARP] ar_hln=%u, ar_pln=%u, ar_op=%u\n",
 		arp->ar_hln, arp->ar_pln, htons(arp->ar_op));
 	if (htons(arp->ar_op) == ARPOP_REPLY || htons(arp->ar_op) == ARPOP_REQUEST) {
 		temp = (struct arp_reply *)((char*)arp + sizeof(struct arphdr));
-		printk("HA_compare:[ARP] ar_sha: %pM, ar_sip: %pI4\n", temp->ar_sha, temp->ar_sip);
-		printk("HA_compare:[ARP] ar_tha: %pM, ar_tip: %pI4\n", temp->ar_tha, temp->ar_tip);
+		pr_debug("HA_compare:[ARP] ar_sha: %pM, ar_sip: %pI4\n", temp->ar_sha, temp->ar_sip);
+		pr_debug("HA_compare:[ARP] ar_tha: %pM, ar_tip: %pI4\n", temp->ar_tha, temp->ar_tip);
 	}
 }
 
@@ -311,43 +277,16 @@ static void reset_compare_status(void)
  *   3: bypass the packet from master, and drop the packet from slaver
  */
 
-#define		BYPASS_MASTER		0x01
-#define		DROP_SLAVER		0x02
-#define		SAME_PACKET		0x04
-
-struct compare_info {
-	struct sk_buff *skb;
-	struct ethhdr *eth;
-	union {
-		void *packet;
-		struct iphdr *ip;
-	};
-	union {
-		void *ip_packet;
-		struct tcphdr *tcp;
-		struct udphdr *udp;
-	};
-	union {
-		void *tcp_packet;
-		void *udp_packet;
-	};
-	unsigned int length;
-
-	/* only for tcp */
-	unsigned int last_seq;
-};
-
 static void print_debuginfo(struct compare_info *m, struct compare_info *s)
 {
-	printk("HA_compare: same=%u, last_id=%u, last_seq=%u\n", same_count, last_id, m->last_seq);
-	printk(KERN_DEBUG "HA_compare: Master pkt:\n");
+	pr_debug("HA_compare: same=%u, last_id=%u, last_seq=%u\n", same_count, last_id, m->last_seq);
+	pr_debug("HA_compare: Master pkt:\n");
 	debug_print_ip(m->ip);
-	printk(KERN_DEBUG "HA_compare: Slaver pkt:\n");
+	pr_debug("HA_compare: Slaver pkt:\n");
 	debug_print_ip(s->ip);
 }
 
-static int
-compare_other_packet(void *m, void *s, int length)
+int compare_other_packet(void *m, void *s, int length)
 {
 	return memcmp(m, s, length) ? 0 : SAME_PACKET;
 }
@@ -362,148 +301,11 @@ compare_arp_packet(struct compare_info *m, struct compare_info *s)
 	return compare_other_packet(m->packet, s->packet, m->length);
 }
 
-static void
-update_tcp_window(struct compare_info *m, struct compare_info *s)
-{
-	uint16_t m_window = htons(m->tcp->window);
-	uint16_t s_window = htons(s->tcp->window);
-
-	m->tcp->window = htons(min(m_window, s_window));
-	if (s_window >= m_window)
-		return;
-
-	inet_proto_csum_replace2(&m->tcp->check, m->skb, m->tcp->window,
-				 s->tcp->window, 0);
-}
-
-static void
-update_tcp_ackseq(struct compare_info *m, struct compare_info *s)
-{
-	uint32_t m_ack_seq = htonl(m->tcp->ack_seq);
-	uint32_t s_ack_seq = htonl(s->tcp->ack_seq);
-
-	m->tcp->ack_seq = htonl(min(m_ack_seq, s_ack_seq));
-	if (s_ack_seq >= m_ack_seq)
-		return;
-
-	inet_proto_csum_replace4(&m->tcp->check, m->skb, m->tcp->ack_seq,
-				 s->tcp->ack_seq, 0);
-}
-
-static int
-compare_tcp_packet(struct compare_info *m, struct compare_info *s)
-{
-	int m_len, s_len;
-	unsigned int m_seq, s_seq;
-	int ret = 0;
-
-#define compare(elem)							\
-	if (unlikely(m->tcp->elem != s->tcp->elem)) {			\
-		pr_warn("HA_compare: tcp header's %s is different\n",	\
-			#elem);						\
-		return 0;						\
-	}
-
-	/* source port and dest port*/
-	compare(source);
-	compare(dest);
-
-	m_len = m->length - m->tcp->doff * 4;
-	s_len = s->length - s->tcp->doff * 4;
-	m_seq = htonl(m->tcp->seq);
-	s_seq = htonl(s->tcp->seq);
-
-	/* Sequence Number */
-	if (m->tcp->syn) {
-		compare(seq);
-		m->last_seq = m_seq;
-	} else {
-
-		if (ignore_retransmitted_packet) {
-			if ((m_len != 0 && m_seq == m->last_seq) ||
-			    ((m_seq - m->last_seq) & (1<<31)))
-				/* retransmitted packets */
-				ret |= BYPASS_MASTER;
-			if ((s_len != 0 && s_seq == m->last_seq) ||
-			    ((s_seq - m->last_seq) & (1<<31)))
-				/* retransmitted packets */
-				ret |= DROP_SLAVER;
-		}
-
-		if (ret)
-			goto out;
-
-		compare(seq);
-	}
-
-	/* flags */
-	if(memcmp((char *)m->tcp+13, (char *)s->tcp+13, 1)) {
-		pr_warn("HA_compare: tcp header's flags is different\n");
-		return 0;
-	}
-
-	if (ignore_ack_packet) {
-		if (m_len == 0 && s_len != 0)
-			ret |= BYPASS_MASTER;
-
-		if (m_len != 0 && s_len == 0)
-			ret |= DROP_SLAVER;
-
-		if (ret)
-			goto out;
-	}
-
-	if (m_len != 0 || m->tcp->fin)
-		m->last_seq = m_seq;
-
-	/* Sequence Number */
-	compare(seq);
-
-	/* data offset */
-	compare(doff);
-
-	/* tcp window size */
-	if (!ignore_tcp_window)
-		compare(window);
-
-	/* Acknowledgment Number */
-	if (m->tcp->ack && !ignore_ack_difference) {
-		compare(ack_seq);
-	}
-
-	if (compare_tcp_data && m_len != 0 && s_len != 0) {
-		m->tcp_packet = m->ip_packet + m->tcp->doff * 4;
-		s->tcp_packet = s->ip_packet + s->tcp->doff * 4;
-		ret = compare_other_packet(m->tcp_packet, s->tcp_packet, min(m_len, s_len));
-		if (ret == 0) {
-			pr_warn("HA_compare: tcp data is different\n");
-			return 0;
-		}
-	}
-
-#undef compare
-
-	if (!ret || ret &BYPASS_MASTER) {
-		if (ignore_ack_difference)
-			update_tcp_ackseq(m, s);
-		if (ignore_tcp_window)
-			update_tcp_window(m, s);
-	}
-
-	return ret ?:SAME_PACKET;
-
-out:
-	if (ret & BYPASS_MASTER) {
-		update_tcp_ackseq(m, s);
-		update_tcp_window(m, s);
-	}
-	return ret;
-}
-
 static int
 compare_ip_packet(struct compare_info *m, struct compare_info *s)
 {
 	int ret;
+	const compare_ops_t *ops;
 
 	if (unlikely(m->ip->ihl * 4 > m->length)) {
 		pr_warn("HA_compare: master iphdr is corrupted\n");
@@ -515,7 +317,7 @@ compare_ip_packet(struct compare_info *m, struct compare_info *s)
 		return 0;
 	}
 
-#define compare(elem)							\
+#define compare_elem(elem)						\
 	if (unlikely(m->ip->elem != s->ip->elem)) {			\
 		pr_warn("HA_compare: iphdr's %s is different\n",	\
 			#elem);\
@@ -527,11 +329,11 @@ compare_ip_packet(struct compare_info *m, struct compare_info *s)
 		return 0;						\
 	}
 
-	compare(version);
-	compare(ihl);
-	compare(protocol);
-	compare(saddr);
-	compare(daddr);
+	compare_elem(version);
+	compare_elem(ihl);
+	compare_elem(protocol);
+	compare_elem(saddr);
+	compare_elem(daddr);
 
 	/* IP options */
 	if (memcmp((char *)m->ip+20, (char*)s->ip+20, m->ip->ihl*4 - 20)) {
@@ -540,31 +342,28 @@ compare_ip_packet(struct compare_info *m, struct compare_info *s)
 		return 0;
 	}
 
-	m->ip_packet = (char *)m->ip + m->ip->ihl * 4;
+	m->ip_data = (char *)m->ip + m->ip->ihl * 4;
 	if (m->length <= htons(m->ip->tot_len))
 		m->length -= m->ip->ihl * 4;
 	else
 		m->length = htons(m->ip->tot_len) - m->ip->ihl * 4;
-	s->ip_packet = (char *)s->ip + s->ip->ihl * 4;
+	s->ip_data = (char *)s->ip + s->ip->ihl * 4;
 	if (s->length <= htons(s->ip->tot_len))
 		s->length -= s->ip->ihl * 4;
 	else
 		s->length = htons(s->ip->tot_len) - s->ip->ihl * 4;
 
-	switch(m->ip->protocol) {
-	case IPPROTO_TCP:
-		ret = compare_tcp_packet(m, s);
-		break;
-	case IPPROTO_UDP:
-		/* TODO */
-	default:
+	ops = compare_inet_ops[m->ip->protocol];
+	if (ops && ops->compare) {
+		ret = ops->compare(m, s);
+	} else {
 //		pr_info("unknown protocol: %u", ntohs(master->protocol));
 		if (m->length != s->length) {
 			pr_warn("HA_compare: the length of packet is different\n");
 			print_debuginfo(m, s);
 			return 0;
 		}
-		ret = compare_other_packet(m->ip_packet, s->ip_packet, m->length);
+		ret = compare_other_packet(m->ip_data, s->ip_data, m->length);
 	}
 	if (!ret) {
 		print_debuginfo(m, s);
@@ -574,16 +373,16 @@ compare_ip_packet(struct compare_info *m, struct compare_info *s)
 	if (ret != SAME_PACKET)
 		return ret;
 
-	compare(tos);
-	compare(tot_len);
-	compare(frag_off);
-	compare(ttl);
+	compare_elem(tos);
+	compare_elem(tot_len);
+	compare_elem(frag_off);
+	compare_elem(ttl);
 	if (!ignore_id) {
-		compare(id);
-		compare(check);
+		compare_elem(id);
+		compare_elem(check);
 	}
 
-#undef compare
+#undef compare_elem
 
 	last_id = htons(m->ip->id);
 
@@ -632,9 +431,9 @@ compare_skb(struct compare_info *m, struct compare_info *s)
 	case ETH_P_ARP:
 		ret = compare_arp_packet(m, s);
 		if (!ret) {
-			printk("HA_compare: master packet, len=%d\n", m->length);
+			pr_debug("HA_compare: master packet, len=%d\n", m->length);
 			debug_print_arp(m->packet);
-			printk("HA_compare: slaver packet, len=%d\n", s->length);
+			pr_debug("HA_compare: slaver packet, len=%d\n", s->length);
 			debug_print_arp(s->packet);
 		}
 		break;
@@ -868,38 +667,38 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	struct sched_data *slaver_queue = colo_hash_head->slaver_data;
 	struct hash_value *value;
 
-	printk("STAT: update=%u, in_soft_irq=%u, total_time=%llu, last_time=%llu, max_time=%llu\n",
+	pr_info("STAT: update=%u, in_soft_irq=%u, total_time=%llu, last_time=%llu, max_time=%llu\n",
 		statis.update, statis.in_soft_irq, statis.total_time, statis.last_time, statis.max_time);
-	printk("STAT Debug info:\n");
-	printk("\nSTAT: status=%lx.\n", state);
+	pr_info("STAT Debug info:\n");
+	pr_info("\nSTAT: status=%lx.\n", state);
 
 	for (i = 0; i < HASH_NR; i++) {
 		j = 0;
 		list_for_each_entry(value, &master_queue->blo->entry[i], list) {
 			skb = skb_peek(&value->master_queue);
 			if (skb != NULL)
-				printk("STAT: m_blo[%d, %d] not empty.\n", i, j);
+				pr_info("STAT: m_blo[%d, %d] not empty.\n", i, j);
 			j++;
 		}
 	}
 
 	skb = skb_peek(&master_queue->rel);
 	if (skb != NULL)
-		printk("STAT: m_rel not empty.\n");
+		pr_info("STAT: m_rel not empty.\n");
 
 	for (i = 0; i < HASH_NR; i++) {
 		j = 0;
 		list_for_each_entry(value, &slaver_queue->blo->entry[i], list) {
 			skb = skb_peek(&value->slaver_queue);
 			if (skb != NULL)
-				printk("STAT: s_blo[%d] not empty.\n", i);
+				pr_info("STAT: s_blo[%d] not empty.\n", i);
 			j++;
 		}
 	}
 
 	skb = skb_peek(&slaver_queue->rel);
 	if (skb != NULL)
-		printk("STAT: s_rel not empty.\n");
+		pr_info("STAT: s_rel not empty.\n");
 
 	return 0;
 }
@@ -916,7 +715,7 @@ int write_proc(struct file *file, const char *buffer, unsigned long count, void 
 		fail = 1;
 		test_and_set_bit(HASTATE_PENDING_NR, &state);
 		wake_up_interruptible(&queue);
-		printk("failover.\n");
+		pr_info("failover.\n");
 	} else if (buf[0]=='r')
 		fail = 0;
 
@@ -931,7 +730,7 @@ static int __init compare_module_init(void)
 	/* allocate a device id */
 	result = alloc_chrdev_region(&dev, cmp_minor, 1, "HA_compare");
 	if (result < 0) {
-		printk(KERN_WARNING "HA_compare: can't get device id.\n");
+		pr_err("HA_compare: can't get device id.\n");
 		return result;
 	}
 	cmp_major = MAJOR(dev);
@@ -939,7 +738,7 @@ static int __init compare_module_init(void)
 	/* setup device */
 	result = cmp_setup_cdev(&cmp_dev);
 	if (result) {
-		printk(KERN_WARNING "HA_compare: can't setup device.\n");
+		pr_err("HA_compare: can't setup device.\n");
 		goto err_setup;
 	}
 
@@ -958,6 +757,9 @@ static int __init compare_module_init(void)
 
 	sema_init(&cmp_dev.sem, 1);
 	init_waitqueue_head(&queue);
+
+	compare_tcp_init();
+	compare_udp_init();
 
 	memset(&statis, 0, sizeof(struct statistic_data));
 	proc_entry = create_proc_entry("HA_compare", 0, NULL);
@@ -979,6 +781,9 @@ err_setup:
 static void __exit compare_module_exit(void)
 {
 	kthread_stop(compare_task);
+
+	compare_tcp_fini();
+	compare_udp_fini();
 
 	/* del device */
 	cdev_del(& cmp_dev.cdev);
