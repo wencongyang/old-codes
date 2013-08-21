@@ -1,21 +1,46 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/mutex.h>
+#include <linux/rcupdate.h>
 #include <net/protocol.h>
 
 #include "compare.h"
 
 const compare_ops_t *compare_inet_ops[MAX_INET_PROTOS];
+DEFINE_MUTEX(inet_ops_lock);
 
 int register_compare_ops(compare_ops_t *ops, unsigned short protocol)
 {
-	return !cmpxchg((const compare_ops_t **)&compare_inet_ops[protocol],
-			NULL, ops) ? 0 : -1;
+	int ret = -1;
+
+	mutex_lock(&inet_ops_lock);
+	if (compare_inet_ops[protocol])
+		goto out;
+
+	rcu_assign_pointer(compare_inet_ops[protocol], ops);
+	synchronize_rcu();
+	ret = 0;
+
+out:
+	mutex_unlock(&inet_ops_lock);
+	return ret;
 }
 
 int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol)
 {
-	return cmpxchg((const compare_ops_t **)&compare_inet_ops[protocol],
-		       ops, NULL) == ops ? 0 : -1;
+	int ret = -1;
+
+	mutex_lock(&inet_ops_lock);
+	if (compare_inet_ops[protocol] != ops)
+		goto out;
+
+	rcu_assign_pointer(compare_inet_ops[protocol], NULL);
+	synchronize_rcu();
+	ret = 0;
+
+out:
+	mutex_unlock(&inet_ops_lock);
+	return ret;
 }
 EXPORT_SYMBOL(register_compare_ops);
 EXPORT_SYMBOL(unregister_compare_ops);
@@ -26,14 +51,17 @@ static void debug_print_ip(const struct iphdr *ip)
 	unsigned short id = htons(ip->id);
 	unsigned char protocol = ip->protocol;
 	void *data = (char *)ip + ip->ihl * 4;
-	const compare_ops_t * ops = compare_inet_ops[protocol];
+	const compare_ops_t * ops;
 
 	pr_debug("HA_compare:[IP]len = %u, id= %u.\n", len, id);
 
+	rcu_read_lock();
+	ops = rcu_dereference(compare_inet_ops[protocol]);
 	if (ops && ops->debug_print)
 		ops->debug_print(data);
 	else
 		pr_debug("HA_compare: unkown protocol: %u\n", protocol);
+	rcu_read_unlock();
 }
 
 static void print_debuginfo(struct compare_info *m, struct compare_info *s)
@@ -96,7 +124,8 @@ int compare_ip_packet(struct compare_info *m, struct compare_info *s)
 	else
 		s->length = htons(s->ip->tot_len) - s->ip->ihl * 4;
 
-	ops = compare_inet_ops[m->ip->protocol];
+	rcu_read_lock();
+	ops = rcu_dereference(compare_inet_ops[m->ip->protocol]);
 	if (ops && ops->compare) {
 		ret = ops->compare(m, s);
 	} else {
@@ -104,10 +133,12 @@ int compare_ip_packet(struct compare_info *m, struct compare_info *s)
 		if (m->length != s->length) {
 			pr_warn("HA_compare: the length of packet is different\n");
 			print_debuginfo(m, s);
+			rcu_read_unlock();
 			return 0;
 		}
 		ret = compare_other_packet(m->ip_data, s->ip_data, m->length);
 	}
+	rcu_read_unlock();
 	if (!ret) {
 		print_debuginfo(m, s);
 		return 0;
@@ -137,11 +168,15 @@ void ip_update_compare_info(void *info, struct iphdr *ip)
 	unsigned char protocol;
 	void *data;
 	uint32_t len;
+	const compare_ops_t *ops;
 
 	protocol = ip->protocol;
 	data = (char *)ip + ip->ihl * 4;
 	len = ip->tot_len - ip->ihl * 4;
-	if (compare_inet_ops[protocol] &&
-	    compare_inet_ops[protocol]->update_info)
-		compare_inet_ops[protocol]->update_info(info, data, len);
+
+	rcu_read_lock();
+	ops = rcu_dereference(compare_inet_ops[protocol]);
+	if (ops && ops->update_info)
+		ops->update_info(info, data, len);
+	rcu_read_unlock();
 }

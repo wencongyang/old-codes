@@ -30,6 +30,7 @@ struct compare_info {
 	void *private_data;
 };
 
+/* It is protected by RCU, so don't sleep in all callbacks */
 struct compare_ops {
 	int (*compare)(struct compare_info *m, struct compare_info *s);
 	void (*update_info)(void *info, void *data, uint32_t len);
