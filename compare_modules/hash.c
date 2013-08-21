@@ -89,7 +89,6 @@ static struct hash_value *alloc_hash_value(struct flow_keys *key)
 	skb_queue_head_init(&value->master_queue);
 	skb_queue_head_init(&value->slaver_queue);
 	value->head = NULL;
-	value->m_last_seq = value->s_last_seq = 0;
 
 	return value;
 }

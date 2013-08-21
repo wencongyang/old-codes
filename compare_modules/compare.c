@@ -23,7 +23,6 @@
 #include <linux/if_arp.h>
 #include <linux/kthread.h>
 #include <net/protocol.h>
-#include <net/tcp.h>
 
 #include "comm.h"
 #include "compare.h"
@@ -275,7 +274,7 @@ static void reset_compare_status(void)
 
 static void print_debuginfo(struct compare_info *m, struct compare_info *s)
 {
-	pr_debug("HA_compare: same=%u, last_id=%u, last_seq=%u\n", same_count, last_id, m->last_seq);
+	pr_debug("HA_compare: same=%u, last_id=%u\n", same_count, last_id);
 	pr_debug("HA_compare: Master pkt:\n");
 	debug_print_ip(m->ip);
 	pr_debug("HA_compare: Slaver pkt:\n");
@@ -474,25 +473,24 @@ static void clear_slaver_queue(struct hash_head *h)
 	}
 }
 
-static int get_seq(struct sk_buff *skb, uint32_t *seq)
+static void update_compare_info(struct hash_value *value, struct sk_buff *skb)
 {
+	struct ethhdr *eth = (struct ethhdr *)skb->data;
 	struct iphdr *ip;
-	struct tcphdr *tcp;
-	struct ethhdr *eth = (void *)skb->data;
+	unsigned char protocol;
+	void *data;
+	uint32_t len;
 
 	if (htons(eth->h_proto) != ETH_P_IP)
-		return 0;
+		return;
 
-	ip = (struct iphdr *)((char *)eth + sizeof(struct ethhdr));
-	if (ip->protocol != IPPROTO_TCP)
-		return 0;
-
-	tcp = (struct tcphdr *)((char *)ip + ip->ihl * 4);
-	if (ip->tot_len - ip->ihl * 4 <= tcp->doff * 4)
-		return 0;
-
-	*seq = htonl(tcp->seq);
-	return 1;
+	ip = (struct iphdr *)(skb->data + sizeof(*eth));
+	protocol = ip->protocol;
+	data = (char *)ip + ip->ihl * 4;
+	len = ip->tot_len - ip->ihl * 4;
+	if (compare_inet_ops[protocol] &&
+	    compare_inet_ops[protocol]->update_info)
+		compare_inet_ops[protocol]->update_info(&value->m_info, data, len);
 }
 
 static void move_master_queue(struct hash_head *h)
@@ -500,14 +498,12 @@ static void move_master_queue(struct hash_head *h)
 	int i;
 	struct sk_buff *skb;
 	struct hash_value *value;
-	uint32_t seq;
 
 	for (i = 0; i < HASH_NR; i++) {
 		list_for_each_entry(value, &h->entry[i], list) {
 			skb = skb_dequeue(&value->master_queue);
 			while (skb != NULL) {
-				if (get_seq(skb, &seq) && after(seq, value->m_last_seq))
-					value->m_last_seq = seq;
+				update_compare_info(value, skb);
 				skb_queue_tail(&h->wait_for_release, skb);
 				skb = skb_dequeue(&value->master_queue);
 			}
@@ -568,7 +564,8 @@ static void compare(struct hash_value *hash_value)
 
 		info_m.skb = skb_m;
 		info_s.skb = skb_s;
-		info_m.last_seq = hash_value->m_last_seq;
+		info_m.private_data = &hash_value->m_info;
+		info_m.private_data = &hash_value->s_info;
 		ret = compare_skb(&info_m, &info_s);
 		if (ret) {
 			if (likely(ret & BYPASS_MASTER)) {
@@ -584,7 +581,6 @@ static void compare(struct hash_value *hash_value)
 			} else {
 				skb_queue_head(&hash_value->slaver_queue, skb_s);
 			}
-			hash_value->m_last_seq = info_m.last_seq;
 			//printk("netif_schedule%u.\n", cnt);
 		} else {
 			/*

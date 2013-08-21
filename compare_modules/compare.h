@@ -26,12 +26,13 @@ struct compare_info {
 	};
 	unsigned int length;
 
-	/* only for tcp */
-	unsigned int last_seq;
+	/* length: 32bytes */
+	void *private_data;
 };
 
 struct compare_ops {
 	int (*compare)(struct compare_info *m, struct compare_info *s);
+	void (*update_info)(void *info, void *data, uint32_t len);
 	void (*debug_print)(void *data);
 };
 

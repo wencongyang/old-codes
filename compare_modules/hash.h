@@ -32,12 +32,14 @@ struct hash_value {
 	struct sk_buff_head master_queue;
 	struct sk_buff_head slaver_queue;
 	struct hash_head *head;
-	uint32_t m_last_seq;
-	uint32_t s_last_seq;
 
 	struct flow_keys key;
 	struct list_head list;
 	struct list_head compare_list;
+
+	/* transport layer defines it */
+	uint32_t m_info[8];
+	uint32_t s_info[8];
 };
 
 struct hash_head {

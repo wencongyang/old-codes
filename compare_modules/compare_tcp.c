@@ -1,6 +1,14 @@
 #include <linux/kernel.h>
+#include <net/tcp.h>
 
 #include "compare.h"
+
+struct tcp_compare_info {
+	uint32_t last_seq;
+	uint32_t reserved[7];
+};
+
+#define TCP_CMP_INFO(compare_info) ((struct tcp_compare_info *)compare_info->private_data)
 
 static void debug_print_tcp_header(const unsigned char *n, unsigned int doff)
 {
@@ -107,16 +115,18 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 	/* Sequence Number */
 	if (m->tcp->syn) {
 		compare(seq);
-		m->last_seq = m_seq;
+		TCP_CMP_INFO(m)->last_seq = m_seq;
 	} else {
 
 		if (ignore_retransmitted_packet) {
-			if ((m_len != 0 && m_seq == m->last_seq) ||
-			    ((m_seq - m->last_seq) & (1<<31)))
+			if ((m_len != 0 &&
+			     m_seq == TCP_CMP_INFO(m)->last_seq) ||
+			    before(m_seq, TCP_CMP_INFO(m)->last_seq))
 				/* retransmitted packets */
 				ret |= BYPASS_MASTER;
-			if ((s_len != 0 && s_seq == m->last_seq) ||
-			    ((s_seq - m->last_seq) & (1<<31)))
+			if ((s_len != 0 &&
+			     s_seq == TCP_CMP_INFO(m)->last_seq) ||
+			    before(s_seq, TCP_CMP_INFO(m)->last_seq))
 				/* retransmitted packets */
 				ret |= DROP_SLAVER;
 		}
@@ -145,7 +155,7 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 	}
 
 	if (m_len != 0 || m->tcp->fin)
-		m->last_seq = m_seq;
+		TCP_CMP_INFO(m)->last_seq = m_seq;
 
 	/* Sequence Number */
 	compare(seq);
@@ -191,8 +201,22 @@ out:
 	return ret;
 }
 
+static void update_tcp_info(void *info, void *data, uint32_t length)
+{
+	struct tcphdr *tcp = data;
+	struct tcp_compare_info *tcp_info = info;
+	uint32_t seq = htonl(tcp->seq);
+
+	if (length <= tcp->doff * 4)
+		return;
+
+	if (after(seq, tcp_info->last_seq))
+		tcp_info->last_seq = seq;
+}
+
 static compare_ops_t tcp_ops = {
 	.compare = compare_tcp_packet,
+	.update_info = update_tcp_info,
 	.debug_print = debug_print_tcp,
 };
 
