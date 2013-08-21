@@ -20,7 +20,7 @@ struct compare_info {
 		struct udphdr *udp;
 	};
 	union {
-		void *transfer_data;
+		void *transport_data;
 		void *tcp_data;
 		void *udp_data;
 	};
