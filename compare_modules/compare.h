@@ -42,9 +42,17 @@ typedef struct compare_ops compare_ops_t;
 #define		DROP_SLAVER		0x02
 #define		SAME_PACKET		0x04
 
+extern int compare_other_packet(void *m, void *s, int length);
+
+/* ipv4 */
+extern bool ignore_id;
+extern unsigned short last_id;
+extern unsigned int same_count;
+extern int compare_ip_packet(struct compare_info *m, struct compare_info *s);
+extern void ip_update_compare_info(void *info, struct iphdr *ip);
+
 extern int register_compare_ops(compare_ops_t *ops, unsigned short protocol);
 extern int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol);
-extern int compare_other_packet(void *m, void *s, int length);
 
 /* tcp */
 extern bool ignore_ack_packet;

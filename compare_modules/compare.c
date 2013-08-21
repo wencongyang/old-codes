@@ -22,7 +22,6 @@
 #include <asm/ioctl.h>
 #include <linux/if_arp.h>
 #include <linux/kthread.h>
-#include <net/protocol.h>
 
 #include "comm.h"
 #include "compare.h"
@@ -206,38 +205,6 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-const compare_ops_t *compare_inet_ops[MAX_INET_PROTOS];
-
-int register_compare_ops(compare_ops_t *ops, unsigned short protocol)
-{
-	return !cmpxchg((const compare_ops_t **)&compare_inet_ops[protocol],
-			NULL, ops) ? 0 : -1;
-}
-
-int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol)
-{
-	return cmpxchg((const compare_ops_t **)&compare_inet_ops[protocol],
-		       ops, NULL) == ops ? 0 : -1;
-}
-EXPORT_SYMBOL(register_compare_ops);
-EXPORT_SYMBOL(unregister_compare_ops);
-
-static void debug_print_ip(const struct iphdr *ip)
-{
-	unsigned short len = htons(ip->tot_len);
-	unsigned short id = htons(ip->id);
-	unsigned char protocol = ip->protocol;
-	void *data = (char *)ip + ip->ihl * 4;
-	const compare_ops_t * ops = compare_inet_ops[protocol];
-
-	pr_debug("HA_compare:[IP]len = %u, id= %u.\n", len, id);
-
-	if (ops && ops->debug_print)
-		ops->debug_print(data);
-	else
-		pr_debug("HA_compare: unkown protocol: %u\n", protocol);
-}
-
 struct arp_reply {
 	unsigned char		ar_sha[ETH_ALEN];
 	unsigned char		ar_sip[4];
@@ -272,15 +239,6 @@ static void reset_compare_status(void)
  *   3: bypass the packet from master, and drop the packet from slaver
  */
 
-static void print_debuginfo(struct compare_info *m, struct compare_info *s)
-{
-	pr_debug("HA_compare: same=%u, last_id=%u\n", same_count, last_id);
-	pr_debug("HA_compare: Master pkt:\n");
-	debug_print_ip(m->ip);
-	pr_debug("HA_compare: Slaver pkt:\n");
-	debug_print_ip(s->ip);
-}
-
 int compare_other_packet(void *m, void *s, int length)
 {
 	return memcmp(m, s, length) ? 0 : SAME_PACKET;
@@ -294,94 +252,6 @@ compare_arp_packet(struct compare_info *m, struct compare_info *s)
 
 	/* TODO */
 	return compare_other_packet(m->packet, s->packet, m->length);
-}
-
-static int
-compare_ip_packet(struct compare_info *m, struct compare_info *s)
-{
-	int ret;
-	const compare_ops_t *ops;
-
-	if (unlikely(m->ip->ihl * 4 > m->length)) {
-		pr_warn("HA_compare: master iphdr is corrupted\n");
-		return 0;
-	}
-
-	if (unlikely(s->ip->ihl * 4 > s->length)) {
-		pr_warn("HA_compare: slaver iphdr is corrupted\n");
-		return 0;
-	}
-
-#define compare_elem(elem)						\
-	if (unlikely(m->ip->elem != s->ip->elem)) {			\
-		pr_warn("HA_compare: iphdr's %s is different\n",	\
-			#elem);\
-		pr_warn("HA_compare: master %s: %u\n", #elem,		\
-			m->ip->elem);					\
-		pr_warn("HA_compare: slaver %s: %u\n", #elem,		\
-			s->ip->elem);					\
-		print_debuginfo(m, s);					\
-		return 0;						\
-	}
-
-	compare_elem(version);
-	compare_elem(ihl);
-	compare_elem(protocol);
-	compare_elem(saddr);
-	compare_elem(daddr);
-
-	/* IP options */
-	if (memcmp((char *)m->ip+20, (char*)s->ip+20, m->ip->ihl*4 - 20)) {
-		pr_warn("HA_compare: iphdr option is different\n");
-		print_debuginfo(m, s);
-		return 0;
-	}
-
-	m->ip_data = (char *)m->ip + m->ip->ihl * 4;
-	if (m->length <= htons(m->ip->tot_len))
-		m->length -= m->ip->ihl * 4;
-	else
-		m->length = htons(m->ip->tot_len) - m->ip->ihl * 4;
-	s->ip_data = (char *)s->ip + s->ip->ihl * 4;
-	if (s->length <= htons(s->ip->tot_len))
-		s->length -= s->ip->ihl * 4;
-	else
-		s->length = htons(s->ip->tot_len) - s->ip->ihl * 4;
-
-	ops = compare_inet_ops[m->ip->protocol];
-	if (ops && ops->compare) {
-		ret = ops->compare(m, s);
-	} else {
-//		pr_info("unknown protocol: %u", ntohs(master->protocol));
-		if (m->length != s->length) {
-			pr_warn("HA_compare: the length of packet is different\n");
-			print_debuginfo(m, s);
-			return 0;
-		}
-		ret = compare_other_packet(m->ip_data, s->ip_data, m->length);
-	}
-	if (!ret) {
-		print_debuginfo(m, s);
-		return 0;
-	}
-
-	if (ret != SAME_PACKET)
-		return ret;
-
-	compare_elem(tos);
-	compare_elem(tot_len);
-	compare_elem(frag_off);
-	compare_elem(ttl);
-	if (!ignore_id) {
-		compare_elem(id);
-		compare_elem(check);
-	}
-
-#undef compare_elem
-
-	last_id = htons(m->ip->id);
-
-	return SAME_PACKET;
 }
 
 static int
@@ -477,20 +347,12 @@ static void update_compare_info(struct hash_value *value, struct sk_buff *skb)
 {
 	struct ethhdr *eth = (struct ethhdr *)skb->data;
 	struct iphdr *ip;
-	unsigned char protocol;
-	void *data;
-	uint32_t len;
 
 	if (htons(eth->h_proto) != ETH_P_IP)
 		return;
 
 	ip = (struct iphdr *)(skb->data + sizeof(*eth));
-	protocol = ip->protocol;
-	data = (char *)ip + ip->ihl * 4;
-	len = ip->tot_len - ip->ihl * 4;
-	if (compare_inet_ops[protocol] &&
-	    compare_inet_ops[protocol]->update_info)
-		compare_inet_ops[protocol]->update_info(&value->m_info, data, len);
+	ip_update_compare_info(&value->m_info, ip);
 }
 
 static void move_master_queue(struct hash_head *h)
