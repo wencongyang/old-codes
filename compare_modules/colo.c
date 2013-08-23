@@ -94,7 +94,8 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 
 	hash_value = insert(q->blo, skb, q->flags);
 	sch->qstats.backlog += qdisc_pkt_len(skb);
-	qdisc_bstats_update(sch, skb);
+	sch->bstats.bytes += qdisc_pkt_len(skb);
+	sch->bstats.packets++;
 
 	/*
 	 *  Notify the compare module a new packet arrives.

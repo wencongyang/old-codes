@@ -28,6 +28,25 @@ static void iph_to_flow_copy_addrs(struct flow_keys *flow, const struct iphdr *i
 	memcpy(&flow->src, &iph->saddr, sizeof(flow->src) + sizeof(flow->dst));
 }
 
+#define ip_is_fragment(iph)	(iph->frag_off & htons(IP_MF | IP_OFFSET))
+
+static inline int __proto_ports_offset(int proto)
+{
+	switch (proto) {
+	case IPPROTO_TCP:
+	case IPPROTO_UDP:
+	case IPPROTO_DCCP:
+	case IPPROTO_ESP:	/* SPI */
+	case IPPROTO_SCTP:
+	case IPPROTO_UDPLITE:
+		return 0;
+	case IPPROTO_AH:	/* SPI */
+		return 4;
+	default:
+		return -EINVAL;
+	}
+}
+
 bool skb_flow_dissect(const struct sk_buff *skb, struct flow_keys *flow)
 {
 	int poff, nhoff = skb_network_offset(skb);
@@ -60,7 +79,7 @@ bool skb_flow_dissect(const struct sk_buff *skb, struct flow_keys *flow)
 	}
 
 	flow->ip_proto = ip_proto;
-	poff = proto_ports_offset(ip_proto);
+	poff = __proto_ports_offset(ip_proto);
 	if (poff >= 0) {
 		__be32 *ports, _ports;
 
