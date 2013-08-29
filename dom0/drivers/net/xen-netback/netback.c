@@ -1423,7 +1423,7 @@ static void colo_fix_tcp_packet(struct sk_buff *skb)
 	delta = htons(window - new_window);
 	new_check = tcph->check + delta;
 
-	tcph->check = (__force __sum16)(new_check + new_check >= 0xFFFF);
+	tcph->check = (__force __sum16)(new_check + (new_check >= 0xFFFF));
 }
 
 static void xen_netbk_tx_submit(struct xen_netbk *netbk)
