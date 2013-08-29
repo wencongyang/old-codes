@@ -436,5 +436,30 @@ void *ipv4_get_data(struct sk_buff *skb, int offset)
 	return data;
 }
 
+int ipv4_copy_transport_head(void *data, struct sk_buff *head, int size)
+{
+	struct sk_buff *skb = head;
+	void *src = ipv4_get_data(skb, 0);
+	int len;
+
+	do {
+		len = FRAG_CB(skb)->len;
+		len = len > size ? size : len;
+		memcpy(data, src, len);
+		size -= len;
+
+		if (size == 0)
+			return 0;
+
+		skb = next_skb(skb, head);
+		if (!skb)
+			break;
+		src = ipv4_get_data(skb, FRAG_CB(skb)->offset);
+	} while(skb != NULL);
+
+	return 1;
+}
+
 EXPORT_SYMBOL(ipv4_get_skb_by_offset);
 EXPORT_SYMBOL(ipv4_get_data);
+EXPORT_SYMBOL(ipv4_copy_transport_head);

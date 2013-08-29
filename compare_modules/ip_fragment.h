@@ -77,6 +77,7 @@ extern struct sk_buff *ipv4_defrag(struct sk_buff *skb, struct ip_frags *ip_frag
 extern struct sk_buff *ipv4_get_skb_by_offset(struct sk_buff *head, int offset);
 /* offset: this offset shoule be in the skb */
 extern void *ipv4_get_data(struct sk_buff *skb, int offset);
+extern int ipv4_copy_transport_head(void *data, struct sk_buff *head, int size);
 
 static inline struct sk_buff *next_skb(struct sk_buff *skb, struct sk_buff *head)
 {

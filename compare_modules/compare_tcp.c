@@ -2,6 +2,7 @@
 #include <net/tcp.h>
 
 #include "compare.h"
+#include "ip_fragment.h"
 
 struct tcp_compare_info {
 	uint32_t last_seq;
@@ -90,7 +91,7 @@ update_tcp_ackseq(struct compare_info *m, struct compare_info *s)
 }
 
 static int
-compare_tcp_packet(struct compare_info *m, struct compare_info *s)
+compare_tcp_header(struct compare_info *m, struct compare_info *s)
 {
 	int m_len, s_len;
 	unsigned int m_seq, s_seq;
@@ -174,16 +175,6 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 		compare(ack_seq);
 	}
 
-	if (compare_tcp_data && m_len != 0 && s_len != 0) {
-		m->tcp_data = m->ip_data + m->tcp->doff * 4;
-		s->tcp_data = s->ip_data + s->tcp->doff * 4;
-		ret = compare_other_packet(m->tcp_data, s->tcp_data, min(m_len, s_len));
-		if (ret == 0) {
-			pr_warn("HA_compare: tcp data is different\n");
-			return 0;
-		}
-	}
-
 #undef compare
 
 	if (!ret || ret &BYPASS_MASTER) {
@@ -203,6 +194,126 @@ out:
 	return ret;
 }
 
+static int compare_tcp_packet(struct compare_info *m, struct compare_info *s)
+{
+	int m_len, s_len;
+	int ret;
+
+	ret = compare_tcp_header(m, s);
+	if (ret != SAME_PACKET)
+		return ret;
+
+	m_len = m->length - m->tcp->doff * 4;
+	s_len = s->length - s->tcp->doff * 4;
+
+	if (compare_tcp_data && m_len != 0 && s_len != 0) {
+		m->tcp_data = m->ip_data + m->tcp->doff * 4;
+		s->tcp_data = s->ip_data + s->tcp->doff * 4;
+		ret = compare_other_packet(m->tcp_data, s->tcp_data, min(m_len, s_len));
+		if (ret == 0) {
+			pr_warn("HA_compare: tcp data is different\n");
+			return 0;
+		}
+	}
+
+	return SAME_PACKET;
+}
+
+#define IP_DATA(skb)	(void *)(ip_hdr(skb)->ihl * 4 + (char *)ip_hdr(skb))
+
+static struct tcphdr *get_tcphdr(struct sk_buff *skb)
+{
+	struct tcphdr *tcph, _tcph;
+	int size, ret;
+
+	if (FRAG_CB(skb)->len < sizeof(struct tcphdr)) {
+		ret = ipv4_copy_transport_head(&_tcph, skb,
+					       sizeof(struct tcphdr));
+		if (ret)
+			return NULL;
+
+		tcph = &_tcph;
+	} else {
+		tcph = IP_DATA(skb);
+	}
+
+	size = tcph->doff * 4;
+	tcph = kmalloc(size, GFP_ATOMIC);
+	if (!tcph)
+		return NULL;
+
+	ret = ipv4_copy_transport_head(tcph, skb, size);
+	if (ret) {
+		kfree(tcph);
+		return NULL;
+	}
+
+	return tcph;
+}
+
+static int compare_tcpdata(struct compare_info *m, struct compare_info *s)
+{
+	struct sk_buff *m_head = m->skb, *s_head = s->skb;
+	int m_off, s_off;
+
+	m_off = m->tcp->doff * 4;
+	s_off = s->tcp->doff * 4;
+
+	if (m->length - m_off != s->length - s_off)
+		return 0;
+
+	return ipv4_transport_compare_fragment(m_head, s_head, m_off, s_off,
+					       m->length - m_off);
+}
+
+static int compare_fragment(struct compare_info *m, struct compare_info *s)
+{
+	struct sk_buff *m_skb = m->skb;
+	struct sk_buff *s_skb = s->skb;
+	struct tcphdr *m_tcp = NULL, *old_m_tcp = NULL;
+	struct tcphdr *s_tcp = NULL, *old_s_tcp = NULL;
+	int ret = 0;
+
+	if (FRAG_CB(m_skb)->len < sizeof(struct tcphdr) ||
+	    FRAG_CB(m_skb)->len < m->tcp->doff * 4) {
+		old_m_tcp = m->tcp;
+		m->tcp = m_tcp = get_tcphdr(m_skb);
+		if (!m_tcp)
+			goto out;
+	}
+
+	if (FRAG_CB(s_skb)->len < sizeof(struct tcphdr) ||
+	    FRAG_CB(s_skb)->len < s->tcp->doff * 4) {
+		old_s_tcp = s->tcp;
+		s->tcp = s_tcp = get_tcphdr(s_skb);
+		if (!s_tcp)
+			goto out;
+	}
+
+	ret = compare_tcp_header(m, s);
+	if (ret != SAME_PACKET)
+		goto out;
+
+	if (!compare_tcp_data) {
+		ret = SAME_PACKET;
+		goto out;
+	}
+
+	ret = compare_tcpdata(m, s);
+
+out:
+	if (m_tcp)
+		kfree(m_tcp);
+	if (s_tcp)
+		kfree(s_tcp);
+	if (old_m_tcp)
+		m->tcp = old_m_tcp;
+	if (old_s_tcp)
+		s->tcp = old_s_tcp;
+
+	return ret;
+}
+
 static void update_tcp_info(void *info, void *data, uint32_t length)
 {
 	struct tcphdr *tcp = data;
@@ -218,6 +329,7 @@ static void update_tcp_info(void *info, void *data, uint32_t length)
 
 static compare_ops_t tcp_ops = {
 	.compare = compare_tcp_packet,
+	.compare_fragment = compare_fragment,
 	.update_info = update_tcp_info,
 	.debug_print = debug_print_tcp,
 };

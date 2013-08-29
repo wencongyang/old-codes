@@ -78,6 +78,16 @@ static int compare_ip_fragment(struct compare_info *m, struct compare_info *s)
 	return ipv4_transport_compare_fragment(m->skb, s->skb, 0, 0, m->length);
 }
 
+static inline void set_frag_cb(struct compare_info *info)
+{
+	FRAG_CB(info->skb)->offset = 0;
+	FRAG_CB(info->skb)->len = info->length;
+	FRAG_CB(info->skb)->tot_len = info->length;
+
+	/* skb is linear, so it is safe to reset frag_list */
+	skb_shinfo(info->skb)->frag_list = NULL;
+}
+
 int compare_ip_packet(struct compare_info *m, struct compare_info *s)
 {
 	int ret;
@@ -143,6 +153,10 @@ int compare_ip_packet(struct compare_info *m, struct compare_info *s)
 	ops = rcu_dereference(compare_inet_ops[m->ip->protocol]);
 	if (m_fragment || s_fragment) {
 		if (ops && ops->compare_fragment) {
+			if (!m_fragment)
+				set_frag_cb(m);
+			if (!s_fragment)
+				set_frag_cb(s);
 			ret = ops->compare_fragment(m, s);
 		} else {
 			if (m->length != s->length) {
