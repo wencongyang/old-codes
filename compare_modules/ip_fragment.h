@@ -28,6 +28,17 @@ struct frag_queue {
 	struct ip_frag_bucket	*hb;
 };
 
+struct ipfrag_skb_cb
+{
+	int			offset;
+	int			len;
+
+	/* Only for fragment0 */
+	int			tot_len;
+};
+
+#define FRAG_CB(skb)	((struct ipfrag_skb_cb *)((skb)->cb))
+
 static inline void init_ip_frags(struct ip_frags *ip_frags)
 {
 	ip_frags->nqueues = 0;
@@ -62,4 +73,16 @@ static inline void ip_frag_lru_move(struct frag_queue *q)
 
 extern void ipv4_frags_init(void);
 extern struct sk_buff *ipv4_defrag(struct sk_buff *skb, struct ip_frags *ip_frags);
+/* head: the fragment 0 of the ipv4 fragments */
+extern struct sk_buff *ipv4_get_skb_by_offset(struct sk_buff *head, int offset);
+/* offset: this offset shoule be in the skb */
+extern void *ipv4_get_data(struct sk_buff *skb, int offset);
+
+static inline struct sk_buff *next_skb(struct sk_buff *skb, struct sk_buff *head)
+{
+	if (skb == head)
+		return skb_shinfo(skb)->frag_list;
+	else
+		return skb->next;
+}
 #endif

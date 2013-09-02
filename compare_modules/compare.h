@@ -33,6 +33,7 @@ struct compare_info {
 /* It is protected by RCU, so don't sleep in all callbacks */
 struct compare_ops {
 	int (*compare)(struct compare_info *m, struct compare_info *s);
+	int (*compare_fragment)(struct compare_info *m, struct compare_info *s);
 	void (*update_info)(void *info, void *data, uint32_t len);
 	void (*debug_print)(void *data);
 };
@@ -54,6 +55,9 @@ extern void ip_update_compare_info(void *info, struct iphdr *ip);
 
 extern int register_compare_ops(compare_ops_t *ops, unsigned short protocol);
 extern int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol);
+extern int ipv4_transport_compare_fragment(struct sk_buff *m_head,
+					   struct sk_buff *s_head,
+					   int m_off, int s_off, int len);
 
 /* tcp */
 extern bool ignore_ack_packet;

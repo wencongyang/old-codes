@@ -1,3 +1,4 @@
+#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/jhash.h>
 #include <linux/ip.h>
@@ -7,14 +8,6 @@
 
 #define IPV4_FRAGS_HASHSZ	1024
 #define IPVR_FRAGS_TIMEOUT	500
-
-struct ipfrag_skb_cb
-{
-	int			offset;
-	int			len;
-};
-
-#define FRAG_CB(skb)	((struct ipfrag_skb_cb *)((skb)->cb))
 
 struct ipv4_queue {
 	struct frag_queue q;
@@ -365,6 +358,7 @@ found:
 
 	if (ipq->q.last_in == (INET_FRAG_FIRST_IN | INET_FRAG_LAST_IN) &&
 	    ipq->q.meat == ipq->q.len) {
+		FRAG_CB(ipq->q.fragments)->tot_len = ipq->q.len;
 		return ip_frag_reasm(ipq);
 	}
 
@@ -402,3 +396,45 @@ void ipv4_frags_init(void)
 		spin_lock_init(&ipv4_frags[i].chain_lock);
 	}
 }
+
+/* common functions for comparing ipv4 fragments */
+struct sk_buff *ipv4_get_skb_by_offset(struct sk_buff *head, int offset)
+{
+	struct sk_buff *skb = head;
+	int frag_offset, frag_len;
+
+	do {
+		frag_offset = FRAG_CB(head)->offset;
+		frag_len = FRAG_CB(head)->len;
+		if (frag_offset <= offset && frag_offset + frag_len > offset)
+			return skb;
+
+		if (skb == head)
+			skb = skb_shinfo(skb)->frag_list;
+		else
+			skb = skb->next;
+	} while (skb != NULL);
+
+	return NULL;
+}
+
+void *ipv4_get_data(struct sk_buff *skb, int offset)
+{
+	void *data = (void *)(ip_hdr(skb)->ihl * 4 + (char *)ip_hdr(skb));
+	int frag_offset;
+
+	frag_offset = ntohs(ip_hdr(skb)->frag_off);
+	frag_offset &= IP_OFFSET;
+	frag_offset <<= 3;
+
+	if (frag_offset < FRAG_CB(skb)->offset)
+		data += FRAG_CB(skb)->offset - frag_offset;
+
+	if (offset > FRAG_CB(skb)->offset)
+		data += offset - FRAG_CB(skb)->offset;
+
+	return data;
+}
+
+EXPORT_SYMBOL(ipv4_get_skb_by_offset);
+EXPORT_SYMBOL(ipv4_get_data);
