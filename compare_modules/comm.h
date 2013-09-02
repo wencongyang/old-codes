@@ -7,12 +7,15 @@
 #include <net/pkt_sched.h>
 
 #include "hash.h"
+#include "ip_fragment.h"
 
 struct sched_data {
 	struct hash_head *blo; /* packets not compared */
 	struct sk_buff_head rel; /* packest compared successfully */
 	struct Qdisc* sch;
 	uint32_t flags;
+
+	struct ip_frags ipv4_frags;
 };
 
 extern struct hash_head *colo_hash_head;
