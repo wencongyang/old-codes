@@ -11,36 +11,32 @@ DEFINE_MUTEX(inet_ops_lock);
 
 int register_compare_ops(compare_ops_t *ops, unsigned short protocol)
 {
-	int ret = -1;
-
 	mutex_lock(&inet_ops_lock);
-	if (compare_inet_ops[protocol])
-		goto out;
+	if (compare_inet_ops[protocol]) {
+		mutex_unlock(&inet_ops_lock);
+		return -1;
+	}
 
 	rcu_assign_pointer(compare_inet_ops[protocol], ops);
-	synchronize_rcu();
-	ret = 0;
-
-out:
 	mutex_unlock(&inet_ops_lock);
-	return ret;
+
+	synchronize_rcu();
+	return 0;
 }
 
 int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol)
 {
-	int ret = -1;
-
 	mutex_lock(&inet_ops_lock);
-	if (compare_inet_ops[protocol] != ops)
-		goto out;
+	if (compare_inet_ops[protocol] != ops) {
+		mutex_unlock(&inet_ops_lock);
+		return -1;
+	}
 
 	rcu_assign_pointer(compare_inet_ops[protocol], NULL);
-	synchronize_rcu();
-	ret = 0;
-
-out:
 	mutex_unlock(&inet_ops_lock);
-	return ret;
+
+	synchronize_rcu();
+	return 0;
 }
 EXPORT_SYMBOL(register_compare_ops);
 EXPORT_SYMBOL(unregister_compare_ops);
@@ -89,16 +85,18 @@ int compare_ip_packet(struct compare_info *m, struct compare_info *s)
 	}
 
 #define compare_elem(elem)						\
-	if (unlikely(m->ip->elem != s->ip->elem)) {			\
-		pr_warn("HA_compare: iphdr's %s is different\n",	\
-			#elem);\
-		pr_warn("HA_compare: master %s: %u\n", #elem,		\
-			m->ip->elem);					\
-		pr_warn("HA_compare: slaver %s: %u\n", #elem,		\
-			s->ip->elem);					\
-		print_debuginfo(m, s);					\
-		return 0;						\
-	}
+	do {								\
+		if (unlikely(m->ip->elem != s->ip->elem)) {		\
+			pr_warn("HA_compare: iphdr's %s is different\n",\
+				#elem);					\
+			pr_warn("HA_compare: master %s: %u\n", #elem,	\
+				m->ip->elem);				\
+			pr_warn("HA_compare: slaver %s: %u\n", #elem,	\
+				s->ip->elem);				\
+			print_debuginfo(m, s);				\
+			return 0;					\
+		}							\
+	} while (0)
 
 	compare_elem(version);
 	compare_elem(ihl);
