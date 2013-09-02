@@ -2,6 +2,7 @@
 #include <net/ip.h>
 
 #include "hash.h"
+#include "comm.h"
 
 void hash_init(struct hash_head *h)
 {
@@ -47,7 +48,15 @@ static inline int __proto_ports_offset(int proto)
 	}
 }
 
-bool skb_flow_dissect(const struct sk_buff *skb, struct flow_keys *flow)
+/*
+ * return value:
+ *   -1: error
+ *    0: normal
+ *    1: ip fragment
+ */
+static int skb_flow_dissect(const struct sk_buff *skb,
+			    struct flow_keys *flow,
+			    bool check_fragment)
 {
 	int poff, nhoff = skb_network_offset(skb);
 	u8 ip_proto;
@@ -62,20 +71,20 @@ bool skb_flow_dissect(const struct sk_buff *skb, struct flow_keys *flow)
 
 		iph = skb_header_pointer(skb, nhoff, sizeof(_iph), &_iph);
 		if (!iph)
-			return false;
+			return -1;
 
-		if (ip_is_fragment(iph))
-			ip_proto = 0;
+		if (check_fragment && ip_is_fragment(iph))
+			return 1;
 		else if (iph->protocol != 0)
 			ip_proto = iph->protocol;
 		else
-			return false;
+			return -1;
 		iph_to_flow_copy_addrs(flow, iph);
 		nhoff += iph->ihl * 4;
 		break;
 	}
 	default:
-		return false;
+		return 0;
 	}
 
 	flow->ip_proto = ip_proto;
@@ -84,14 +93,17 @@ bool skb_flow_dissect(const struct sk_buff *skb, struct flow_keys *flow)
 		__be32 *ports, _ports;
 
 		nhoff += poff;
+		/* poff is 0 or 4, so the port is stored in fragment 0 */
 		ports = skb_header_pointer(skb, nhoff, sizeof(_ports), &_ports);
 		if (ports)
 			flow->ports = *ports;
+		else
+			return -1;
 	}
 
 	flow->thoff = (u16) nhoff;
 
-	return true;
+	return 0;
 }
 
 static struct hash_value *alloc_hash_value(struct flow_keys *key)
@@ -127,31 +139,82 @@ static struct hash_value *get_hash_value(struct list_head *head, struct flow_key
 	return NULL;
 }
 
+static void free_fragments(struct sk_buff *head, struct sk_buff *except)
+{
+	struct sk_buff *skb = head;
+	struct sk_buff *next;
+
+	do {
+		if (skb == head)
+			next = skb_shinfo(skb)->frag_list;
+		else
+			next = skb->next;
+
+		if (skb != except )
+			kfree_skb(skb);
+		else if (skb == head)
+			skb_shinfo(skb)->frag_list = NULL;
+		else
+			skb->next = NULL;
+
+		skb = next;
+	} while (skb != NULL);
+}
+
 struct hash_value *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags)
 {
 	struct flow_keys key;
 	struct hash_value *value;
+	struct sk_buff *head = NULL;
 	uint32_t hash;
 	int i;
+	int ret;
 
-	skb_flow_dissect(skb, &key);
+	ret = skb_flow_dissect(skb, &key, true);
+	if (ret < 0)
+		return NULL;
+	else if (ret > 0) {
+		struct ip_frags *ip_frags;
+
+		if (flags & IS_MASTER)
+			ip_frags = &h->master_data->ipv4_frags;
+		else
+			ip_frags = &h->slaver_data->ipv4_frags;
+		head = ipv4_defrag(skb, ip_frags);
+		if (IS_ERR(head)) {
+			if (PTR_ERR(head) != -EINPROGRESS)
+				return NULL;
+
+			return ERR_PTR(-EINPROGRESS);
+		}
+
+		ret = skb_flow_dissect(head, &key, false);
+		if (ret < 0) {
+			free_fragments(head, skb);
+			return NULL;
+		}
+	}
+
 	hash = jhash(&key, sizeof(key), JHASH_INITVAL);
 
 	i = hash % HASH_NR;
 	value = get_hash_value(&h->entry[i], &key);
 	if (unlikely(!value)) {
 		value = alloc_hash_value(&key);
-		if (unlikely(!value))
+		if (unlikely(!value)) {
+			if (head)
+				free_fragments(head, skb);
 			return NULL;
+		}
 
 		value->head = h;
 		list_add_tail(&value->list, &h->entry[i]);
 	}
 
 	if (flags & IS_MASTER)
-		skb_queue_tail(&value->master_queue, skb);
+		skb_queue_tail(&value->master_queue, head ? head : skb);
 	else
-		skb_queue_tail(&value->slaver_queue, skb);
+		skb_queue_tail(&value->slaver_queue, head ? head : skb);
 
 	return value;
 }

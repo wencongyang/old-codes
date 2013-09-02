@@ -28,6 +28,13 @@ struct frag_queue {
 	struct ip_frag_bucket	*hb;
 };
 
+static inline void init_ip_frags(struct ip_frags *ip_frags)
+{
+	ip_frags->nqueues = 0;
+	INIT_LIST_HEAD(&ip_frags->lru_list);
+	spin_lock_init(&ip_frags->lru_lock);
+}
+
 static inline void ip_frag_lru_del(struct frag_queue *q)
 {
 	spin_lock(&q->ip_frags->lru_lock);

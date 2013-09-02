@@ -88,14 +88,21 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 	int wakeup;
 
 	if (!skb_remove_foreign_references(skb)) {
-		printk(KERN_DEBUG "error removing foreign ref\n");
-		return qdisc_reshape_fail(skb, sch);
+		pr_err("error removing foreign ref\n");
+		goto error;
 	}
 
 	hash_value = insert(q->blo, skb, q->flags);
+	if (IS_ERR_OR_NULL(hash_value))
+		if (PTR_ERR(hash_value) != -EINPROGRESS)
+			goto error;
+
 	sch->qstats.backlog += qdisc_pkt_len(skb);
 	sch->bstats.bytes += qdisc_pkt_len(skb);
 	sch->bstats.packets++;
+
+	if (PTR_ERR(hash_value) == -EINPROGRESS)
+		goto out;
 
 	/*
 	 *  Notify the compare module a new packet arrives.
@@ -108,7 +115,11 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 	if (wakeup)
 		wake_up_interruptible(&compare_queue);
 
+out:
 	return NET_XMIT_SUCCESS;
+
+error:
+	return qdisc_reshape_fail(skb, sch);
 }
 
 static struct sk_buff *colo_dequeue(struct Qdisc* sch)
@@ -171,6 +182,7 @@ static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 	skb_queue_head_init(&q->rel);
 	q->sch = sch;
 	q->flags = *flags;
+	init_ip_frags(&q->ipv4_frags);
 
 	return 0;
 }
@@ -189,6 +201,7 @@ static int __init colo_module_init(void)
 {
 	spin_lock_init(&queue_lock);
 	spin_lock_init(&compare_lock);
+	ipv4_frags_init();
 	init_waitqueue_head(&compare_queue);
 	return register_qdisc(&colo_qdisc_ops);
 }
