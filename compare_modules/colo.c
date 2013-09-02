@@ -85,6 +85,7 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
 	struct sched_data *q = qdisc_priv(sch);
 	struct hash_value *hash_value;
+	int wakeup;
 
 	if (!skb_remove_foreign_references(skb)) {
 		printk(KERN_DEBUG "error removing foreign ref\n");
@@ -99,10 +100,12 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 	 *  Notify the compare module a new packet arrives.
 	 */
 	spin_lock(&compare_lock);
+	wakeup = list_empty(&compare_head);
 	if (list_empty(&hash_value->compare_list))
 		list_add_tail(&hash_value->compare_list, &compare_head);
 	spin_unlock(&compare_lock);
-	wake_up_interruptible(&compare_queue);
+	if (wakeup)
+		wake_up_interruptible(&compare_queue);
 
 	return NET_XMIT_SUCCESS;
 }
