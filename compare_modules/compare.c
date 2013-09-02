@@ -54,7 +54,7 @@ int cmp_open(struct inode*, struct file*);
 int cmp_release(struct inode*, struct file*);
 long cmp_ioctl(struct file*, unsigned int, unsigned long);
 unsigned short last_id = 0;
-int fail = 0;
+static int failover = 0;
 
 struct task_struct *compare_task;
 
@@ -150,7 +150,7 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case COMP_IOCTWAIT:
 		clear_bit(HASTATE_INCHECKPOINT_NR, &state);
 		/* wait for a new checkpoint */
-		if (fail) {
+		if (failover) {
 			set_bit(HASTATE_INCHECKPOINT_NR, &state);
 			return -2;
 		}
@@ -171,7 +171,7 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		 */
 		clear_bit(HASTATE_PENDING_NR, &state);
 
-		if (fail) {
+		if (failover) {
 			set_bit(HASTATE_INCHECKPOINT_NR, &state);
 			return -2;
 		}
@@ -566,12 +566,12 @@ int write_proc(struct file *file, const char *buffer, unsigned long count, void 
 	if (ret < 0)
 		return 0;
 	if (buf[0]=='f') { //failover manually
-		fail = 1;
+		failover = 1;
 		test_and_set_bit(HASTATE_PENDING_NR, &state);
 		wake_up_interruptible(&queue);
 		pr_info("failover.\n");
 	} else if (buf[0]=='r')
-		fail = 0;
+		failover = 0;
 
 	return count;
 }
