@@ -96,12 +96,14 @@ compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 	unsigned int m_seq, s_seq;
 	int ret = 0;
 
-#define compare(elem)							\
-	if (unlikely(m->tcp->elem != s->tcp->elem)) {			\
-		pr_warn("HA_compare: tcp header's %s is different\n",	\
-			#elem);						\
-		return 0;						\
-	}
+#define compare(elem)								\
+	do {									\
+		if (unlikely(m->tcp->elem != s->tcp->elem)) {			\
+			pr_warn("HA_compare: tcp header's %s is different\n",	\
+				#elem);						\
+			return 0;						\
+		}								\
+	} while (0)
 
 	/* source port and dest port*/
 	compare(source);
