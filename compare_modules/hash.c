@@ -63,6 +63,7 @@ static int skb_flow_dissect(const struct sk_buff *skb,
 	__be16 proto = skb->protocol;
 
 	memset(flow, 0, sizeof(*flow));
+	FRAG_CB(skb)->is_fragment = 0;
 
 	switch (proto) {
 	case __constant_htons(ETH_P_IP): {
@@ -193,6 +194,7 @@ struct hash_value *insert(struct hash_head *h, struct sk_buff *skb, uint32_t fla
 			free_fragments(head, skb);
 			return NULL;
 		}
+		FRAG_CB(head)->is_fragment = 1;
 	}
 
 	hash = jhash(&key, sizeof(key), JHASH_INITVAL);

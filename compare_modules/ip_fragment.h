@@ -30,6 +30,7 @@ struct frag_queue {
 
 struct ipfrag_skb_cb
 {
+	int			is_fragment;
 	int			offset;
 	int			len;
 

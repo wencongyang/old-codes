@@ -382,6 +382,26 @@ static void release_queue(struct hash_head *h)
 		netif_schedule_queue(h->master_data->sch->dev_queue);
 }
 
+static void release_skb(struct sk_buff_head *head, struct sk_buff *skb)
+{
+	struct sk_buff *next;
+	int count = 0;
+
+	if (!FRAG_CB(skb)->is_fragment) {
+		skb_queue_tail(head, skb);
+		return;
+	}
+
+	next = skb_shinfo(skb)->frag_list;
+	skb_shinfo(skb)->frag_list = NULL;
+	do {
+		skb_queue_tail(head, skb);
+		count++;
+		skb = next;
+		if (next)
+			next = next->next;
+	} while (skb != NULL);
+}
 
 static void compare(struct hash_value *hash_value)
 {
@@ -420,14 +440,14 @@ static void compare(struct hash_value *hash_value)
 		ret = compare_skb(&info_m, &info_s);
 		if (ret) {
 			if (likely(ret & BYPASS_MASTER)) {
-				skb_queue_tail(&h->master_data->rel, skb_m);
+				release_skb(&h->master_data->rel, skb_m);
 				netif_schedule_queue(h->master_data->sch->dev_queue);
 			} else {
 				skb_queue_head(&hash_value->master_queue, skb_m);
 			}
 
 			if (likely(ret & DROP_SLAVER)) {
-				skb_queue_tail(&h->slaver_data->rel, skb_s);
+				release_skb(&h->slaver_data->rel, skb_s);
 				netif_schedule_queue(h->slaver_data->sch->dev_queue);
 			} else {
 				skb_queue_head(&hash_value->slaver_queue, skb_s);
@@ -437,9 +457,9 @@ static void compare(struct hash_value *hash_value)
 			/*
 			 *  Put makster's skb to temporary queue, drop slaver's.
 			 */
-			skb_queue_tail(&h->wait_for_release, skb_m);
+			release_skb(&h->wait_for_release, skb_m);
 
-			skb_queue_tail(&h->slaver_data->rel, skb_s);
+			release_skb(&h->slaver_data->rel, skb_s);
 
 			state = state_incheckpoint;
 			wake_up_interruptible(&queue);
