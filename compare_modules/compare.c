@@ -91,11 +91,14 @@ void update(struct hash_value *h);
 
 wait_queue_head_t queue;
 int cmp_major=0, cmp_minor=0;
-#define HASTATE_PENDING_NR	0
-#define HASTATE_INCHECKPOINT_NR	1
-#define HASTATE_RUNNING_NR	2
 
-unsigned long int state = 0;
+enum {
+	state_comparing,
+	state_incheckpoint,
+	state_failover,
+};
+
+static int state = state_comparing;
 unsigned int same_count = 0;
 
 static int cmp_setup_cdev(struct _cmp_dev *dev) {
@@ -148,33 +151,21 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 	switch(cmd) {
 	case COMP_IOCTWAIT:
-		clear_bit(HASTATE_INCHECKPOINT_NR, &state);
 		/* wait for a new checkpoint */
-		if (failover) {
-			set_bit(HASTATE_INCHECKPOINT_NR, &state);
-			return -2;
-		}
 #if 1
-		ret = wait_event_interruptible_timeout(queue, test_bit(HASTATE_PENDING_NR, &state), 10);
+		ret = wait_event_interruptible_timeout(queue, state != state_comparing, 10);
 		if (ret == 0)
 			return -ETIME;
 
 		if (ret < 0)
 			return -ERESTART;
 #else
-		if (wait_event_interruptible(queue, state&HASTATE_PENDING))
+		if (wait_event_interruptible(queue, state != state_comparing))
 			return -ERESTART;
 #endif
 
-		/*
-		 *  A new checkpoint starts, block input packets to VMs.
-		 */
-		clear_bit(HASTATE_PENDING_NR, &state);
-
-		if (failover) {
-			set_bit(HASTATE_INCHECKPOINT_NR, &state);
+		if (state == state_failover)
 			return -2;
-		}
 
 		printk(KERN_NOTICE "HA_compare: --------start a new checkpoint.\n");
 
@@ -197,6 +188,7 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		 */
 		printk(KERN_NOTICE "HA_compare: --------checkpoint finish.\n");
 		release_queue(colo_hash_head);
+		state = state_comparing;
 		rel_count = 0;
 
 		break;
@@ -401,9 +393,6 @@ static void compare(struct hash_value *hash_value)
 	struct timespec start, end, delta;
 	struct hash_head *h = hash_value->head;
 
-	if (test_and_set_bit(HASTATE_RUNNING_NR, &state))
-		return;
-
 	getnstimeofday(&start);
 	statis.update++;
 
@@ -411,7 +400,7 @@ static void compare(struct hash_value *hash_value)
 		statis.in_soft_irq++;
 
 	while (1) {
-		if (test_bit(HASTATE_INCHECKPOINT_NR, &state))
+		if (state != state_comparing)
 			break;
 
 		skb = skb_peek(&hash_value->master_queue);
@@ -452,17 +441,12 @@ static void compare(struct hash_value *hash_value)
 
 			skb_queue_tail(&h->slaver_data->rel, skb_s);
 
-			/* Trigger a checkpoint, if pending bit is allready set, just ignore. */
-			if ( !test_and_set_bit(HASTATE_PENDING_NR, &state) ) {
-				set_bit(HASTATE_INCHECKPOINT_NR, &state);
-				wake_up_interruptible(&queue);
-			}
+			state = state_incheckpoint;
+			wake_up_interruptible(&queue);
 			break;
 		}
 
 	}
-
-	clear_bit(HASTATE_RUNNING_NR, &state);
 
 	getnstimeofday(&end);
 	delta = timespec_sub(end, start);
@@ -524,7 +508,7 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	pr_info("STAT: update=%u, in_soft_irq=%u, total_time=%llu, last_time=%llu, max_time=%llu\n",
 		statis.update, statis.in_soft_irq, statis.total_time, statis.last_time, statis.max_time);
 	pr_info("STAT Debug info:\n");
-	pr_info("\nSTAT: status=%lx.\n", state);
+	pr_info("\nSTAT: status=%d.\n", state);
 
 	for (i = 0; i < HASH_NR; i++) {
 		j = 0;
@@ -567,10 +551,11 @@ int write_proc(struct file *file, const char *buffer, unsigned long count, void 
 		return 0;
 	if (buf[0]=='f') { //failover manually
 		failover = 1;
-		test_and_set_bit(HASTATE_PENDING_NR, &state);
+		state = state_failover;
 		wake_up_interruptible(&queue);
 		pr_info("failover.\n");
 	} else if (buf[0]=='r')
+		state = state_comparing;
 		failover = 0;
 
 	return count;
