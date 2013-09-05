@@ -85,8 +85,7 @@ function select_ifb()
 
 function install_master() {
     echo "install master"
-    load_module sch_master
-    load_module sch_slaver
+    load_module sch_colo
     load_module HA_compare
 
     if [[ ! -e "/dev/$device" ]]; then
