@@ -110,7 +110,7 @@ static int cmp_setup_cdev(struct _cmp_dev *dev) {
 	err = cdev_add(&dev->cdev, devno, 1);
 
 	if (err) {
-		printk(KERN_WARNING"HA_compare: Error %d adding devices.\n", err);
+		pr_warn("HA_compare: Error %d adding devices.\n", err);
 		return -1;
 	}
 
@@ -124,11 +124,11 @@ int cmp_open(struct inode *inode, struct file *filp)
 	dev = container_of(inode->i_cdev, struct _cmp_dev, cdev);
 	/* try to get the mutext, thus only one client can open this dev */
 	if (down_trylock(&dev->sem)) {
-		printk(KERN_NOTICE "HA_compare: another client allready opened this dev.\n");
+		pr_notice("HA_compare: another client allready opened this dev.\n");
 		return -1;
 	}
 
-	printk(KERN_NOTICE "HA_compare: open successfully.\n");
+	pr_notice("HA_compare: open successfully.\n");
 	filp->private_data = dev;
 	return 0;
 }
@@ -139,7 +139,7 @@ int cmp_release(struct inode *inode, struct file *filp)
 
 	dev = container_of(inode->i_cdev, struct _cmp_dev, cdev);
 	up(&dev->sem);
-	printk(KERN_NOTICE "HA_compare: close.\n");
+	pr_notice("HA_compare: close.\n");
 
 	return 0;
 }
@@ -167,7 +167,7 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (state == state_failover)
 			return -2;
 
-		printk(KERN_NOTICE "HA_compare: --------start a new checkpoint.\n");
+		pr_notice("HA_compare: --------start a new checkpoint.\n");
 
 		break;
 	case COMP_IOCTSUSPEND:
@@ -177,7 +177,7 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		 *  they will be released when checkpoint ends. For slaver
 		 *  block queue, just drop them.
 		 */
-		printk(KERN_NOTICE "HA_compare: --------both side suspended.\n");
+		pr_notice("HA_compare: --------both side suspended.\n");
 
 		move_master_queue(colo_hash_head);
 		clear_slaver_queue(colo_hash_head);
@@ -186,7 +186,7 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/*
 		 *  Checkpoint finish, relese skb in temporary queue
 		 */
-		printk(KERN_NOTICE "HA_compare: --------checkpoint finish.\n");
+		pr_notice("HA_compare: --------checkpoint finish.\n");
 		release_queue(colo_hash_head);
 		state = state_comparing;
 		rel_count = 0;
@@ -450,7 +450,7 @@ static void compare(struct hash_value *hash_value)
 			} else {
 				skb_queue_head(&hash_value->slaver_queue, skb_s);
 			}
-			//printk("netif_schedule%u.\n", cnt);
+			//pr_info("netif_schedule%u.\n", cnt);
 		} else {
 			/*
 			 *  Put makster's skb to temporary queue, drop slaver's.
