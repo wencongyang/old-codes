@@ -72,13 +72,15 @@ static inline void ip_frag_lru_move(struct frag_queue *q)
 	spin_unlock(&q->ip_frags->lru_lock);
 }
 
-extern void ipv4_frags_init(void);
-extern struct sk_buff *ipv4_defrag(struct sk_buff *skb, struct ip_frags *ip_frags);
-/* head: the fragment 0 of the ipv4 fragments */
-extern struct sk_buff *ipv4_get_skb_by_offset(struct sk_buff *head, int offset);
-/* offset: this offset shoule be in the skb */
-extern void *ipv4_get_data(struct sk_buff *skb, int offset);
-extern int ipv4_copy_transport_head(void *data, struct sk_buff *head, int size);
+static inline void fq_unlink(struct frag_queue *q, struct ip_frag_bucket *hb)
+{
+	/* remove frag_queue from ip_frags first, so it can be copied safely */
+	ip_frag_lru_del(q);
+
+	spin_lock(&hb->chain_lock);
+	hlist_del(&q->list);
+	spin_unlock(&hb->chain_lock);
+}
 
 static inline struct sk_buff *next_skb(struct sk_buff *skb, struct sk_buff *head)
 {
@@ -87,4 +89,10 @@ static inline struct sk_buff *next_skb(struct sk_buff *skb, struct sk_buff *head
 	else
 		return skb->next;
 }
+
+/* q.lock should be hold */
+extern void kill_frag_queue(struct frag_queue *q);
+
+/* free all skb in frag_queue */
+extern void destroy_frag_queue(struct frag_queue *q);
 #endif

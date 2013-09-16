@@ -3,6 +3,7 @@
 
 #include "hash.h"
 #include "comm.h"
+#include "ipv4_fragment.h"
 
 void hash_init(struct hash_head *h)
 {

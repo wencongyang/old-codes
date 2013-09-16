@@ -385,7 +385,6 @@ static void release_queue(struct hash_head *h)
 static void release_skb(struct sk_buff_head *head, struct sk_buff *skb)
 {
 	struct sk_buff *next;
-	int count = 0;
 
 	if (!FRAG_CB(skb)->is_fragment) {
 		skb_queue_tail(head, skb);
@@ -396,7 +395,6 @@ static void release_skb(struct sk_buff_head *head, struct sk_buff *skb)
 	skb_shinfo(skb)->frag_list = NULL;
 	do {
 		skb_queue_tail(head, skb);
-		count++;
 		skb = next;
 		if (next)
 			next = next->next;

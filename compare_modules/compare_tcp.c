@@ -3,6 +3,7 @@
 
 #include "compare.h"
 #include "ip_fragment.h"
+#include "ipv4_fragment.h"
 
 struct tcp_compare_info {
 	uint32_t last_seq;

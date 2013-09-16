@@ -3,6 +3,7 @@
 #include <net/pkt_sched.h>
 
 #include "comm.h"
+#include "ipv4_fragment.h"
 
 enum {
 	TCA_COLO_UNSPEC,

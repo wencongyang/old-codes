@@ -29,50 +29,12 @@ static unsigned int ipqhashfn(__be16 id, __be32 saddr, __be32 daddr, u8 prot)
 
 static struct ip_frag_bucket ipv4_frags[IPV4_FRAGS_HASHSZ];
 
-static inline void fq_unlink(struct frag_queue *q, struct ip_frag_bucket *hb)
-{
-	spin_lock(&hb->chain_lock);
-	hlist_del(&q->list);
-	spin_unlock(&hb->chain_lock);
-
-	ip_frag_lru_del(q);
-}
-
-static void ipv4_frag_kill(struct frag_queue *q)
-{
-	if (del_timer(&q->timer))
-		atomic_dec(&q->refcnt);
-
-	if (!(q->last_in & INET_FRAG_COMPLETE)) {
-		fq_unlink(q, q->hb);
-		atomic_dec(&q->refcnt);
-		q->last_in |= INET_FRAG_COMPLETE;
-	}
-}
-
-void frag_queue_destory(struct frag_queue *q)
-{
-	struct sk_buff *skb;
-
-	WARN_ON(!(q->last_in & INET_FRAG_COMPLETE));
-	WARN_ON(del_timer(&q->timer) != 0);
-
-	skb = q->fragments;
-	while (skb) {
-		struct sk_buff *next = skb->next;
-
-		/* We can see skb only when timer expires */
-		kfree_skb(skb);
-		skb = next;
-	}
-
-	kfree(q);
-}
-
 static inline void put_frag_queue(struct frag_queue *q)
 {
-	if (atomic_dec_and_test(&q->refcnt))
-		frag_queue_destory(q);
+	if (atomic_dec_and_test(&q->refcnt)) {
+		destroy_frag_queue(q);
+		kfree(q);
+	}
 }
 
 static int ipv4_match_queue(struct frag_queue *q, struct ipv4_queue *ipq_in)
@@ -104,7 +66,7 @@ static void ipv4_frag_expire(unsigned long data)
 	if (q->last_in & INET_FRAG_COMPLETE)
 		goto out;
 
-	ipv4_frag_kill(q);
+	kill_frag_queue(q);
 
 out:
 	spin_unlock(&q->lock);
@@ -216,7 +178,7 @@ static struct sk_buff *ip_frag_reasm(struct ipv4_queue *ipq)
 {
 	struct sk_buff *skb = ipq->q.fragments;
 
-	ipv4_frag_kill(&ipq->q);
+	kill_frag_queue(&ipq->q);
 
 	WARN_ON(skb_shinfo(skb)->frag_list != NULL);
 

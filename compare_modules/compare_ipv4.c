@@ -7,6 +7,7 @@
 
 #include "compare.h"
 #include "ip_fragment.h"
+#include "ipv4_fragment.h"
 
 const compare_ops_t *compare_inet_ops[MAX_INET_PROTOS];
 DEFINE_MUTEX(inet_ops_lock);
@@ -253,7 +254,7 @@ int ipv4_transport_compare_fragment(struct sk_buff *m_head,
 		} else {							\
 			skb = next_skb(skb, head);				\
 			if (!skb)						\
-				break;					\
+				break;						\
 			data = ipv4_get_data(skb, FRAG_CB(skb)->offset);	\
 			_len = FRAG_CB(skb)->len;				\
 		}								\
