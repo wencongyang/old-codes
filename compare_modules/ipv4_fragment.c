@@ -28,6 +28,7 @@ static unsigned int ipqhashfn(__be16 id, __be32 saddr, __be32 daddr, u8 prot)
 }
 
 static struct ip_frag_bucket ipv4_frags[IPV4_FRAGS_HASHSZ];
+static void ipv4_frag_expire(unsigned long data);
 
 static inline void put_frag_queue(struct frag_queue *q)
 {
@@ -129,6 +130,7 @@ static struct ipv4_queue *ipv4_frag_alloc(struct iphdr *ip, struct ip_frags *ip_
 	spin_lock_init(&q->lock);
 	atomic_set(&q->refcnt, 1);
 	INIT_LIST_HEAD(&q->lru_list);
+	INIT_HLIST_NODE(&q->list);
 
 	ipq->saddr = ip->saddr;
 	ipq->daddr = ip->daddr;
@@ -199,6 +201,7 @@ static struct sk_buff *ipv4_frag_queue(struct ipv4_queue *ipq,
 	int ihl, end;
 	int err = -ENOENT;
 
+	spin_lock(&ipq->q.wlock);
 	if (ipq->q.last_in & INET_FRAG_COMPLETE)
 		goto err;
 
@@ -321,13 +324,16 @@ found:
 	if (ipq->q.last_in == (INET_FRAG_FIRST_IN | INET_FRAG_LAST_IN) &&
 	    ipq->q.meat == ipq->q.len) {
 		FRAG_CB(ipq->q.fragments)->tot_len = ipq->q.len;
+		spin_unlock(&ipq->q.wlock);
 		return ip_frag_reasm(ipq);
 	}
 
+	spin_unlock(&ipq->q.wlock);
 	ip_frag_lru_move(&ipq->q);
 	return ERR_PTR(-EINPROGRESS);
 
 err:
+	spin_unlock(&ipq->q.wlock);
 	return ERR_PTR(err);
 }
 
@@ -348,6 +354,102 @@ struct sk_buff *ipv4_defrag(struct sk_buff *skb, struct ip_frags *data)
 
 	return ERR_PTR(-ENOMEM);
 }
+
+static struct frag_queue *copy_ipv4_queue(struct ipv4_queue *src_ipq)
+{
+	struct ipv4_queue *dst_ipq;
+	int ret;
+
+	dst_ipq = kzalloc(sizeof(*dst_ipq), GFP_KERNEL);
+	if (!dst_ipq)
+		return NULL;
+
+	dst_ipq->saddr = src_ipq->saddr;
+	dst_ipq->daddr = src_ipq->daddr;
+	dst_ipq->id = src_ipq->id;
+	dst_ipq->protocol = src_ipq->protocol;
+
+	setup_timer(&dst_ipq->q.timer, ipv4_frag_expire, (unsigned long)&dst_ipq->q);
+	ret = copy_frag_queue(&src_ipq->q, &dst_ipq->q);
+	if (ret != 0)
+		goto err;
+
+	return &dst_ipq->q;
+
+err:
+	kfree(dst_ipq);
+	return NULL;
+}
+
+#define lock_two_locks(lock1, lock2)					\
+	do {								\
+		if ((unsigned long)lock1 <= (unsigned long)lock2) {	\
+			spin_lock_bh(lock1);				\
+			spin_lock(lock2);				\
+		} else {						\
+			spin_lock_bh(lock2);				\
+			spin_lock(lock1);				\
+		}							\
+	} while (0)
+
+#define unlock_two_locks(lock1, lock2)					\
+	do {								\
+		spin_unlock(lock1);					\
+		spin_unlock_bh(lock2);					\
+	} while (0)
+
+void copy_ipv4_frags(struct ip_frags *src_ip_frags,
+		     struct ip_frags *dst_ip_frags)
+{
+	struct ipv4_queue *ipq;
+	struct frag_queue *q, *new_q;
+
+	lock_two_locks(&src_ip_frags->lru_lock, &dst_ip_frags->lru_lock);
+	list_for_each_entry(q, &src_ip_frags->lru_list, lru_list) {
+		ipq = container_of(q, struct ipv4_queue, q);
+		new_q = copy_ipv4_queue(ipq);
+		if (new_q == NULL)
+			continue;
+
+		new_q->ip_frags = dst_ip_frags;
+		list_add_tail(&new_q->lru_list, &dst_ip_frags->lru_list);
+	}
+	unlock_two_locks(&src_ip_frags->lru_lock, &dst_ip_frags->lru_lock);
+}
+
+void clear_ipv4_frags(struct ip_frags *ip_frags)
+{
+	struct frag_queue *q, *tmp;
+	struct list_head tmp_list;
+
+	INIT_LIST_HEAD(&tmp_list);
+	spin_lock_bh(&ip_frags->lru_lock);
+	list_for_each_entry_safe(q, tmp, &ip_frags->lru_list, lru_list) {
+		list_del_init(&q->lru_list);
+		q->ip_frags->nqueues--;
+
+		/* remove it from hash list */
+		spin_lock(&q->hb->chain_lock);
+		hlist_del_init(&q->list);
+		spin_unlock(&q->hb->chain_lock);
+
+		atomic_inc(&q->refcnt);
+		list_add_tail(&q->lru_list, &tmp_list);
+	}
+	spin_unlock_bh(&ip_frags->lru_lock);
+
+	list_for_each_entry_safe(q, tmp, &tmp_list, lru_list) {
+		list_del_init(&q->lru_list);
+		spin_lock(&q->lock);
+		if (!(q->last_in & INET_FRAG_COMPLETE))
+			kill_frag_queue(q);
+		spin_unlock(&q->lock);
+		put_frag_queue(q);
+	}
+}
+
+EXPORT_SYMBOL(copy_ipv4_frags);
+EXPORT_SYMBOL(clear_ipv4_frags);
 
 void ipv4_frags_init(void)
 {

@@ -25,6 +25,8 @@
 
 #include "comm.h"
 #include "compare.h"
+#include "ip_fragment.h"
+#include "ipv4_fragment.h"
 
 bool ignore_id = 1;
 module_param(ignore_id, bool, 0644);
@@ -331,6 +333,12 @@ static void clear_slaver_queue(struct hash_head *h)
 			}
 		}
 	}
+
+	/* clear ip fragments */
+	clear_ipv4_frags(&h->slaver_data->ipv4_frags);
+
+	/* copy ipv4 fragments from master */
+	copy_ipv4_frags(&h->master_data->ipv4_frags, &h->slaver_data->ipv4_frags);
 }
 
 static void update_compare_info(struct hash_value *value, struct sk_buff *skb)
@@ -394,7 +402,7 @@ static void release_skb(struct sk_buff_head *head, struct sk_buff *skb)
 {
 	struct sk_buff *next;
 
-	if (!FRAG_CB(skb)->is_fragment) {
+	if (!(FRAG_CB(skb)->flags & IS_FRAGMENT)) {
 		skb_queue_tail(head, skb);
 		return;
 	}

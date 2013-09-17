@@ -1,6 +1,14 @@
 #ifndef IP_FRAGMENT_H
 #define IP_FRAGMENT_H
 
+/*
+ * lock order:
+ *    1. frag_queue.lock
+ *    2. ip_frags.lru_lock
+ *    3. ip_frag_bucket.chain_lock
+ *    4. frag_queue.wlock
+ */
+
 struct ip_frag_bucket {
 	struct hlist_head chain;
 	spinlock_t chain_lock;
@@ -14,6 +22,17 @@ struct ip_frags {
 
 struct frag_queue {
 	spinlock_t		lock;
+
+	/*
+	 * use wlock to avoid deadlock, handle ip fragments in this order:
+	 *   1. lock frag_queue.lock
+	 *   2. lock frag_queue.wlock
+	 *   3. update frag_queue
+	 *   4. unlock frag_queue.wlock
+	 *   5. do other things
+	 *   6. unlock frag_queu.lock
+	 */
+	spinlock_t		wlock;
 	struct timer_list	timer;      /* when will this queue expire? */
 	struct list_head	lru_list;   /* lru list member */
 	struct hlist_node	list;
@@ -30,7 +49,7 @@ struct frag_queue {
 
 struct ipfrag_skb_cb
 {
-	int			is_fragment;
+	unsigned int		flags;
 	int			offset;
 	int			len;
 
@@ -39,6 +58,9 @@ struct ipfrag_skb_cb
 };
 
 #define FRAG_CB(skb)	((struct ipfrag_skb_cb *)((skb)->cb))
+
+/* ipfrag_skb_cb.flags */
+#define IS_FRAGMENT		(1 << 0)
 
 static inline void init_ip_frags(struct ip_frags *ip_frags)
 {
@@ -50,8 +72,10 @@ static inline void init_ip_frags(struct ip_frags *ip_frags)
 static inline void ip_frag_lru_del(struct frag_queue *q)
 {
 	spin_lock(&q->ip_frags->lru_lock);
-	list_del_init(&q->lru_list);
-	q->ip_frags->nqueues--;
+	if (!list_empty(&q->lru_list)) {
+		list_del_init(&q->lru_list);
+		q->ip_frags->nqueues--;
+	}
 	spin_unlock(&q->ip_frags->lru_lock);
 }
 
@@ -78,7 +102,7 @@ static inline void fq_unlink(struct frag_queue *q, struct ip_frag_bucket *hb)
 	ip_frag_lru_del(q);
 
 	spin_lock(&hb->chain_lock);
-	hlist_del(&q->list);
+	hlist_del_init(&q->list);
 	spin_unlock(&hb->chain_lock);
 }
 
@@ -90,9 +114,12 @@ static inline struct sk_buff *next_skb(struct sk_buff *skb, struct sk_buff *head
 		return skb->next;
 }
 
-/* q.lock should be hold */
+/* q.lock should be hold and q.wlock should not be hold */
 extern void kill_frag_queue(struct frag_queue *q);
 
 /* free all skb in frag_queue */
 extern void destroy_frag_queue(struct frag_queue *q);
+
+/* src and dst ip_frags.lock should be hold, dst_q->timer should be setup */
+extern int copy_frag_queue(struct frag_queue *src_q, struct frag_queue *dst_q);
 #endif
