@@ -359,6 +359,16 @@ static void move_master_queue(struct hash_head *h)
 				skb_queue_tail(&h->wait_for_release, skb);
 				skb = skb_dequeue(&value->master_queue);
 			}
+
+			/*
+			 * copy compare info:
+			 *      We call this function when a new checkpoint is
+			 *      finished. The status of master and slaver is
+			 *      the same. So slaver's compare info shoule be
+			 *      the same as master's.
+			 */
+			memcpy(&value->s_info, &value->m_info,
+				sizeof(value->s_info));
 		}
 	}
 }
