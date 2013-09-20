@@ -399,15 +399,56 @@ static void release_skb(struct sk_buff_head *head, struct sk_buff *skb)
 	} while (skb != NULL);
 }
 
+static uint32_t compare_one_skb(struct compare_info *m, struct compare_info *s)
+{
+	struct sk_buff *skb;
+	struct compare_info *info = NULL;
+	uint32_t ret = 0;
+
+	if (m->skb) {
+		info = m;
+		ret = BYPASS_MASTER;
+	} else if (s->skb) {
+		info = s;
+		ret = DROP_SLAVER;
+	} else
+		BUG();
+
+	skb = info->skb;
+
+	info->eth = (struct ethhdr *)info->skb->data;
+	info->length = info->skb->len;
+
+	if (unlikely(info->length < sizeof(struct ethhdr))) {
+		pr_warn("HA_compare: %s packet is corrupted\n",
+			m->skb ? "master" : "slaver");
+		goto err;
+	}
+
+	info->packet = (char *)info->eth + sizeof(struct ethhdr);
+	info->length -= sizeof(struct ethhdr);
+
+	if (ntohs(info->eth->h_proto) != ETH_P_IP)
+		goto unsupported;
+
+	return ipv4_compare_one_packet(m, s);
+
+err:
+	return ret;
+
+unsupported:
+	return 0;
+}
+
 static void compare(struct hash_value *hash_value)
 {
 	struct sk_buff *skb_m;
 	struct sk_buff *skb_s;
-	struct sk_buff *skb;
 	int ret;
 	struct compare_info info_m, info_s;
 	struct timespec start, end, delta;
 	struct hash_head *h = hash_value->head;
+	bool skip_compare_one = false;
 
 	getnstimeofday(&start);
 	statis.update++;
@@ -419,36 +460,55 @@ static void compare(struct hash_value *hash_value)
 		if (state != state_comparing)
 			break;
 
-		skb = skb_peek(&hash_value->master_queue);
-		if (!skb)
-			break;
-		skb = skb_peek(&hash_value->slaver_queue);
-		if (!skb)
-			break;
-
 		skb_m = skb_dequeue(&hash_value->master_queue);
 		skb_s = skb_dequeue(&hash_value->slaver_queue);
+
+		if (!skb_m && !skb_s)
+			break;
+
+		if ((!skb_m || !skb_s) && skip_compare_one) {
+			/* We have checked skb_m or skb_s */
+			if (skb_m)
+				skb_queue_head(&hash_value->master_queue, skb_m);
+
+			if (skb_s)
+				skb_queue_head(&hash_value->slaver_queue, skb_s);
+			break;
+		}
 
 		info_m.skb = skb_m;
 		info_s.skb = skb_s;
 		info_m.private_data = &hash_value->m_info;
 		info_m.private_data = &hash_value->s_info;
-		ret = compare_skb(&info_m, &info_s);
+		if (!skb_m || !skb_s)
+			ret = compare_one_skb(&info_m, &info_s);
+		else
+			ret = compare_skb(&info_m, &info_s);
 		if (!(ret & CHECKPOINT)) {
+			if (!skb_m && info_m.skb)
+				skb_m = info_m.skb;
+
 			if (likely(ret & BYPASS_MASTER)) {
 				release_skb(&h->master_data->rel, skb_m);
 				netif_schedule_queue(h->master_data->sch->dev_queue);
-			} else {
+			} else if (skb_m) {
 				skb_queue_head(&hash_value->master_queue, skb_m);
 			}
+
+			if (!skb_s && info_s.skb)
+				skb_s = info_s.skb;
 
 			if (likely(ret & DROP_SLAVER)) {
 				release_skb(&h->slaver_data->rel, skb_s);
 				netif_schedule_queue(h->slaver_data->sch->dev_queue);
-			} else {
+			} else if (skb_s) {
 				skb_queue_head(&hash_value->slaver_queue, skb_s);
 			}
 			//pr_info("netif_schedule%u.\n", cnt);
+			if (!ret)
+				skip_compare_one = true;
+			else
+				skip_compare_one = false;
 		} else {
 			/*
 			 *  Put makster's skb to temporary queue, drop slaver's.

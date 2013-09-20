@@ -275,3 +275,63 @@ uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
 
 	return CHECKPOINT;
 }
+
+uint32_t ipv4_compare_one_packet(struct compare_info *m, struct compare_info *s)
+{
+	struct sk_buff *skb;
+	struct compare_info *info = NULL;
+	uint32_t ret = 0;
+	const compare_ops_t *ops;
+	bool fragment;
+
+	if (m->skb) {
+		info = m;
+		ret = BYPASS_MASTER;
+	} else if (s->skb) {
+		info = s;
+		ret = DROP_SLAVER;
+	} else
+		BUG();
+
+	skb = info->skb;
+
+	if (unlikely(info->ip->ihl * 4 > info->length)) {
+		pr_warn("HA_compare: %s iphdr is corrupted\n",
+			m->skb ? "master" : "slaver");
+		goto err;
+	}
+
+	fragment = ip_is_fragment(info->ip);
+	info->ip_data = (char *)info->ip + info->ip->ihl * 4;
+	if (fragment)
+		info->length = FRAG_CB(info->skb)->tot_len;
+	else if (info->length <= htons(info->ip->tot_len))
+		info->length -= info->ip->ihl * 4;
+	else
+		info->length = htons(info->ip->tot_len) - info->ip->ihl * 4;
+
+	rcu_read_lock();
+	ops = rcu_dereference(compare_inet_ops[info->ip->protocol]);
+	if (fragment) {
+		if (ops && ops->compare_one_fragment) {
+			ret = ops->compare_one_fragment(m, s);
+		} else {
+			rcu_read_unlock();
+			goto unsupported;
+		}
+	} else {
+		if (ops && ops->compare_one_packet) {
+			ret = ops->compare_one_packet(m, s);
+		} else {
+			rcu_read_unlock();
+			goto unsupported;
+		}
+	}
+	rcu_read_unlock();
+
+err:
+	return ret;
+
+unsupported:
+	return 0;
+}
