@@ -208,14 +208,14 @@ static void debug_print_arp(const struct arphdr *arp)
 {
 	struct arp_reply *temp;
 
-	pr_debug("HA_compare:[ARP] ar_hrd=%u, ar_pro=%u\n",
+	pr_warn("HA_compare:[ARP] ar_hrd=%u, ar_pro=%u\n",
 		htons(arp->ar_hrd), htons(arp->ar_pro));
-	pr_debug("HA_compare:[ARP] ar_hln=%u, ar_pln=%u, ar_op=%u\n",
+	pr_warn("HA_compare:[ARP] ar_hln=%u, ar_pln=%u, ar_op=%u\n",
 		arp->ar_hln, arp->ar_pln, htons(arp->ar_op));
 	if (htons(arp->ar_op) == ARPOP_REPLY || htons(arp->ar_op) == ARPOP_REQUEST) {
 		temp = (struct arp_reply *)((char*)arp + sizeof(struct arphdr));
-		pr_debug("HA_compare:[ARP] ar_sha: %pM, ar_sip: %pI4\n", temp->ar_sha, temp->ar_sip);
-		pr_debug("HA_compare:[ARP] ar_tha: %pM, ar_tip: %pI4\n", temp->ar_tha, temp->ar_tip);
+		pr_warn("HA_compare:[ARP] ar_sha: %pM, ar_sip: %pI4\n", temp->ar_sha, temp->ar_sip);
+		pr_warn("HA_compare:[ARP] ar_tha: %pM, ar_tip: %pI4\n", temp->ar_tha, temp->ar_tip);
 	}
 }
 
@@ -288,9 +288,9 @@ compare_skb(struct compare_info *m, struct compare_info *s)
 	case ETH_P_ARP:
 		ret = compare_arp_packet(m, s);
 		if (ret & CHECKPOINT) {
-			pr_debug("HA_compare: master packet, len=%d\n", m->length);
+			pr_warn("HA_compare: master packet, len=%d\n", m->length);
 			debug_print_arp(m->packet);
-			pr_debug("HA_compare: slaver packet, len=%d\n", s->length);
+			pr_warn("HA_compare: slaver packet, len=%d\n", s->length);
 			debug_print_arp(s->packet);
 		}
 		break;

@@ -37,7 +37,7 @@ struct compare_ops {
 	uint32_t (*compare_fragment)(struct compare_info *m, struct compare_info *s);
 	uint32_t (*compare_one_fragment)(struct compare_info *m, struct compare_info *s);
 	void (*update_info)(void *info, void *data, uint32_t len, struct sk_buff *skb);
-	void (*debug_print)(void *data);
+	void (*debug_print)(const struct compare_info *info, const void *data);
 };
 
 typedef struct compare_ops compare_ops_t;

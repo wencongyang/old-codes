@@ -44,7 +44,7 @@ int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol)
 EXPORT_SYMBOL(register_compare_ops);
 EXPORT_SYMBOL(unregister_compare_ops);
 
-static void debug_print_ip(const struct iphdr *ip)
+static void debug_print_ip(const struct compare_info *info, const struct iphdr *ip)
 {
 	unsigned short len = htons(ip->tot_len);
 	unsigned short id = htons(ip->id);
@@ -52,24 +52,24 @@ static void debug_print_ip(const struct iphdr *ip)
 	void *data = (char *)ip + ip->ihl * 4;
 	const compare_ops_t * ops;
 
-	pr_debug("HA_compare:[IP]len = %u, id= %u.\n", len, id);
+	pr_warn("HA_compare:[IP]len = %u, id= %u.\n", len, id);
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[protocol]);
 	if (ops && ops->debug_print)
-		ops->debug_print(data);
+		ops->debug_print(info, data);
 	else
-		pr_debug("HA_compare: unkown protocol: %u\n", protocol);
+		pr_warn("HA_compare: unkown protocol: %u\n", protocol);
 	rcu_read_unlock();
 }
 
 static void print_debuginfo(struct compare_info *m, struct compare_info *s)
 {
-	pr_debug("HA_compare: same=%u, last_id=%u\n", same_count, last_id);
-	pr_debug("HA_compare: Master pkt:\n");
-	debug_print_ip(m->ip);
-	pr_debug("HA_compare: Slaver pkt:\n");
-	debug_print_ip(s->ip);
+	pr_warn("HA_compare: same=%u, last_id=%u\n", same_count, last_id);
+	pr_warn("HA_compare: Master pkt:\n");
+	debug_print_ip(m, m->ip);
+	pr_warn("HA_compare: Slaver pkt:\n");
+	debug_print_ip(s, s->ip);
 }
 
 #define ip_is_fragment(iph)	(iph->frag_off & htons(IP_MF | IP_OFFSET))

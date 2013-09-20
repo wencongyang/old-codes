@@ -25,15 +25,32 @@ struct tcphdr_info {
 	uint16_t window;
 };
 
+/* tcp_compare_info & tcphdr_info's flags */
+#define		SYN		0x01
+#define		FIN		0x02
+#define		ACK		0x04
+
+/* If this bit is not set, TCP_CMP_INFO() is invalid */
+#define		VALID		0x08
+
+#define		TCP_CMP_INFO_MASK	0xFFFF
+
+/* tcphdr_info's flags */
+#define		ERR_SKB		0x010000
+#define		RETRANSMIT	0x020000
+#define		WIN_UPDATE	0x040000
+#define		HAVE_PAYLOAD	0x080000
+#define		ACK_UPDATE	0x100000
+
 static void debug_print_tcp_header(const unsigned char *n, unsigned int doff)
 {
 	int i, j;
 
-	pr_debug("HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
+	pr_warn("HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
 		n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7]);
-	pr_debug("HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
+	pr_warn("HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
 		n[8], n[9], n[10], n[11], n[12], n[13], n[14], n[15]);
-	pr_debug("HA_compare: %02x %02x %02x %02x\n",
+	pr_warn("HA_compare: %02x %02x %02x %02x\n",
 		n[16], n[17], n[18], n[19]);
 
 	/* TCP options */
@@ -43,11 +60,11 @@ static void debug_print_tcp_header(const unsigned char *n, unsigned int doff)
 
 		if (n[i] == 1) {
 			/* nop */
-			pr_debug("HA_compare: nop\n");
+			pr_warn("HA_compare: nop\n");
 			continue;
 		}
 
-		pr_debug("HA_compare:");
+		pr_warn("HA_compare:");
 		for (j = i; j < i + n[i+1]; j++) {
 			pr_cont(" %02x", (unsigned int)n[j]);
 		}
@@ -57,20 +74,26 @@ static void debug_print_tcp_header(const unsigned char *n, unsigned int doff)
 	}
 }
 
-static void debug_print_tcp(void *data)
+static void debug_print_tcp(const struct compare_info *info, const void *data)
 {
 	unsigned int ack, seq;
 	unsigned int doff;
 	unsigned short src_port, dst_port;
-	struct tcphdr *tcp = data;
+	const struct tcphdr *tcp = data;
+	struct tcp_compare_info *tcp_info;
 
 	src_port = htons(tcp->source);
 	dst_port = htons(tcp->dest);
 	ack = htonl(tcp->ack_seq);
 	seq = htonl(tcp->seq);
-	pr_debug("HA_compare:[TCP] src=%u, dst=%u, seq = %u,"
+	pr_warn("HA_compare:[TCP] src=%u, dst=%u, seq = %u,"
 		" ack=%u\n", src_port, dst_port, seq,
 		ack);
+
+	tcp_info = TCP_CMP_INFO(info);
+	if (tcp_info->flags & VALID)
+		pr_warn("HA_compare: snd_nxt: %u, rcv_nxt: %u\n",
+			tcp_info->snd_nxt, tcp_info->rcv_nxt);
 
 	doff = tcp->doff * 4;
 	debug_print_tcp_header(data, doff);
@@ -103,23 +126,6 @@ update_tcp_ackseq(struct tcphdr *tcp, struct sk_buff *skb, uint32_t new_ack)
 	inet_proto_csum_replace4(&tcp->check, skb, tcp->ack_seq,
 				 htonl(old_ack), 0);
 }
-
-/* tcp_compare_info & tcphdr_info's flags */
-#define		SYN		0x01
-#define		FIN		0x02
-#define		ACK		0x04
-
-/* If this bit is not set, TCP_CMP_INFO() is invalid */
-#define		VALID		0x08
-
-#define		TCP_CMP_INFO_MASK	0xFFFF
-
-/* tcphdr_info's flags */
-#define		ERR_SKB		0x010000
-#define		RETRANSMIT	0x020000
-#define		WIN_UPDATE	0x040000
-#define		HAVE_PAYLOAD	0x080000
-#define		ACK_UPDATE	0x100000
 
 static void
 get_tcphdr_info(struct tcphdr *tcp, int length,
