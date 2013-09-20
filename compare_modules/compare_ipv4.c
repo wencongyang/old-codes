@@ -74,7 +74,7 @@ static void print_debuginfo(struct compare_info *m, struct compare_info *s)
 
 #define ip_is_fragment(iph)	(iph->frag_off & htons(IP_MF | IP_OFFSET))
 
-static int compare_ip_fragment(struct compare_info *m, struct compare_info *s)
+static uint32_t compare_ip_fragment(struct compare_info *m, struct compare_info *s)
 {
 	return ipv4_transport_compare_fragment(m->skb, s->skb, 0, 0, m->length);
 }
@@ -89,20 +89,20 @@ static inline void set_frag_cb(struct compare_info *info)
 	skb_shinfo(info->skb)->frag_list = NULL;
 }
 
-int compare_ip_packet(struct compare_info *m, struct compare_info *s)
+uint32_t compare_ip_packet(struct compare_info *m, struct compare_info *s)
 {
-	int ret;
+	uint32_t ret;
 	const compare_ops_t *ops;
 	bool m_fragment, s_fragment;
 
 	if (unlikely(m->ip->ihl * 4 > m->length)) {
 		pr_warn("HA_compare: master iphdr is corrupted\n");
-		return 0;
+		return CHECKPOINT;
 	}
 
 	if (unlikely(s->ip->ihl * 4 > s->length)) {
 		pr_warn("HA_compare: slaver iphdr is corrupted\n");
-		return 0;
+		return CHECKPOINT;
 	}
 
 #define compare_elem(elem)						\
@@ -115,7 +115,7 @@ int compare_ip_packet(struct compare_info *m, struct compare_info *s)
 			pr_warn("HA_compare: slaver %s: %u\n", #elem,	\
 				s->ip->elem);				\
 			print_debuginfo(m, s);				\
-			return 0;					\
+			return CHECKPOINT;				\
 		}							\
 	} while (0)
 
@@ -129,7 +129,7 @@ int compare_ip_packet(struct compare_info *m, struct compare_info *s)
 	if (memcmp((char *)m->ip+20, (char*)s->ip+20, m->ip->ihl*4 - 20)) {
 		pr_warn("HA_compare: iphdr option is different\n");
 		print_debuginfo(m, s);
-		return 0;
+		return CHECKPOINT;
 	}
 
 	m_fragment = ip_is_fragment(m->ip);
@@ -164,7 +164,7 @@ int compare_ip_packet(struct compare_info *m, struct compare_info *s)
 				pr_warn("HA_compare: the length of packet is different\n");
 				print_debuginfo(m, s);
 				rcu_read_unlock();
-				return 0;
+				return CHECKPOINT;
 			}
 			ret = compare_ip_fragment(m, s);
 		}
@@ -177,16 +177,14 @@ int compare_ip_packet(struct compare_info *m, struct compare_info *s)
 				pr_warn("HA_compare: the length of packet is different\n");
 				print_debuginfo(m, s);
 				rcu_read_unlock();
-				return 0;
+				return CHECKPOINT;
 			}
 			ret = compare_other_packet(m->ip_data, s->ip_data, m->length);
 		}
 	}
 	rcu_read_unlock();
-	if (!ret) {
+	if (ret & CHECKPOINT)
 		print_debuginfo(m, s);
-		return 0;
-	}
 
 	if (ret != SAME_PACKET)
 		return ret;
@@ -225,7 +223,7 @@ void ip_update_compare_info(void *info, struct iphdr *ip)
 	rcu_read_unlock();
 }
 
-int ipv4_transport_compare_fragment(struct sk_buff *m_head,
+uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
 				    struct sk_buff *s_head,
 				    int m_off, int s_off, int len)
 {
@@ -236,7 +234,7 @@ int ipv4_transport_compare_fragment(struct sk_buff *m_head,
 	int ret;
 
 	if (!m_skb || !s_skb)
-		return 0;
+		return CHECKPOINT;
 
 	if (len <= 0)
 		return SAME_PACKET;
@@ -264,7 +262,7 @@ int ipv4_transport_compare_fragment(struct sk_buff *m_head,
 		cmp_len = min3(m_len, s_len, len);
 		ret = memcmp(m_data, s_data, cmp_len);
 		if (ret)
-			return 0;
+			return CHECKPOINT;
 
 		len -= cmp_len;
 		if (len == 0)
@@ -275,5 +273,5 @@ int ipv4_transport_compare_fragment(struct sk_buff *m_head,
 	} while(len > 0);
 #undef NEXT_DATA
 
-	return 0;
+	return CHECKPOINT;
 }

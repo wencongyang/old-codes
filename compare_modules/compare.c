@@ -231,25 +231,25 @@ static void reset_compare_status(void)
  *   3: bypass the packet from master, and drop the packet from slaver
  */
 
-int compare_other_packet(void *m, void *s, int length)
+uint32_t compare_other_packet(void *m, void *s, int length)
 {
-	return memcmp(m, s, length) ? 0 : SAME_PACKET;
+	return memcmp(m, s, length) ? CHECKPOINT : SAME_PACKET;
 }
 
-static int
+static uint32_t
 compare_arp_packet(struct compare_info *m, struct compare_info *s)
 {
 	if (m->length != s->length)
-		return 0;
+		return CHECKPOINT;
 
 	/* TODO */
 	return compare_other_packet(m->packet, s->packet, m->length);
 }
 
-static int
+static uint32_t
 compare_skb(struct compare_info *m, struct compare_info *s)
 {
-	int ret;
+	uint32_t ret;
 
 	m->eth = (struct ethhdr *)m->skb->data;
 	s->eth = (struct ethhdr *)s->skb->data;
@@ -287,7 +287,7 @@ compare_skb(struct compare_info *m, struct compare_info *s)
 		break;
 	case ETH_P_ARP:
 		ret = compare_arp_packet(m, s);
-		if (!ret) {
+		if (ret & CHECKPOINT) {
 			pr_debug("HA_compare: master packet, len=%d\n", m->length);
 			debug_print_arp(m->packet);
 			pr_debug("HA_compare: slaver packet, len=%d\n", s->length);
@@ -302,20 +302,18 @@ compare_skb(struct compare_info *m, struct compare_info *s)
 		}
 		ret = compare_other_packet(m->packet, s->packet, m->length);
 	}
-	if (!ret) {
+	if (ret & CHECKPOINT) {
 		pr_warn("HA_compare: compare_xxx_packet() fails %04x\n", ntohs(m->eth->h_proto));
 		goto different;
 	}
 
-	if (ret == SAME_PACKET) {
+	if (ret == SAME_PACKET)
 		same_count++;
-		ret = DROP_SLAVER | BYPASS_MASTER;
-	}
 	return ret;
 
 different:
 	reset_compare_status();
-	return 0;
+	return CHECKPOINT;
 }
 
 static void clear_slaver_queue(struct hash_head *h)
@@ -436,7 +434,7 @@ static void compare(struct hash_value *hash_value)
 		info_m.private_data = &hash_value->m_info;
 		info_m.private_data = &hash_value->s_info;
 		ret = compare_skb(&info_m, &info_s);
-		if (ret) {
+		if (!(ret & CHECKPOINT)) {
 			if (likely(ret & BYPASS_MASTER)) {
 				release_skb(&h->master_data->rel, skb_m);
 				netif_schedule_queue(h->master_data->sch->dev_queue);

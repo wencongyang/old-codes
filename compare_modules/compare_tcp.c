@@ -96,14 +96,14 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 {
 	int m_len, s_len;
 	unsigned int m_seq, s_seq;
-	int ret = 0;
+	uint32_t ret = 0;
 
 #define compare(elem)								\
 	do {									\
 		if (unlikely(m->tcp->elem != s->tcp->elem)) {			\
 			pr_warn("HA_compare: tcp header's %s is different\n",	\
 				#elem);						\
-			return 0;						\
+			return CHECKPOINT;					\
 		}								\
 	} while (0)
 
@@ -144,7 +144,7 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 	/* flags */
 	if(memcmp((char *)m->tcp+13, (char *)s->tcp+13, 1)) {
 		pr_warn("HA_compare: tcp header's flags is different\n");
-		return 0;
+		return CHECKPOINT;
 	}
 
 	if (ignore_ack_packet) {
@@ -195,10 +195,10 @@ out:
 	return ret;
 }
 
-static int compare_tcp_packet(struct compare_info *m, struct compare_info *s)
+static uint32_t compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 {
 	int m_len, s_len;
-	int ret;
+	uint32_t ret;
 
 	ret = compare_tcp_header(m, s);
 	if (ret != SAME_PACKET)
@@ -211,9 +211,9 @@ static int compare_tcp_packet(struct compare_info *m, struct compare_info *s)
 		m->tcp_data = m->ip_data + m->tcp->doff * 4;
 		s->tcp_data = s->ip_data + s->tcp->doff * 4;
 		ret = compare_other_packet(m->tcp_data, s->tcp_data, min(m_len, s_len));
-		if (ret == 0) {
+		if (ret & CHECKPOINT) {
 			pr_warn("HA_compare: tcp data is different\n");
-			return 0;
+			return CHECKPOINT;
 		}
 	}
 
@@ -252,7 +252,7 @@ static struct tcphdr *get_tcphdr(struct sk_buff *skb)
 	return tcph;
 }
 
-static int compare_tcpdata(struct compare_info *m, struct compare_info *s)
+static uint32_t compare_tcpdata(struct compare_info *m, struct compare_info *s)
 {
 	struct sk_buff *m_head = m->skb, *s_head = s->skb;
 	int m_off, s_off;
@@ -261,19 +261,19 @@ static int compare_tcpdata(struct compare_info *m, struct compare_info *s)
 	s_off = s->tcp->doff * 4;
 
 	if (m->length - m_off != s->length - s_off)
-		return 0;
+		return CHECKPOINT;
 
 	return ipv4_transport_compare_fragment(m_head, s_head, m_off, s_off,
 					       m->length - m_off);
 }
 
-static int compare_fragment(struct compare_info *m, struct compare_info *s)
+static uint32_t compare_fragment(struct compare_info *m, struct compare_info *s)
 {
 	struct sk_buff *m_skb = m->skb;
 	struct sk_buff *s_skb = s->skb;
 	struct tcphdr *m_tcp = NULL, *old_m_tcp = NULL;
 	struct tcphdr *s_tcp = NULL, *old_s_tcp = NULL;
-	int ret = 0;
+	int ret = CHECKPOINT;
 
 	if (FRAG_CB(m_skb)->len < sizeof(struct tcphdr) ||
 	    FRAG_CB(m_skb)->len < m->tcp->doff * 4) {
