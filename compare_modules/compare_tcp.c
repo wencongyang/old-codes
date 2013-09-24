@@ -435,7 +435,7 @@ static struct sk_buff *create_new_skb(struct sk_buff *skb,
 		return NULL;
 
 	new_skb->dev = TCP_CMP_INFO(info)->dev;
-	new_skb->iif = new_skb->dev->ifindex;
+	new_skb->skb_iif = new_skb->dev->ifindex;
 	info->skb = new_skb;
 
 	eth = (struct ethhdr *)new_skb->data;
