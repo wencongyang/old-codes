@@ -112,7 +112,7 @@ static struct hash_value *alloc_hash_value(struct flow_keys *key)
 {
 	struct hash_value *value;
 
-	value = kmalloc(sizeof(*value), GFP_ATOMIC);
+	value = kzalloc(sizeof(*value), GFP_ATOMIC);
 	if (!value)
 		return NULL;
 

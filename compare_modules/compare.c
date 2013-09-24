@@ -479,7 +479,7 @@ static void compare(struct hash_value *hash_value)
 		info_m.skb = skb_m;
 		info_s.skb = skb_s;
 		info_m.private_data = &hash_value->m_info;
-		info_m.private_data = &hash_value->s_info;
+		info_s.private_data = &hash_value->s_info;
 		if (!skb_m || !skb_s)
 			ret = compare_one_skb(&info_m, &info_s);
 		else
