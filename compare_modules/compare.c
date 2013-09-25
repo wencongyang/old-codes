@@ -342,7 +342,7 @@ static void update_compare_info(struct hash_value *value, struct sk_buff *skb)
 		return;
 
 	ip = (struct iphdr *)(skb->data + sizeof(*eth));
-	ip_update_compare_info(&value->m_info, ip);
+	ip_update_compare_info(&value->m_info, ip, skb);
 }
 
 static void move_master_queue(struct hash_head *h)

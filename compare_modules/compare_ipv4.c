@@ -205,7 +205,7 @@ uint32_t compare_ip_packet(struct compare_info *m, struct compare_info *s)
 	return SAME_PACKET;
 }
 
-void ip_update_compare_info(void *info, struct iphdr *ip)
+void ip_update_compare_info(void *info, struct iphdr *ip, struct sk_buff *skb)
 {
 	unsigned char protocol;
 	void *data;
@@ -219,7 +219,7 @@ void ip_update_compare_info(void *info, struct iphdr *ip)
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[protocol]);
 	if (ops && ops->update_info)
-		ops->update_info(info, data, len);
+		ops->update_info(info, data, len, skb);
 	rcu_read_unlock();
 }
 

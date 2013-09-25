@@ -6,11 +6,24 @@
 #include "ipv4_fragment.h"
 
 struct tcp_compare_info {
-	uint32_t last_seq;
-	uint32_t reserved[7];
+	struct net_device *dev;
+	uint32_t snd_nxt;
+	uint32_t rcv_nxt;
+	uint16_t flags;
+	uint16_t window;
+	uint32_t reserved[3];
 };
 
 #define TCP_CMP_INFO(compare_info) ((struct tcp_compare_info *)compare_info->private_data)
+
+struct tcphdr_info {
+	uint32_t seq;
+	uint32_t end_seq;
+	uint32_t ack_seq;
+	int length;
+	unsigned int flags;
+	uint16_t window;
+};
 
 static void debug_print_tcp_header(const unsigned char *n, unsigned int doff)
 {
@@ -64,38 +77,133 @@ static void debug_print_tcp(void *data)
 }
 
 static void
-update_tcp_window(struct compare_info *m, struct compare_info *s)
+update_tcp_window(struct tcphdr *tcp, struct sk_buff *skb, uint16_t new_window)
 {
-	uint16_t m_window = htons(m->tcp->window);
-	uint16_t s_window = htons(s->tcp->window);
+	uint16_t old_window = htons(tcp->window);
 
-	m->tcp->window = htons(min(m_window, s_window));
-	if (s_window >= m_window)
+	if (new_window >= old_window)
 		return;
 
-	inet_proto_csum_replace2(&m->tcp->check, m->skb, m->tcp->window,
-				 s->tcp->window, 0);
+	tcp->window = htons(new_window);
+
+	inet_proto_csum_replace2(&tcp->check, skb, tcp->window,
+				 htons(new_window), 0);
 }
 
 static void
-update_tcp_ackseq(struct compare_info *m, struct compare_info *s)
+update_tcp_ackseq(struct tcphdr *tcp, struct sk_buff *skb, uint32_t new_ack)
 {
-	uint32_t m_ack_seq = htonl(m->tcp->ack_seq);
-	uint32_t s_ack_seq = htonl(s->tcp->ack_seq);
+	uint32_t old_ack = htonl(tcp->ack_seq);
 
-	m->tcp->ack_seq = htonl(min(m_ack_seq, s_ack_seq));
-	if (s_ack_seq >= m_ack_seq)
+	if (!before(new_ack, old_ack))
 		return;
 
-	inet_proto_csum_replace4(&m->tcp->check, m->skb, m->tcp->ack_seq,
-				 s->tcp->ack_seq, 0);
+	tcp->ack_seq = htonl(new_ack);
+
+	inet_proto_csum_replace4(&tcp->check, skb, tcp->ack_seq,
+				 htonl(old_ack), 0);
+}
+
+/* tcp_compare_info & tcphdr_info's flags */
+#define		SYN		0x01
+#define		FIN		0x02
+#define		ACK		0x04
+
+/* If this bit is not set, TCP_CMP_INFO() is invalid */
+#define		VALID		0x08
+
+#define		TCP_CMP_INFO_MASK	0xFFFF
+
+/* tcphdr_info's flags */
+#define		ERR_SKB		0x010000
+#define		RETRANSMIT	0x020000
+#define		WIN_UPDATE	0x040000
+#define		HAVE_PAYLOAD	0x080000
+#define		ACK_UPDATE	0x100000
+
+static void
+get_tcphdr_info(struct tcphdr *tcp, int length,
+		struct tcp_compare_info *tcp_info,
+		struct tcphdr_info *tcphdr_info)
+{
+	length -= tcp->doff * 4;
+
+	tcphdr_info->seq = htonl(tcp->seq);
+	tcphdr_info->end_seq = tcphdr_info->seq;
+	tcphdr_info->length = length;
+	tcphdr_info->window = htons(tcp->window);
+
+	if (unlikely(length < 0)) {
+		tcphdr_info->flags |= ERR_SKB;
+		return;
+	}
+
+	if (unlikely(tcp->fin && tcp->syn)) {
+		tcphdr_info->flags |= ERR_SKB;
+		return;
+	}
+
+	tcphdr_info->flags = 0;
+	if (tcp->fin) {
+		tcphdr_info->flags |= FIN;
+		tcphdr_info->length++;
+	}
+
+	if (tcp->syn) {
+		tcphdr_info->flags |= SYN;
+		tcphdr_info->length++;
+	}
+
+	if (tcp->ack) {
+		tcphdr_info->flags |= ACK;
+		tcphdr_info->ack_seq = htonl(tcp->ack_seq);
+	}
+
+	tcphdr_info->end_seq += tcphdr_info->length;
+	if (!(tcp_info->flags & VALID))
+		return;
+
+	if (length > 0)
+		tcphdr_info->flags |= HAVE_PAYLOAD;
+
+	if (tcphdr_info->length > 0)
+		goto check_retransmitted_packet;
+
+	/* check window update */
+	if (tcphdr_info->window > tcp_info->window)
+		tcphdr_info->flags |= WIN_UPDATE;
+
+	if (after(tcphdr_info->ack_seq, tcp_info->rcv_nxt))
+		tcphdr_info->flags |= ACK_UPDATE;
+
+check_retransmitted_packet:
+	/*
+	 * Retransmitted packet:
+	 *  1. end_seq is before snd_nxt
+	 *  2. end_seq is equal to snd_nxt, and seq is before snd_nxt
+	 */
+	if (before(tcphdr_info->end_seq, tcp_info->snd_nxt) ||
+	    (tcphdr_info->end_seq == tcp_info->snd_nxt &&
+	     before(tcphdr_info->seq, tcp_info->snd_nxt)))
+		tcphdr_info->flags |= RETRANSMIT;
+}
+
+static void
+update_tcp_compare_info(struct tcp_compare_info *tcp_info,
+			struct tcphdr_info *tcphdr_info)
+{
+	tcp_info->rcv_nxt = tcphdr_info->ack_seq;
+	tcp_info->window = tcphdr_info->window;
+	tcp_info->flags = (tcphdr_info->flags & TCP_CMP_INFO_MASK) | VALID;
+
+	if (!(tcphdr_info->flags & RETRANSMIT))
+		tcp_info->snd_nxt = tcphdr_info->end_seq;
 }
 
 static int
 compare_tcp_header(struct compare_info *m, struct compare_info *s)
 {
-	int m_len, s_len;
-	unsigned int m_seq, s_seq;
+	struct tcphdr_info m_info, s_info;
 	uint32_t ret = 0;
 
 #define compare(elem)								\
@@ -111,35 +219,25 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 	compare(source);
 	compare(dest);
 
-	m_len = m->length - m->tcp->doff * 4;
-	s_len = s->length - s->tcp->doff * 4;
-	m_seq = htonl(m->tcp->seq);
-	s_seq = htonl(s->tcp->seq);
+	get_tcphdr_info(m->tcp, m->length, TCP_CMP_INFO(m), &m_info);
+	get_tcphdr_info(s->tcp, s->length, TCP_CMP_INFO(s), &s_info);
+	if (m_info.flags & ERR_SKB)
+		ret |= BYPASS_MASTER;
+	if (m_info.flags & ERR_SKB)
+		ret |= DROP_SLAVER;
+	if (ret)
+		return ret;
 
-	/* Sequence Number */
-	if (m->tcp->syn) {
-		compare(seq);
-		TCP_CMP_INFO(m)->last_seq = m_seq;
-	} else {
-
-		if (ignore_retransmitted_packet) {
-			if ((m_len != 0 &&
-			     m_seq == TCP_CMP_INFO(m)->last_seq) ||
-			    before(m_seq, TCP_CMP_INFO(m)->last_seq))
-				/* retransmitted packets */
-				ret |= BYPASS_MASTER;
-			if ((s_len != 0 &&
-			     s_seq == TCP_CMP_INFO(m)->last_seq) ||
-			    before(s_seq, TCP_CMP_INFO(m)->last_seq))
-				/* retransmitted packets */
-				ret |= DROP_SLAVER;
-		}
-
+	if (ignore_retransmitted_packet) {
+		if (m_info.flags & RETRANSMIT)
+			ret |= BYPASS_MASTER;
+		if (s_info.flags & RETRANSMIT)
+			ret |= DROP_SLAVER;
 		if (ret)
 			goto out;
-
-		compare(seq);
 	}
+
+	compare(seq);
 
 	/* flags */
 	if(memcmp((char *)m->tcp+13, (char *)s->tcp+13, 1)) {
@@ -148,21 +246,15 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 	}
 
 	if (ignore_ack_packet) {
-		if (m_len == 0 && s_len != 0)
-			ret |= BYPASS_MASTER;
-
-		if (m_len != 0 && s_len == 0)
-			ret |= DROP_SLAVER;
-
-		if (ret)
+		if ((m_info.flags & HAVE_PAYLOAD) !=
+		    (s_info.flags & HAVE_PAYLOAD)) {
+			if (m_info.flags & HAVE_PAYLOAD)
+				ret |= DROP_SLAVER;
+			if (s_info.flags & HAVE_PAYLOAD)
+				ret |= BYPASS_MASTER;
 			goto out;
+		}
 	}
-
-	if (m_len != 0 || m->tcp->fin)
-		TCP_CMP_INFO(m)->last_seq = m_seq;
-
-	/* Sequence Number */
-	compare(seq);
 
 	/* data offset */
 	compare(doff);
@@ -178,19 +270,28 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 
 #undef compare
 
-	if (!ret || ret &BYPASS_MASTER) {
-		if (ignore_ack_difference)
-			update_tcp_ackseq(m, s);
-		if (ignore_tcp_window)
-			update_tcp_window(m, s);
-	}
+	update_tcp_compare_info(TCP_CMP_INFO(m), &m_info);
+	TCP_CMP_INFO(m)->dev = m->skb->dev;
+	update_tcp_compare_info(TCP_CMP_INFO(s), &s_info);
+	TCP_CMP_INFO(s)->dev = s->skb->dev;
 
-	return ret ?:SAME_PACKET;
+	if (ignore_ack_difference)
+		update_tcp_ackseq(m->tcp, m->skb, s_info.ack_seq);
+	if (ignore_tcp_window)
+		update_tcp_window(m->tcp, m->skb, s_info.window);
+
+	return SAME_PACKET;
 
 out:
 	if (ret & BYPASS_MASTER) {
-		update_tcp_ackseq(m, s);
-		update_tcp_window(m, s);
+		update_tcp_compare_info(TCP_CMP_INFO(m), &m_info);
+		TCP_CMP_INFO(m)->dev = m->skb->dev;
+		update_tcp_ackseq(m->tcp, m->skb, s_info.ack_seq);
+		update_tcp_window(m->tcp, m->skb, s_info.window);
+	}
+	if (ret & DROP_SLAVER) {
+		update_tcp_compare_info(TCP_CMP_INFO(s), &s_info);
+		TCP_CMP_INFO(s)->dev = s->skb->dev;
 	}
 	return ret;
 }
@@ -315,21 +416,130 @@ out:
 	return ret;
 }
 
-static void update_tcp_info(void *info, void *data, uint32_t length)
+static struct sk_buff *create_new_skb(struct sk_buff *skb,
+				      struct compare_info *info)
+{
+	struct sk_buff *new_skb;
+	struct ethhdr *eth;
+	struct iphdr *ip;
+	struct tcphdr *tcp;
+
+	new_skb = skb_copy(skb, GFP_ATOMIC);
+	if (!new_skb)
+		return NULL;
+
+	new_skb->dev = TCP_CMP_INFO(info)->dev;
+	new_skb->iif = new_skb->dev->ifindex;
+	info->skb = new_skb;
+
+	eth = (struct ethhdr *)new_skb->data;
+	if (unlikely(ntohs(eth->h_proto) != ETH_P_IP))
+		goto err;
+
+	ip = (struct iphdr *)((char *)eth + sizeof(struct ethhdr));
+	if (unlikely(ip->protocol != IPPROTO_TCP))
+		goto err;
+
+	tcp = (struct tcphdr *)((char *)ip + ip->ihl * 4);
+
+	info->eth = eth;
+	info->ip = ip;
+	info->tcp = tcp;
+
+	return new_skb;
+
+err:
+	pr_warn("OOPS, origin skb is not TCP packet.\n");
+	kfree_skb(new_skb);
+	return NULL;
+}
+
+static uint32_t
+tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
+{
+	struct sk_buff *skb, *new_skb = NULL;
+	struct compare_info *info, *other_info;
+	struct tcphdr_info tcphdr_info;
+	struct tcphdr *tcp;
+	int ret = 0;
+
+	if (m->skb) {
+		info = m;
+		other_info = s;
+		ret |= BYPASS_MASTER;
+	} else if (s->skb) {
+		info = s;
+		other_info = m;
+		ret |= DROP_SLAVER;
+	} else
+		BUG();
+
+	skb = info->skb;
+	get_tcphdr_info(info->tcp, info->length, TCP_CMP_INFO(info),
+			&tcphdr_info);
+
+	if (unlikely(tcphdr_info.flags & ERR_SKB))
+		return ret;
+
+	if (tcphdr_info.flags & RETRANSMIT) {
+		update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info);
+		TCP_CMP_INFO(info)->dev = info->skb->dev;
+		return ret;
+	}
+
+	if (!(tcphdr_info.flags & (WIN_UPDATE | ACK_UPDATE)))
+		return 0;
+
+	/* more check for window update */
+	if (tcphdr_info.flags & WIN_UPDATE) {
+		if (TCP_CMP_INFO(other_info)->window <= TCP_CMP_INFO(info)->window)
+			tcphdr_info.flags &= ~WIN_UPDATE;
+	}
+
+	/* more check for ack_seq update */
+	if (tcphdr_info.flags & ACK_UPDATE) {
+		if (before(TCP_CMP_INFO(other_info)->rcv_nxt, TCP_CMP_INFO(info)->rcv_nxt))
+			tcphdr_info.flags &= ~ACK_UPDATE;
+	}
+
+	if (!(tcphdr_info.flags & (WIN_UPDATE | ACK_UPDATE)))
+		return 0;
+
+	if (s->skb) {
+		new_skb = create_new_skb(skb, m);
+		if (!new_skb)
+			return 0;
+	} else
+		new_skb = skb;
+	update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info);
+	TCP_CMP_INFO(info)->dev = info->skb->dev;
+
+	tcp = (struct tcphdr *)(new_skb->data + (info->ip_data - (void *)info->skb->data));
+	tcp = m->tcp;
+	update_tcp_ackseq(tcp, new_skb, TCP_CMP_INFO(other_info)->rcv_nxt);
+	update_tcp_window(tcp, new_skb, TCP_CMP_INFO(other_info)->window);
+
+	return m->skb ? BYPASS_MASTER : SAME_PACKET;
+}
+
+static void update_tcp_info(void *info, void *data, uint32_t length, struct sk_buff *skb)
 {
 	struct tcphdr *tcp = data;
 	struct tcp_compare_info *tcp_info = info;
-	uint32_t seq = htonl(tcp->seq);
+	struct tcphdr_info tcphdr_info;
 
-	if (length <= tcp->doff * 4)
+	get_tcphdr_info(tcp, length, tcp_info, &tcphdr_info);
+
+	if (unlikely(tcphdr_info.flags & ERR_SKB))
 		return;
 
-	if (after(seq, tcp_info->last_seq))
-		tcp_info->last_seq = seq;
+	update_tcp_compare_info(tcp_info, &tcphdr_info);
+	tcp_info->dev = skb->dev;
 }
 
 static compare_ops_t tcp_ops = {
 	.compare = compare_tcp_packet,
+	.compare_one_packet = tcp_compare_one_packet,
 	.compare_fragment = compare_fragment,
 	.update_info = update_tcp_info,
 	.debug_print = debug_print_tcp,
