@@ -41,6 +41,8 @@ struct tcphdr_info {
 #define		WIN_UPDATE	0x040000
 #define		HAVE_PAYLOAD	0x080000
 #define		ACK_UPDATE	0x100000
+#define		DUP_ACK		0x200000
+#define		OLD_ACK		0x400000
 
 static void debug_print_tcp_header(const unsigned char *n, unsigned int doff)
 {
@@ -179,7 +181,8 @@ get_tcphdr_info(struct tcphdr *tcp, int length,
 	if (tcphdr_info->window > tcp_info->window)
 		tcphdr_info->flags |= WIN_UPDATE;
 
-	if (after(tcphdr_info->ack_seq, tcp_info->rcv_nxt))
+	if ((tcphdr_info->flags & ACK) &&
+	    after(tcphdr_info->ack_seq, tcp_info->rcv_nxt))
 		tcphdr_info->flags |= ACK_UPDATE;
 
 check_retransmitted_packet:
@@ -192,17 +195,35 @@ check_retransmitted_packet:
 	    (tcphdr_info->end_seq == tcp_info->snd_nxt &&
 	     before(tcphdr_info->seq, tcp_info->snd_nxt)))
 		tcphdr_info->flags |= RETRANSMIT;
+
+	if ((tcphdr_info->flags & ACK_UPDATE) || !(tcphdr_info->flags & ACK))
+		return;
+
+	/* check dup ack */
+	if (tcphdr_info->ack_seq == tcp_info->rcv_nxt) {
+		tcphdr_info->flags |= DUP_ACK;
+	} else {
+		tcphdr_info->flags |= OLD_ACK;
+
+		/* old ack's window is older, ignore it */
+		tcphdr_info->flags &= ~WIN_UPDATE;
+	}
 }
 
 static void
 update_tcp_compare_info(struct tcp_compare_info *tcp_info,
 			struct tcphdr_info *tcphdr_info)
 {
-	tcp_info->rcv_nxt = tcphdr_info->ack_seq;
-	tcp_info->window = tcphdr_info->window;
-	tcp_info->flags = (tcphdr_info->flags & TCP_CMP_INFO_MASK) | VALID;
+	if (tcphdr_info->flags & ACK_UPDATE)
+		tcp_info->rcv_nxt = tcphdr_info->ack_seq;
+
+	if (!(tcphdr_info->flags & OLD_ACK))
+		tcp_info->window = tcphdr_info->window;
 
 	if (!(tcphdr_info->flags & RETRANSMIT))
+		tcp_info->flags = (tcphdr_info->flags & TCP_CMP_INFO_MASK) | VALID;
+
+	if (!(tcphdr_info->flags & RETRANSMIT) && tcphdr_info->length > 0)
 		tcp_info->snd_nxt = tcphdr_info->end_seq;
 }
 
@@ -460,6 +481,25 @@ err:
 	return NULL;
 }
 
+static void
+update_tcphdr_flags(struct compare_info *info,
+		    struct compare_info *other_info,
+		    struct tcphdr_info *tcphdr_info)
+{
+	struct tcp_compare_info *tcp_info = TCP_CMP_INFO(info);
+	struct tcp_compare_info *other_tcp_info = TCP_CMP_INFO(other_info);
+
+	/* more check for window update */
+	if (tcphdr_info->flags & WIN_UPDATE)
+		if (tcp_info->window <= other_tcp_info->window)
+			tcphdr_info->flags &= ~WIN_UPDATE;
+
+	/* more check for ack_seq update */
+	if (tcphdr_info->flags & ACK_UPDATE)
+		if (!after(other_tcp_info->rcv_nxt, tcp_info->rcv_nxt))
+			tcphdr_info->flags &= ~ACK_UPDATE;
+}
+
 static uint32_t
 tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
 {
@@ -487,30 +527,40 @@ tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
 	if (unlikely(tcphdr_info.flags & ERR_SKB))
 		return ret;
 
+	/* more check for window and ack_seq update */
+	update_tcphdr_flags(info, other_info, &tcphdr_info);
+
 	if (tcphdr_info.flags & RETRANSMIT) {
+		/* Retransmitted packet may conatin WIN_UPDATE or ACK_UPDATE */
+		if (tcphdr_info.flags & ACK_UPDATE ||
+		    tcphdr_info.flags & WIN_UPDATE)
+			/* TODO: How to avoid retransmiting twice? */
+			goto send_packet;
+
 		update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info);
 		TCP_CMP_INFO(info)->dev = info->skb->dev;
+
+		tcp = info->tcp;
+		update_tcp_ackseq(tcp, skb, TCP_CMP_INFO(other_info)->rcv_nxt);
+		update_tcp_window(tcp, skb, TCP_CMP_INFO(other_info)->window);
 		return ret;
 	}
 
-	if (!(tcphdr_info.flags & (WIN_UPDATE | ACK_UPDATE)))
+	if (tcphdr_info.length > 0)
+		/*
+		 * This packet is not a retransmitted packet,
+		 * and has data or FIN or SYN.
+		 */
 		return 0;
 
-	/* more check for window update */
-	if (tcphdr_info.flags & WIN_UPDATE) {
-		if (TCP_CMP_INFO(other_info)->window <= TCP_CMP_INFO(info)->window)
-			tcphdr_info.flags &= ~WIN_UPDATE;
-	}
+	if (tcphdr_info.flags & OLD_ACK)
+		/* It is a packet with old ack seq */
+		return ret;
 
-	/* more check for ack_seq update */
-	if (tcphdr_info.flags & ACK_UPDATE) {
-		if (before(TCP_CMP_INFO(other_info)->rcv_nxt, TCP_CMP_INFO(info)->rcv_nxt))
-			tcphdr_info.flags &= ~ACK_UPDATE;
-	}
-
-	if (!(tcphdr_info.flags & (WIN_UPDATE | ACK_UPDATE)))
+	if (!(tcphdr_info.flags & (WIN_UPDATE | ACK_UPDATE | DUP_ACK)))
 		return 0;
 
+send_packet:
 	if (s->skb) {
 		new_skb = create_new_skb(skb, m);
 		if (!new_skb)
@@ -520,12 +570,11 @@ tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
 	update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info);
 	TCP_CMP_INFO(info)->dev = info->skb->dev;
 
-	tcp = (struct tcphdr *)(new_skb->data + (info->ip_data - (void *)info->skb->data));
 	tcp = m->tcp;
 	update_tcp_ackseq(tcp, new_skb, TCP_CMP_INFO(other_info)->rcv_nxt);
 	update_tcp_window(tcp, new_skb, TCP_CMP_INFO(other_info)->window);
 
-	return m->skb ? BYPASS_MASTER : SAME_PACKET;
+	return info == m ? BYPASS_MASTER : SAME_PACKET;
 }
 
 static void update_tcp_info(void *info, void *data, uint32_t length, struct sk_buff *skb)
