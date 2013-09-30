@@ -413,13 +413,16 @@ static uint32_t compare_one_skb(struct compare_info *m, struct compare_info *s)
 {
 	struct sk_buff *skb;
 	struct compare_info *info = NULL;
+	struct compare_info *other_info = NULL;
 	uint32_t ret = 0;
 
 	if (m->skb) {
 		info = m;
+		other_info = s;
 		ret = BYPASS_MASTER;
 	} else if (s->skb) {
 		info = s;
+		other_info = m;
 		ret = DROP_SLAVER;
 	} else
 		BUG();
@@ -440,6 +443,11 @@ static uint32_t compare_one_skb(struct compare_info *m, struct compare_info *s)
 
 	if (ntohs(info->eth->h_proto) != ETH_P_IP)
 		goto unsupported;
+
+	/* clear other_info to avoid unexpected error */
+	other_info->eth = NULL;
+	other_info->packet = NULL;
+	other_info->length = 0;
 
 	return ipv4_compare_one_packet(m, s);
 

@@ -199,6 +199,9 @@ check_retransmitted_packet:
 	if ((tcphdr_info->flags & ACK_UPDATE) || !(tcphdr_info->flags & ACK))
 		return;
 
+	if (tcphdr_info->length > 0)
+		return;
+
 	/* check dup ack */
 	if (tcphdr_info->ack_seq == tcp_info->rcv_nxt) {
 		tcphdr_info->flags |= DUP_ACK;
@@ -214,7 +217,7 @@ static void
 update_tcp_compare_info(struct tcp_compare_info *tcp_info,
 			struct tcphdr_info *tcphdr_info)
 {
-	if (tcphdr_info->flags & ACK_UPDATE)
+	if (tcphdr_info->flags & ACK_UPDATE || !(tcp_info->flags & VALID))
 		tcp_info->rcv_nxt = tcphdr_info->ack_seq;
 
 	if (!(tcphdr_info->flags & OLD_ACK))

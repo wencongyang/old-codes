@@ -280,15 +280,18 @@ uint32_t ipv4_compare_one_packet(struct compare_info *m, struct compare_info *s)
 {
 	struct sk_buff *skb;
 	struct compare_info *info = NULL;
+	struct compare_info *other_info = NULL;
 	uint32_t ret = 0;
 	const compare_ops_t *ops;
 	bool fragment;
 
 	if (m->skb) {
 		info = m;
+		other_info = s;
 		ret = BYPASS_MASTER;
 	} else if (s->skb) {
 		info = s;
+		other_info = m;
 		ret = DROP_SLAVER;
 	} else
 		BUG();
@@ -309,6 +312,9 @@ uint32_t ipv4_compare_one_packet(struct compare_info *m, struct compare_info *s)
 		info->length -= info->ip->ihl * 4;
 	else
 		info->length = htons(info->ip->tot_len) - info->ip->ihl * 4;
+
+	/* clear other_info to avoid unexpected errors */
+	other_info->ip_data = NULL;
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[info->ip->protocol]);
