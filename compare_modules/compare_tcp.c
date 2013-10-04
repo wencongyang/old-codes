@@ -7,11 +7,12 @@
 
 struct tcp_compare_info {
 	struct net_device *dev;
+	uint32_t skb_iif;
 	uint32_t snd_nxt;
 	uint32_t rcv_nxt;
 	uint16_t flags;
 	uint16_t window;
-	uint32_t reserved[3];
+	uint32_t reserved[2];
 };
 
 #define TCP_CMP_INFO(compare_info) ((struct tcp_compare_info *)compare_info->private_data)
@@ -215,7 +216,8 @@ check_retransmitted_packet:
 
 static void
 update_tcp_compare_info(struct tcp_compare_info *tcp_info,
-			struct tcphdr_info *tcphdr_info)
+			struct tcphdr_info *tcphdr_info,
+			struct sk_buff *skb)
 {
 	if (tcphdr_info->flags & ACK_UPDATE || !(tcp_info->flags & VALID))
 		tcp_info->rcv_nxt = tcphdr_info->ack_seq;
@@ -228,6 +230,9 @@ update_tcp_compare_info(struct tcp_compare_info *tcp_info,
 
 	if (!(tcphdr_info->flags & RETRANSMIT) && tcphdr_info->length > 0)
 		tcp_info->snd_nxt = tcphdr_info->end_seq;
+
+	tcp_info->dev = skb->dev;
+	tcp_info->skb_iif = skb->skb_iif;
 }
 
 static int
@@ -300,10 +305,8 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 
 #undef compare
 
-	update_tcp_compare_info(TCP_CMP_INFO(m), &m_info);
-	TCP_CMP_INFO(m)->dev = m->skb->dev;
-	update_tcp_compare_info(TCP_CMP_INFO(s), &s_info);
-	TCP_CMP_INFO(s)->dev = s->skb->dev;
+	update_tcp_compare_info(TCP_CMP_INFO(m), &m_info, m->skb);
+	update_tcp_compare_info(TCP_CMP_INFO(s), &s_info, s->skb);
 
 	if (ignore_ack_difference)
 		update_tcp_ackseq(m->tcp, m->skb, s_info.ack_seq);
@@ -314,14 +317,12 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 
 out:
 	if (ret & BYPASS_MASTER) {
-		update_tcp_compare_info(TCP_CMP_INFO(m), &m_info);
-		TCP_CMP_INFO(m)->dev = m->skb->dev;
+		update_tcp_compare_info(TCP_CMP_INFO(m), &m_info, m->skb);
 		update_tcp_ackseq(m->tcp, m->skb, s_info.ack_seq);
 		update_tcp_window(m->tcp, m->skb, s_info.window);
 	}
 	if (ret & DROP_SLAVER) {
-		update_tcp_compare_info(TCP_CMP_INFO(s), &s_info);
-		TCP_CMP_INFO(s)->dev = s->skb->dev;
+		update_tcp_compare_info(TCP_CMP_INFO(s), &s_info, s->skb);
 	}
 	return ret;
 }
@@ -459,7 +460,7 @@ static struct sk_buff *create_new_skb(struct sk_buff *skb,
 		return NULL;
 
 	new_skb->dev = TCP_CMP_INFO(info)->dev;
-	new_skb->skb_iif = new_skb->dev->ifindex;
+	new_skb->skb_iif = TCP_CMP_INFO(info)->skb_iif;
 	info->skb = new_skb;
 
 	eth = (struct ethhdr *)new_skb->data;
@@ -494,7 +495,7 @@ update_tcphdr_flags(struct compare_info *info,
 
 	/* more check for window update */
 	if (tcphdr_info->flags & WIN_UPDATE)
-		if (tcp_info->window <= other_tcp_info->window)
+		if (tcp_info->window >= other_tcp_info->window)
 			tcphdr_info->flags &= ~WIN_UPDATE;
 
 	/* more check for ack_seq update */
@@ -540,8 +541,7 @@ tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
 			/* TODO: How to avoid retransmiting twice? */
 			goto send_packet;
 
-		update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info);
-		TCP_CMP_INFO(info)->dev = info->skb->dev;
+		update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info, info->skb);
 
 		tcp = info->tcp;
 		update_tcp_ackseq(tcp, skb, TCP_CMP_INFO(other_info)->rcv_nxt);
@@ -570,8 +570,7 @@ send_packet:
 			return 0;
 	} else
 		new_skb = skb;
-	update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info);
-	TCP_CMP_INFO(info)->dev = info->skb->dev;
+	update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info, info->skb);
 
 	tcp = m->tcp;
 	update_tcp_ackseq(tcp, new_skb, TCP_CMP_INFO(other_info)->rcv_nxt);
@@ -591,8 +590,7 @@ static void update_tcp_info(void *info, void *data, uint32_t length, struct sk_b
 	if (unlikely(tcphdr_info.flags & ERR_SKB))
 		return;
 
-	update_tcp_compare_info(tcp_info, &tcphdr_info);
-	tcp_info->dev = skb->dev;
+	update_tcp_compare_info(tcp_info, &tcphdr_info, skb);
 }
 
 static compare_ops_t tcp_ops = {
