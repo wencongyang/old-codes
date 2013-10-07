@@ -145,6 +145,25 @@ update_tcp_psh(struct tcphdr *tcp, struct sk_buff *skb)
 }
 
 static void
+update_tcp_fin(struct tcphdr *tcp, struct sk_buff *skb, bool clear)
+{
+	uint16_t old_value = ((uint16_t *)tcp)[6];
+	uint16_t new_value;
+	uint32_t old_seq = tcp->seq;
+
+	tcp->fin = !clear;
+	new_value=((uint32_t *)tcp)[6];
+
+	inet_proto_csum_replace2(&tcp->check, skb, old_value, new_value, 0);
+	if (clear)
+		return;
+
+	/* update the seq number */
+	tcp->seq = htonl(htonl(old_seq) - 1);
+	inet_proto_csum_replace4(&tcp->check, skb, old_seq, tcp->seq, 0);
+}
+
+static void
 get_tcphdr_info(struct tcphdr *tcp, int length,
 		struct tcp_compare_info *tcp_info,
 		struct tcphdr_info *tcphdr_info)
@@ -239,14 +258,78 @@ update_tcp_compare_info(struct tcp_compare_info *tcp_info,
 	if (!(tcphdr_info->flags & OLD_ACK))
 		tcp_info->window = tcphdr_info->window;
 
-	if (!(tcphdr_info->flags & RETRANSMIT))
+	if (!(tcphdr_info->flags & RETRANSMIT)) {
+		uint16_t old_flags = tcp_info->flags;
 		tcp_info->flags = (tcphdr_info->flags & TCP_CMP_INFO_MASK) | VALID;
+
+		/*
+		 * FIN means we don't send any data more, but we can receive
+		 * data. So we should not overwrite this FIN flags.
+		 */
+		if (old_flags & FIN && tcphdr_info->length == 0)
+			tcp_info->flags |= FIN;
+	}
 
 	if (!(tcphdr_info->flags & RETRANSMIT) && tcphdr_info->length > 0)
 		tcp_info->snd_nxt = tcphdr_info->end_seq;
 
 	tcp_info->dev = skb->dev;
 	tcp_info->skb_iif = skb->skb_iif;
+}
+
+static uint32_t check_ack_only_packet(uint32_t m_flags, uint32_t s_flags,
+				      bool m_fin, bool s_fin)
+{
+	uint32_t ret = 0;
+
+	if (m_fin)
+		m_flags |= FIN;
+	if (s_fin)
+		s_flags |= FIN;
+
+	/*
+	 * 4 types of packet:
+	 *   1. FIN
+	 *   2. HAVE_PAYLOAD
+	 *   3. FIN + HAVE_PAYLOAD
+	 *   4. Ack only
+	 *
+	 * So there are 16 cases to be handled:
+	 *     Master               Slaver              Return value
+	 *     FIN+HAVE_PAYLOAD     FIN                 CHECKPOINT
+	 *     FIN+HAVE_PAYLOAD     Ack only            DROP_SLAVER
+	 *     FIN                  FIN+HAVE_PAYLOAD    CHECKPOINT
+	 *     FIN                  HAVE_PAYLOAD        CHECKPOINT
+	 *     HAVE_PAYLOAD         FIN                 CHECKPOINT
+	 *     HAVE_PAYLOAD         Ack only            DROP_SLAVER
+	 *     Ack only             FIN+HAVE_PAYLOAD    BYPASS_MASTER
+	 *     Ack only             HAVE_PAYLOAD        BYPASS_MASTER
+	 *
+	 *     FIN+HAVE_PAYLOAD     FIN+HAVE_PAYLOAD    0
+	 *     FIN+HAVE_PAYLOAD     HAVE_PAYLOAD        0(FIN may be cleared)
+	 *     FIN                  FIN                 0
+	 *     FIN                  Ack only            0(FIN may be cleared)
+	 *     HAVE_PAYLOAD         FIN+HAVE_PAYLOAD    0(FIN will be remembered)
+	 *     HAVE_PAYLOAD         HAVE_PAYLOAD        0
+	 *     Ack only             FIN                 0(FIN will be remembered)
+	 *     Ack only             Ack only            0
+	 */
+
+	/* case 9-16 */
+	if ((m_flags & HAVE_PAYLOAD) == (s_flags & HAVE_PAYLOAD))
+		return 0;
+
+	/* case 1,3-5 */
+	if (((m_flags & FIN) && (s_flags & HAVE_PAYLOAD)) ||
+	    ((m_flags & HAVE_PAYLOAD) && (s_flags & FIN)))
+		return CHECKPOINT;
+
+	/* case 2,6-8 */
+	if (m_flags & HAVE_PAYLOAD)
+		ret |= DROP_SLAVER;
+	if (s_flags & HAVE_PAYLOAD)
+		ret |= BYPASS_MASTER;
+	return ret;
 }
 
 static int
@@ -287,7 +370,21 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 			goto out;
 	}
 
-	compare(seq);
+	/* seq */
+	if ((TCP_CMP_INFO(m)->flags & FIN) != (TCP_CMP_INFO(s)->flags & FIN)) {
+		uint32_t m_seq = htonl(m->tcp->seq);
+		uint32_t s_seq = htonl(s->tcp->seq);
+
+		if (TCP_CMP_INFO(m)->flags & FIN)
+			m_seq -= 1;
+		if (TCP_CMP_INFO(s)->flags & FIN)
+			s_seq -= 1;
+		if (unlikely(m_seq != s_seq)) {
+			pr_warn("HA_compare: tcp header's seq is different\n");
+			return CHECKPOINT;
+		}
+	} else
+		compare(seq);
 
 	/* flags */
 	m_flags = *(uint8_t *)((char *)m->tcp + 13);
@@ -296,21 +393,13 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 		pr_warn("HA_compare: tcp header's flags is different\n");
 		return CHECKPOINT;
 	}
-	/* FIN */
-	if (m->tcp->fin != s->tcp->fin) {
-		pr_warn("HA_compare: tcp header's flags is different\n");
-		return CHECKPOINT;
-	}
 
 	if (ignore_ack_packet) {
-		if ((m_info.flags & HAVE_PAYLOAD) !=
-		    (s_info.flags & HAVE_PAYLOAD)) {
-			if (m_info.flags & HAVE_PAYLOAD)
-				ret |= DROP_SLAVER;
-			if (s_info.flags & HAVE_PAYLOAD)
-				ret |= BYPASS_MASTER;
+		ret = check_ack_only_packet(m_info.flags, s_info.flags,
+					    TCP_CMP_INFO(m)->flags & FIN,
+					    TCP_CMP_INFO(s)->flags & FIN);
+		if (ret)
 			goto out;
-		}
 	}
 
 	/* data offset */
@@ -331,6 +420,15 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 	if (m->tcp->psh != s->tcp->psh && !m->tcp->psh)
 		update_tcp_psh(m->tcp, m->skb);
 
+	/* FIN */
+	if (TCP_CMP_INFO(m)->flags & FIN && !m->tcp->fin && s->tcp->fin) {
+		/* add the flags FIN again */
+		update_tcp_fin(m->tcp, m->skb, false);
+	} else if (m->tcp->fin && !(TCP_CMP_INFO(s)->flags & FIN) && !s->tcp->fin) {
+		/* clear the flags FIN */
+		update_tcp_fin(m->tcp, m->skb, true);
+	}
+
 	update_tcp_compare_info(TCP_CMP_INFO(m), &m_info, m->skb);
 	update_tcp_compare_info(TCP_CMP_INFO(s), &s_info, s->skb);
 
@@ -342,7 +440,12 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 	return SAME_PACKET;
 
 out:
+	/* Retransmitted packet or ack only packet */
 	if (ret & BYPASS_MASTER) {
+		/* clear FIN flags first before bypass master packet */
+		if (m_info.flags & RETRANSMIT && m->tcp->fin &&
+		    !(TCP_CMP_INFO(s)->flags & FIN))
+			update_tcp_fin(m->tcp, m->skb, true);
 		update_tcp_compare_info(TCP_CMP_INFO(m), &m_info, m->skb);
 		update_tcp_ackseq(m->tcp, m->skb, s_info.ack_seq);
 		update_tcp_window(m->tcp, m->skb, s_info.window);
@@ -561,6 +664,10 @@ tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
 	update_tcphdr_flags(info, other_info, &tcphdr_info);
 
 	if (tcphdr_info.flags & RETRANSMIT) {
+		/* clear FIN */
+		if (info->tcp->fin && !(TCP_CMP_INFO(other_info)->flags & FIN))
+			update_tcp_fin(info->tcp, info->skb, true);
+
 		/* Retransmitted packet may conatin WIN_UPDATE or ACK_UPDATE */
 		if (tcphdr_info.flags & ACK_UPDATE ||
 		    tcphdr_info.flags & WIN_UPDATE)
@@ -575,12 +682,20 @@ tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
 		return ret;
 	}
 
-	if (tcphdr_info.length > 0)
+	if ((tcphdr_info.flags & HAVE_PAYLOAD) &&
+	    (TCP_CMP_INFO(other_info)->flags & FIN))
+		return CHECKPOINT;
+
+	if (tcphdr_info.flags & (HAVE_PAYLOAD | SYN))
 		/*
 		 * This packet is not a retransmitted packet,
-		 * and has data or FIN or SYN.
+		 * and has data or SYN.
 		 */
 		return 0;
+
+	if ((tcphdr_info.flags & FIN) &&
+	    (TCP_CMP_INFO(other_info)->flags & FIN))
+		goto send_packet;
 
 	if (tcphdr_info.flags & OLD_ACK)
 		/* It is a packet with old ack seq */
