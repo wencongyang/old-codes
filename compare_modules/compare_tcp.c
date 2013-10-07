@@ -112,8 +112,8 @@ update_tcp_window(struct tcphdr *tcp, struct sk_buff *skb, uint16_t new_window)
 
 	tcp->window = htons(new_window);
 
-	inet_proto_csum_replace2(&tcp->check, skb, tcp->window,
-				 htons(new_window), 0);
+	inet_proto_csum_replace2(&tcp->check, skb, htons(old_window),
+				 tcp->window, 0);
 }
 
 static void
