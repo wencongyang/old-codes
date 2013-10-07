@@ -45,6 +45,9 @@ struct tcphdr_info {
 #define		DUP_ACK		0x200000
 #define		OLD_ACK		0x400000
 
+/* FIN and PSH can be ignored */
+#define		TCP_CMP_FLAGS_MASK	0xF6
+
 static void debug_print_tcp_header(const unsigned char *n, unsigned int doff)
 {
 	int i, j;
@@ -128,6 +131,17 @@ update_tcp_ackseq(struct tcphdr *tcp, struct sk_buff *skb, uint32_t new_ack)
 
 	inet_proto_csum_replace4(&tcp->check, skb, htonl(old_ack),
 				 tcp->ack_seq, 0);
+}
+
+static void
+update_tcp_psh(struct tcphdr *tcp, struct sk_buff *skb)
+{
+	uint16_t old_value = ((uint16_t *)tcp)[6];
+	uint16_t new_value;
+
+	tcp->psh = 1;
+	new_value = ((uint16_t *)tcp)[6];
+	inet_proto_csum_replace2(&tcp->check, skb, old_value, new_value, 0);
 }
 
 static void
@@ -239,6 +253,7 @@ static int
 compare_tcp_header(struct compare_info *m, struct compare_info *s)
 {
 	struct tcphdr_info m_info, s_info;
+	uint8_t m_flags, s_flags;
 	uint32_t ret = 0;
 
 #define compare(elem)								\
@@ -275,7 +290,14 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 	compare(seq);
 
 	/* flags */
-	if(memcmp((char *)m->tcp+13, (char *)s->tcp+13, 1)) {
+	m_flags = *(uint8_t *)((char *)m->tcp + 13);
+	s_flags = *(uint8_t *)((char *)s->tcp + 13);
+	if ((m_flags & TCP_CMP_FLAGS_MASK) != (s_flags & TCP_CMP_FLAGS_MASK)) {
+		pr_warn("HA_compare: tcp header's flags is different\n");
+		return CHECKPOINT;
+	}
+	/* FIN */
+	if (m->tcp->fin != s->tcp->fin) {
 		pr_warn("HA_compare: tcp header's flags is different\n");
 		return CHECKPOINT;
 	}
@@ -304,6 +326,10 @@ compare_tcp_header(struct compare_info *m, struct compare_info *s)
 	}
 
 #undef compare
+	/* update flags */
+	/* PSH */
+	if (m->tcp->psh != s->tcp->psh && !m->tcp->psh)
+		update_tcp_psh(m->tcp, m->skb);
 
 	update_tcp_compare_info(TCP_CMP_INFO(m), &m_info, m->skb);
 	update_tcp_compare_info(TCP_CMP_INFO(s), &s_info, s->skb);
