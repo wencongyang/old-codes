@@ -126,8 +126,8 @@ update_tcp_ackseq(struct tcphdr *tcp, struct sk_buff *skb, uint32_t new_ack)
 
 	tcp->ack_seq = htonl(new_ack);
 
-	inet_proto_csum_replace4(&tcp->check, skb, tcp->ack_seq,
-				 htonl(old_ack), 0);
+	inet_proto_csum_replace4(&tcp->check, skb, htonl(old_ack),
+				 tcp->ack_seq, 0);
 }
 
 static void
