@@ -22,10 +22,15 @@ LDLIBS   = $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore)
 all: build
 
 .PHONY: build
-build: $(PROGRAMS)
+
+colo_tc: colo_tc.o
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS) -lnetlink -o $@
 
 $(PROGRAMS): %: %.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
+
+PROGRAMS += colo_tc
+build: $(PROGRAMS)
 
 .PHONY: install
 install: build

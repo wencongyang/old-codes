@@ -8,6 +8,9 @@
 # network-colo (master|slaver) (install|uninstall) vif pif [ifb1 ifb2]
 #============================================================================
 
+dir=$(dirname "$0")
+. "$dir/xen-hotplug-common.sh"
+
 sides=$1
 op=$2
 vif=$3
@@ -19,7 +22,6 @@ qlen=40960
 
 module="HA_compare"
 device="HA_compare"
-path="/root/yewei/source/pure/code"
 
 # start_master ifbx
 function start_master() {
@@ -103,7 +105,6 @@ function install_master() {
     fi
     ip link set ifb$index1 up
     ip link set ifb$index1 qlen $qlen
-    tc qdisc add dev ifb$index1 root handle 1: master
 
     select_ifb
     index2=$?
@@ -113,7 +114,9 @@ function install_master() {
     fi
     ip link set ifb$index2 up
     ip link set ifb$index2 qlen $qlen
-    tc qdisc add dev ifb$index2 root handle 1: slaver
+
+    colo_tc qdisc add dev ifb$index1 root handle 1: colo dev ifb$index2 master
+    colo_tc qdisc add dev ifb$index2 root handle 1: colo dev ifb$index1 slaver
 
     ifconfig $pif promisc
     ip link set $pif qlen $qlen
