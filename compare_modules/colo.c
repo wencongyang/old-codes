@@ -84,7 +84,7 @@ out:
 
 static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
-	struct sched_data *q = qdisc_priv(sch);
+	struct colo_sched_data *q = qdisc_priv(sch);
 	struct connect_info *conn_info;
 	int wakeup;
 
@@ -125,7 +125,7 @@ error:
 
 static struct sk_buff *colo_dequeue(struct Qdisc* sch)
 {
-	struct sched_data *q = qdisc_priv(sch);
+	struct colo_sched_data *q = qdisc_priv(sch);
 	struct sk_buff *skb;
 
 
@@ -147,7 +147,7 @@ static struct sk_buff *colo_dequeue(struct Qdisc* sch)
 
 static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 {
-	struct sched_data *q = qdisc_priv(sch);
+	struct colo_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tb[TCA_COLO_MAX + 1];
 	int err;
 	struct colo_idx *idx;
@@ -190,7 +190,7 @@ static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 
 struct Qdisc_ops colo_qdisc_ops = {
 	.id          =       "colo",
-	.priv_size   =       sizeof(struct sched_data),
+	.priv_size   =       sizeof(struct colo_sched_data),
 	.enqueue     =       colo_enqueue,
 	.dequeue     =       colo_dequeue,
 	.peek        =       qdisc_peek_head,

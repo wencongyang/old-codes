@@ -604,8 +604,8 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 {
 	struct sk_buff *skb;
 	int i, j;
-	struct sched_data *master_queue = colo_ics->master_data;
-	struct sched_data *slaver_queue = colo_ics->slaver_data;
+	struct colo_sched_data *master_queue = colo_ics->master_data;
+	struct colo_sched_data *slaver_queue = colo_ics->slaver_data;
 	struct connect_info *conn_info;
 
 	pr_info("STAT: update=%u, in_soft_irq=%u, total_time=%llu, last_time=%llu, max_time=%llu\n",

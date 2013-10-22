@@ -26,7 +26,7 @@ struct flow_keys {
 };
 
 struct if_connections;
-struct sched_data;
+struct colo_sched_data;
 
 struct connect_info {
 	struct sk_buff_head master_queue;
@@ -46,8 +46,8 @@ struct if_connections {
 	struct list_head entry[HASH_NR];
 	struct colo_idx idx;
 	struct sk_buff_head wait_for_release;
-	struct sched_data *master_data;
-	struct sched_data *slaver_data;
+	struct colo_sched_data *master_data;
+	struct colo_sched_data *slaver_data;
 	struct list_head list;
 	int master:1, slaver:1;
 };
