@@ -9,6 +9,10 @@
 #include "ip_fragment.h"
 #include "ipv4_fragment.h"
 
+bool ignore_id = 1;
+module_param(ignore_id, bool, 0644);
+MODULE_PARM_DESC(ignore_id, "bypass id difference");
+
 const compare_ops_t *compare_inet_ops[MAX_INET_PROTOS];
 DEFINE_MUTEX(inet_ops_lock);
 

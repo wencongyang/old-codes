@@ -28,30 +28,6 @@
 #include "ip_fragment.h"
 #include "ipv4_fragment.h"
 
-bool ignore_id = 1;
-module_param(ignore_id, bool, 0644);
-MODULE_PARM_DESC(ignore_id, "bypass id difference");
-
-bool ignore_ack_packet = 1;
-module_param(ignore_ack_packet, bool, 0644);
-MODULE_PARM_DESC(ignore_ack_packet, "bypass ack only packet");
-
-bool ignore_retransmitted_packet = 1;
-module_param(ignore_retransmitted_packet, bool, 0644);
-MODULE_PARM_DESC(ignore_retransmitted_packet, "bypass retransmitted packets");
-
-bool compare_tcp_data = 0;
-module_param(compare_tcp_data, bool, 0644);
-MODULE_PARM_DESC(compare_tcp_data, "compare tcp data");
-
-bool ignore_tcp_window = 1;
-module_param(ignore_tcp_window, bool, 0644);
-MODULE_PARM_DESC(ignore_tcp_window, "ignore tcp window");
-
-bool ignore_ack_difference = 1;
-module_param(ignore_ack_difference, bool, 0644);
-MODULE_PARM_DESC(ignore_ack_difference, "ignore ack difference");
-
 int cmp_open(struct inode*, struct file*);
 int cmp_release(struct inode*, struct file*);
 long cmp_ioctl(struct file*, unsigned int, unsigned long);

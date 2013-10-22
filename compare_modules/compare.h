@@ -50,7 +50,6 @@ typedef struct compare_ops compare_ops_t;
 extern uint32_t compare_other_packet(void *m, void *s, int length);
 
 /* ipv4 */
-extern bool ignore_id;
 extern unsigned short last_id;
 extern unsigned int same_count;
 extern uint32_t compare_ip_packet(struct compare_info *m, struct compare_info *s);
@@ -65,12 +64,6 @@ extern uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
 extern uint32_t ipv4_compare_one_packet(struct compare_info *m, struct compare_info *s);
 
 /* tcp */
-extern bool ignore_ack_packet;
-extern bool ignore_retransmitted_packet;
-extern bool compare_tcp_data;
-extern bool ignore_tcp_window;
-extern bool ignore_ack_difference;
-
 extern void compare_tcp_init(void);
 extern void compare_tcp_fini(void);
 
