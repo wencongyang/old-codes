@@ -43,10 +43,8 @@ struct task_struct *compare_task;
 
 struct proc_dir_entry* proc_entry;
 struct statistic_data {
-	unsigned int update;   	// call counts of update()
-	unsigned int in_soft_irq;
+	unsigned int compare_count;
 	unsigned long long total_time;
-	unsigned long long last_time;
 	unsigned long long max_time;
 } statis;
 
@@ -448,12 +446,10 @@ static void compare_one_connection(struct connect_info *conn_info)
 	struct timespec start, end, delta;
 	struct if_connections *ics = conn_info->ics;
 	bool skip_compare_one = false;
+	uint64_t last_time;
 
 	getnstimeofday(&start);
-	statis.update++;
-
-	if (in_softirq())
-		statis.in_soft_irq++;
+	statis.compare_count++;
 
 	while (1) {
 		if (state != state_comparing)
@@ -525,10 +521,10 @@ static void compare_one_connection(struct connect_info *conn_info)
 
 	getnstimeofday(&end);
 	delta = timespec_sub(end, start);
-	statis.last_time = delta.tv_sec * 1000000000 + delta.tv_nsec;
-	if (statis.last_time > statis.max_time)
-		statis.max_time = statis.last_time;
-	statis.total_time += statis.last_time;
+	last_time = delta.tv_sec * 1000000000 + delta.tv_nsec;
+	if (last_time > statis.max_time)
+		statis.max_time = last_time;
+	statis.total_time += last_time;
 }
 
 static struct connect_info *get_connect_info(void)
@@ -580,8 +576,8 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	struct colo_sched_data *slaver_queue = colo_ics->slaver_data;
 	struct connect_info *conn_info;
 
-	pr_info("STAT: update=%u, in_soft_irq=%u, total_time=%llu, last_time=%llu, max_time=%llu\n",
-		statis.update, statis.in_soft_irq, statis.total_time, statis.last_time, statis.max_time);
+	pr_info("STAT: compare_count=%u, total_time=%llu, max_time=%llu\n",
+		statis.compare_count, statis.total_time, statis.max_time);
 	pr_info("STAT Debug info:\n");
 	pr_info("\nSTAT: status=%d.\n", state);
 
