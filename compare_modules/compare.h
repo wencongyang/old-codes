@@ -50,8 +50,6 @@ typedef struct compare_ops compare_ops_t;
 extern uint32_t compare_other_packet(void *m, void *s, int length);
 
 /* ipv4 */
-extern unsigned short last_id;
-extern unsigned int same_count;
 extern uint32_t ipv4_compare_packet(struct compare_info *m,
 				    struct compare_info *s);
 extern void ipv4_update_compare_info(void *info, struct iphdr *ip,

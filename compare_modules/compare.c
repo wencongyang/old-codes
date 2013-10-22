@@ -31,7 +31,6 @@
 int cmp_open(struct inode*, struct file*);
 int cmp_release(struct inode*, struct file*);
 long cmp_ioctl(struct file*, unsigned int, unsigned long);
-unsigned short last_id = 0;
 static int failover = 0;
 
 struct task_struct *compare_task;
@@ -74,7 +73,6 @@ enum {
 };
 
 static int state = state_comparing;
-unsigned int same_count = 0;
 
 static int cmp_setup_cdev(struct _cmp_dev *dev) {
 	int err, devno = MKDEV(cmp_major, cmp_minor);
@@ -192,11 +190,6 @@ static void debug_print_arp(const struct arphdr *arp)
 	}
 }
 
-static void reset_compare_status(void)
-{
-	same_count = 0;
-}
-
 /* compare_xxx_packet() returns:
  *   0: do a new checkpoint
  *   1: bypass the packet from master,
@@ -279,13 +272,9 @@ compare_skb(struct compare_info *m, struct compare_info *s)
 		pr_warn("HA_compare: compare_xxx_packet() fails %04x\n", ntohs(m->eth->h_proto));
 		goto different;
 	}
-
-	if (ret == SAME_PACKET)
-		same_count++;
 	return ret;
 
 different:
-	reset_compare_status();
 	return CHECKPOINT;
 }
 

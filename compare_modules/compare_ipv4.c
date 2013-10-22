@@ -16,6 +16,10 @@ MODULE_PARM_DESC(ignore_id, "bypass id difference");
 const compare_ops_t *compare_inet_ops[MAX_INET_PROTOS];
 DEFINE_MUTEX(inet_ops_lock);
 
+/* static */
+unsigned short last_id = 0;
+unsigned int same_count = 0;
+
 int register_compare_ops(compare_ops_t *ops, unsigned short protocol)
 {
 	mutex_lock(&inet_ops_lock);
@@ -93,7 +97,8 @@ static inline void set_frag_cb(struct compare_info *info)
 	skb_shinfo(info->skb)->frag_list = NULL;
 }
 
-uint32_t ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
+static uint32_t
+__ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 {
 	uint32_t ret;
 	const compare_ops_t *ops;
@@ -207,6 +212,16 @@ uint32_t ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 	last_id = htons(m->ip->id);
 
 	return SAME_PACKET;
+}
+
+uint32_t ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
+{
+	uint32_t ret = __ipv4_compare_packet(m, s);
+
+	if (unlikely(ret & CHECKPOINT))
+		same_count = 0;
+
+	return ret;
 }
 
 void ipv4_update_compare_info(void *info, struct iphdr *ip, struct sk_buff *skb)
@@ -340,6 +355,9 @@ uint32_t ipv4_compare_one_packet(struct compare_info *m, struct compare_info *s)
 	rcu_read_unlock();
 
 err:
+	if (unlikely(ret & CHECKPOINT))
+		same_count = 0;
+
 	return ret;
 
 unsupported:
