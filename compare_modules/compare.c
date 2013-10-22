@@ -121,7 +121,6 @@ int cmp_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-int rel_count = 0;
 long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int ret;
@@ -166,7 +165,6 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pr_notice("HA_compare: --------checkpoint finish.\n");
 		release_queue(colo_ics);
 		state = state_comparing;
-		rel_count = 0;
 
 		break;
 	}
@@ -365,7 +363,6 @@ static void release_queue(struct if_connections *ics)
 	skb = skb_dequeue(&ics->wait_for_release);
 	while (skb != NULL) {
 		flag = 1;
-		++rel_count;
 		skb_queue_tail(&ics->master_data->rel, skb);
 		skb = skb_dequeue(&ics->wait_for_release);
 	}
