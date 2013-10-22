@@ -439,7 +439,7 @@ unsupported:
 	return 0;
 }
 
-static void compare(struct connect_info *conn_info)
+static void compare_one_connection(struct connect_info *conn_info)
 {
 	struct sk_buff *skb_m;
 	struct sk_buff *skb_s;
@@ -562,7 +562,7 @@ static int compare_kthread(void *data)
 		while(!list_empty(&compare_head)) {
 			conn_info = get_connect_info();
 			if (conn_info)
-				compare(conn_info);
+				compare_one_connection(conn_info);
 
 			if (kthread_should_stop())
 				break;
