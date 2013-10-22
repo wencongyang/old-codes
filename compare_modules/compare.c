@@ -89,7 +89,6 @@ struct _cmp_dev {
 static void clear_slaver_queue(struct if_connections *ics);
 static void move_master_queue(struct if_connections *ics);
 static void release_queue(struct if_connections *ics);
-void update(struct connect_info *h);
 
 wait_queue_head_t queue;
 int cmp_major=0, cmp_minor=0;
