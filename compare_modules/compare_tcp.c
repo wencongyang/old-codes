@@ -360,7 +360,7 @@ static uint32_t check_ack_only_packet(uint32_t m_flags, uint32_t s_flags,
 }
 
 static int
-compare_tcp_header(struct compare_info *m, struct compare_info *s)
+tcp_compare_header(struct compare_info *m, struct compare_info *s)
 {
 	struct tcphdr_info m_info, s_info;
 	uint8_t m_flags, s_flags;
@@ -483,12 +483,12 @@ out:
 	return ret;
 }
 
-static uint32_t compare_tcp_packet(struct compare_info *m, struct compare_info *s)
+static uint32_t tcp_compare_packet(struct compare_info *m, struct compare_info *s)
 {
 	int m_len, s_len;
 	uint32_t ret;
 
-	ret = compare_tcp_header(m, s);
+	ret = tcp_compare_header(m, s);
 	if (ret != SAME_PACKET)
 		return ret;
 
@@ -540,7 +540,7 @@ static struct tcphdr *get_tcphdr(struct sk_buff *skb)
 	return tcph;
 }
 
-static uint32_t compare_tcpdata(struct compare_info *m, struct compare_info *s)
+static uint32_t tcp_compare_payload(struct compare_info *m, struct compare_info *s)
 {
 	struct sk_buff *m_head = m->skb, *s_head = s->skb;
 	int m_off, s_off;
@@ -555,7 +555,8 @@ static uint32_t compare_tcpdata(struct compare_info *m, struct compare_info *s)
 					       m->length - m_off);
 }
 
-static uint32_t compare_fragment(struct compare_info *m, struct compare_info *s)
+static uint32_t
+tcp_compare_fragment(struct compare_info *m, struct compare_info *s)
 {
 	struct sk_buff *m_skb = m->skb;
 	struct sk_buff *s_skb = s->skb;
@@ -579,7 +580,7 @@ static uint32_t compare_fragment(struct compare_info *m, struct compare_info *s)
 			goto out;
 	}
 
-	ret = compare_tcp_header(m, s);
+	ret = tcp_compare_header(m, s);
 	if (ret != SAME_PACKET)
 		goto out;
 
@@ -588,7 +589,7 @@ static uint32_t compare_fragment(struct compare_info *m, struct compare_info *s)
 		goto out;
 	}
 
-	ret = compare_tcpdata(m, s);
+	ret = tcp_compare_payload(m, s);
 
 out:
 	if (m_tcp)
@@ -747,7 +748,7 @@ send_packet:
 	return info == m ? BYPASS_MASTER : SAME_PACKET;
 }
 
-static void update_tcp_info(void *info, void *data, uint32_t length, struct sk_buff *skb)
+static void tcp_update_info(void *info, void *data, uint32_t length, struct sk_buff *skb)
 {
 	struct tcphdr *tcp = data;
 	struct tcp_compare_info *tcp_info = info;
@@ -762,10 +763,10 @@ static void update_tcp_info(void *info, void *data, uint32_t length, struct sk_b
 }
 
 static compare_ops_t tcp_ops = {
-	.compare = compare_tcp_packet,
+	.compare = tcp_compare_packet,
 	.compare_one_packet = tcp_compare_one_packet,
-	.compare_fragment = compare_fragment,
-	.update_info = update_tcp_info,
+	.compare_fragment = tcp_compare_fragment,
+	.update_info = tcp_update_info,
 	.debug_print = debug_print_tcp,
 };
 

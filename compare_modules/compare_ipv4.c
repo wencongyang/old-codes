@@ -78,7 +78,7 @@ static void print_debuginfo(struct compare_info *m, struct compare_info *s)
 
 #define ip_is_fragment(iph)	(iph->frag_off & htons(IP_MF | IP_OFFSET))
 
-static uint32_t compare_ip_fragment(struct compare_info *m, struct compare_info *s)
+static uint32_t ipv4_compare_fragment(struct compare_info *m, struct compare_info *s)
 {
 	return ipv4_transport_compare_fragment(m->skb, s->skb, 0, 0, m->length);
 }
@@ -93,7 +93,7 @@ static inline void set_frag_cb(struct compare_info *info)
 	skb_shinfo(info->skb)->frag_list = NULL;
 }
 
-uint32_t compare_ip_packet(struct compare_info *m, struct compare_info *s)
+uint32_t ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 {
 	uint32_t ret;
 	const compare_ops_t *ops;
@@ -170,7 +170,7 @@ uint32_t compare_ip_packet(struct compare_info *m, struct compare_info *s)
 				rcu_read_unlock();
 				return CHECKPOINT;
 			}
-			ret = compare_ip_fragment(m, s);
+			ret = ipv4_compare_fragment(m, s);
 		}
 	} else {
 		if (ops && ops->compare) {
@@ -209,7 +209,7 @@ uint32_t compare_ip_packet(struct compare_info *m, struct compare_info *s)
 	return SAME_PACKET;
 }
 
-void ip_update_compare_info(void *info, struct iphdr *ip, struct sk_buff *skb)
+void ipv4_update_compare_info(void *info, struct iphdr *ip, struct sk_buff *skb)
 {
 	unsigned char protocol;
 	void *data;

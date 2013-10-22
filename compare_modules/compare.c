@@ -214,7 +214,7 @@ uint32_t compare_other_packet(void *m, void *s, int length)
 }
 
 static uint32_t
-compare_arp_packet(struct compare_info *m, struct compare_info *s)
+arp_compare_packet(struct compare_info *m, struct compare_info *s)
 {
 	if (m->length != s->length)
 		return CHECKPOINT;
@@ -260,10 +260,10 @@ compare_skb(struct compare_info *m, struct compare_info *s)
 
 	switch(ntohs(m->eth->h_proto)) {
 	case ETH_P_IP:
-		ret = compare_ip_packet(m, s);
+		ret = ipv4_compare_packet(m, s);
 		break;
 	case ETH_P_ARP:
-		ret = compare_arp_packet(m, s);
+		ret = arp_compare_packet(m, s);
 		if (ret & CHECKPOINT) {
 			pr_warn("HA_compare: master packet, len=%d\n", m->length);
 			debug_print_arp(m->packet);
@@ -326,7 +326,7 @@ static void update_compare_info(struct connect_info *conn_info, struct sk_buff *
 		return;
 
 	ip = (struct iphdr *)(skb->data + sizeof(*eth));
-	ip_update_compare_info(&conn_info->m_info, ip, skb);
+	ipv4_update_compare_info(&conn_info->m_info, ip, skb);
 }
 
 static void move_master_queue(struct if_connections *ics)
