@@ -5,16 +5,16 @@
 #include "comm.h"
 #include "ipv4_fragment.h"
 
-void hash_init(struct hash_head *h)
+void init_if_connections(struct if_connections *ics)
 {
 	int i;
 
-	memset(h, 0, sizeof(*h));
+	memset(ics, 0, sizeof(*ics));
 	for (i = 0; i < HASH_NR; i++)
-		INIT_LIST_HEAD(&h->entry[i]);
+		INIT_LIST_HEAD(&ics->entry[i]);
 
-	INIT_LIST_HEAD(&h->list);
-	skb_queue_head_init(&h->wait_for_release);
+	INIT_LIST_HEAD(&ics->list);
+	skb_queue_head_init(&ics->wait_for_release);
 }
 
 /* copied from kernel, old kernel doesn't have the API skb_flow_dissect() */
@@ -120,7 +120,7 @@ static struct connect_info *alloc_connect_info(struct flow_keys *key)
 	INIT_LIST_HEAD(&conn_info->compare_list);
 	skb_queue_head_init(&conn_info->master_queue);
 	skb_queue_head_init(&conn_info->slaver_queue);
-	conn_info->head = NULL;
+	conn_info->ics = NULL;
 
 	return conn_info;
 }
@@ -162,7 +162,8 @@ static void free_fragments(struct sk_buff *head, struct sk_buff *except)
 	} while (skb != NULL);
 }
 
-struct connect_info *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags)
+struct connect_info *insert(struct if_connections *ics, struct sk_buff *skb,
+			    uint32_t flags)
 {
 	struct flow_keys key;
 	struct connect_info *conn_info;
@@ -179,9 +180,9 @@ struct connect_info *insert(struct hash_head *h, struct sk_buff *skb, uint32_t f
 		struct ip_frags *ip_frags;
 
 		if (flags & IS_MASTER)
-			ip_frags = &h->master_data->ipv4_frags;
+			ip_frags = &ics->master_data->ipv4_frags;
 		else
-			ip_frags = &h->slaver_data->ipv4_frags;
+			ip_frags = &ics->slaver_data->ipv4_frags;
 		head = ipv4_defrag(skb, ip_frags);
 		if (IS_ERR(head)) {
 			if (PTR_ERR(head) != -EINPROGRESS)
@@ -201,7 +202,7 @@ struct connect_info *insert(struct hash_head *h, struct sk_buff *skb, uint32_t f
 	hash = jhash(&key, sizeof(key), JHASH_INITVAL);
 
 	i = hash % HASH_NR;
-	conn_info = get_connect_info(&h->entry[i], &key);
+	conn_info = get_connect_info(&ics->entry[i], &key);
 	if (unlikely(!conn_info)) {
 		conn_info = alloc_connect_info(&key);
 		if (unlikely(!conn_info)) {
@@ -210,8 +211,8 @@ struct connect_info *insert(struct hash_head *h, struct sk_buff *skb, uint32_t f
 			return NULL;
 		}
 
-		conn_info->head = h;
-		list_add_tail(&conn_info->list, &h->entry[i]);
+		conn_info->ics = ics;
+		list_add_tail(&conn_info->list, &ics->entry[i]);
 	}
 
 	if (flags & IS_MASTER)

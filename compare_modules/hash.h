@@ -25,13 +25,13 @@ struct flow_keys {
 	u8 ip_proto;
 };
 
-struct hash_head;
+struct if_connections;
 struct sched_data;
 
 struct connect_info {
 	struct sk_buff_head master_queue;
 	struct sk_buff_head slaver_queue;
-	struct hash_head *head;
+	struct if_connections *ics;
 
 	struct flow_keys key;
 	struct list_head list;
@@ -42,7 +42,7 @@ struct connect_info {
 	uint32_t s_info[8];
 };
 
-struct hash_head {
+struct if_connections {
 	struct list_head entry[HASH_NR];
 	struct colo_idx idx;
 	struct sk_buff_head wait_for_release;
@@ -52,7 +52,9 @@ struct hash_head {
 	int master:1, slaver:1;
 };
 
-void hash_init(struct hash_head *h);
-struct connect_info *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags);
+extern void init_if_connections(struct if_connections *ics);
+extern struct connect_info *insert(struct if_connections *ics,
+				   struct sk_buff *skb,
+				   uint32_t flags);
 
 #endif

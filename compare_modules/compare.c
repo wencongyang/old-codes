@@ -86,9 +86,9 @@ struct _cmp_dev {
 	struct cdev cdev;
 } cmp_dev;
 
-static void clear_slaver_queue(struct hash_head *h);
-static void move_master_queue(struct hash_head *h);
-static void release_queue(struct hash_head *h);
+static void clear_slaver_queue(struct if_connections *ics);
+static void move_master_queue(struct if_connections *ics);
+static void release_queue(struct if_connections *ics);
 void update(struct connect_info *h);
 
 wait_queue_head_t queue;
@@ -181,15 +181,15 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		 */
 		pr_notice("HA_compare: --------both side suspended.\n");
 
-		move_master_queue(colo_hash_head);
-		clear_slaver_queue(colo_hash_head);
+		move_master_queue(colo_ics);
+		clear_slaver_queue(colo_ics);
 		break;
 	case COMP_IOCTRESUME:
 		/*
 		 *  Checkpoint finish, relese skb in temporary queue
 		 */
 		pr_notice("HA_compare: --------checkpoint finish.\n");
-		release_queue(colo_hash_head);
+		release_queue(colo_ics);
 		state = state_comparing;
 		rel_count = 0;
 
@@ -318,27 +318,28 @@ different:
 	return CHECKPOINT;
 }
 
-static void clear_slaver_queue(struct hash_head *h)
+static void clear_slaver_queue(struct if_connections *ics)
 {
 	int i;
 	struct sk_buff *skb;
 	struct connect_info *conn_info;
 
 	for (i = 0; i < HASH_NR; i++) {
-		list_for_each_entry(conn_info, &h->entry[i], list) {
+		list_for_each_entry(conn_info, &ics->entry[i], list) {
 			skb = skb_dequeue(&conn_info->slaver_queue);
 			while (skb != NULL) {
-				skb_queue_tail(&conn_info->head->slaver_data->rel, skb);
+				skb_queue_tail(&conn_info->ics->slaver_data->rel, skb);
 				skb = skb_dequeue(&conn_info->slaver_queue);
 			}
 		}
 	}
 
 	/* clear ip fragments */
-	clear_ipv4_frags(&h->slaver_data->ipv4_frags);
+	clear_ipv4_frags(&ics->slaver_data->ipv4_frags);
 
 	/* copy ipv4 fragments from master */
-	copy_ipv4_frags(&h->master_data->ipv4_frags, &h->slaver_data->ipv4_frags);
+	copy_ipv4_frags(&ics->master_data->ipv4_frags,
+			&ics->slaver_data->ipv4_frags);
 }
 
 static void update_compare_info(struct connect_info *conn_info, struct sk_buff *skb)
@@ -353,18 +354,18 @@ static void update_compare_info(struct connect_info *conn_info, struct sk_buff *
 	ip_update_compare_info(&conn_info->m_info, ip, skb);
 }
 
-static void move_master_queue(struct hash_head *h)
+static void move_master_queue(struct if_connections *ics)
 {
 	int i;
 	struct sk_buff *skb;
 	struct connect_info *conn_info;
 
 	for (i = 0; i < HASH_NR; i++) {
-		list_for_each_entry(conn_info, &h->entry[i], list) {
+		list_for_each_entry(conn_info, &ics->entry[i], list) {
 			skb = skb_dequeue(&conn_info->master_queue);
 			while (skb != NULL) {
 				update_compare_info(conn_info, skb);
-				skb_queue_tail(&h->wait_for_release, skb);
+				skb_queue_tail(&ics->wait_for_release, skb);
 				skb = skb_dequeue(&conn_info->master_queue);
 			}
 
@@ -381,21 +382,21 @@ static void move_master_queue(struct hash_head *h)
 	}
 }
 
-static void release_queue(struct hash_head *h)
+static void release_queue(struct if_connections *ics)
 {
 	struct sk_buff *skb;
 	int flag = 0;
 
-	skb = skb_dequeue(&h->wait_for_release);
+	skb = skb_dequeue(&ics->wait_for_release);
 	while (skb != NULL) {
 		flag = 1;
 		++rel_count;
-		skb_queue_tail(&h->master_data->rel, skb);
-		skb = skb_dequeue(&h->wait_for_release);
+		skb_queue_tail(&ics->master_data->rel, skb);
+		skb = skb_dequeue(&ics->wait_for_release);
 	}
 
 	if (flag)
-		netif_schedule_queue(h->master_data->sch->dev_queue);
+		netif_schedule_queue(ics->master_data->sch->dev_queue);
 }
 
 static void release_skb(struct sk_buff_head *head, struct sk_buff *skb)
@@ -473,7 +474,7 @@ static void compare(struct connect_info *conn_info)
 	int ret;
 	struct compare_info info_m, info_s;
 	struct timespec start, end, delta;
-	struct hash_head *h = conn_info->head;
+	struct if_connections *ics = conn_info->ics;
 	bool skip_compare_one = false;
 
 	getnstimeofday(&start);
@@ -515,8 +516,8 @@ static void compare(struct connect_info *conn_info)
 				skb_m = info_m.skb;
 
 			if (likely(ret & BYPASS_MASTER)) {
-				release_skb(&h->master_data->rel, skb_m);
-				netif_schedule_queue(h->master_data->sch->dev_queue);
+				release_skb(&ics->master_data->rel, skb_m);
+				netif_schedule_queue(ics->master_data->sch->dev_queue);
 			} else if (skb_m) {
 				skb_queue_head(&conn_info->master_queue, skb_m);
 			}
@@ -525,8 +526,8 @@ static void compare(struct connect_info *conn_info)
 				skb_s = info_s.skb;
 
 			if (likely(ret & DROP_SLAVER)) {
-				release_skb(&h->slaver_data->rel, skb_s);
-				netif_schedule_queue(h->slaver_data->sch->dev_queue);
+				release_skb(&ics->slaver_data->rel, skb_s);
+				netif_schedule_queue(ics->slaver_data->sch->dev_queue);
 			} else if (skb_s) {
 				skb_queue_head(&conn_info->slaver_queue, skb_s);
 			}
@@ -539,9 +540,9 @@ static void compare(struct connect_info *conn_info)
 			/*
 			 *  Put makster's skb to temporary queue, drop slaver's.
 			 */
-			release_skb(&h->wait_for_release, skb_m);
+			release_skb(&ics->wait_for_release, skb_m);
 
-			release_skb(&h->slaver_data->rel, skb_s);
+			release_skb(&ics->slaver_data->rel, skb_s);
 
 			state = state_incheckpoint;
 			wake_up_interruptible(&queue);
@@ -603,8 +604,8 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 {
 	struct sk_buff *skb;
 	int i, j;
-	struct sched_data *master_queue = colo_hash_head->master_data;
-	struct sched_data *slaver_queue = colo_hash_head->slaver_data;
+	struct sched_data *master_queue = colo_ics->master_data;
+	struct sched_data *slaver_queue = colo_ics->slaver_data;
 	struct connect_info *conn_info;
 
 	pr_info("STAT: update=%u, in_soft_irq=%u, total_time=%llu, last_time=%llu, max_time=%llu\n",
@@ -614,7 +615,7 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 
 	for (i = 0; i < HASH_NR; i++) {
 		j = 0;
-		list_for_each_entry(conn_info, &master_queue->blo->entry[i], list) {
+		list_for_each_entry(conn_info, &master_queue->ics->entry[i], list) {
 			skb = skb_peek(&conn_info->master_queue);
 			if (skb != NULL)
 				pr_info("STAT: m_blo[%d, %d] not empty.\n", i, j);
@@ -628,7 +629,7 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 
 	for (i = 0; i < HASH_NR; i++) {
 		j = 0;
-		list_for_each_entry(conn_info, &slaver_queue->blo->entry[i], list) {
+		list_for_each_entry(conn_info, &slaver_queue->ics->entry[i], list) {
 			skb = skb_peek(&conn_info->slaver_queue);
 			if (skb != NULL)
 				pr_info("STAT: s_blo[%d] not empty.\n", i);

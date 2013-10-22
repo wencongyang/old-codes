@@ -20,8 +20,8 @@ enum {
 struct list_head queue = LIST_HEAD_INIT(queue);
 spinlock_t queue_lock;
 
-struct hash_head *colo_hash_head;
-EXPORT_SYMBOL(colo_hash_head);
+struct if_connections *colo_ics;
+EXPORT_SYMBOL(colo_ics);
 
 struct list_head compare_head = LIST_HEAD_INIT(compare_head);
 spinlock_t compare_lock;
@@ -35,51 +35,51 @@ static inline int skb_remove_foreign_references(struct sk_buff *skb)
 	return !skb_linearize(skb);
 }
 
-static struct hash_head *alloc_hash(struct colo_idx *idx, int flags)
+static struct if_connections *alloc_if_connections(struct colo_idx *idx, int flags)
 {
-	struct hash_head *h;
+	struct if_connections *ics;
 
 	spin_lock(&queue_lock);
-	list_for_each_entry(h, &queue, list) {
-		if (h->idx.master_idx != idx->master_idx ||
-		    h->idx.slaver_idx != idx->slaver_idx)
+	list_for_each_entry(ics, &queue, list) {
+		if (ics->idx.master_idx != idx->master_idx ||
+		    ics->idx.slaver_idx != idx->slaver_idx)
 			continue;
 
 		if (flags & IS_MASTER)
-			if (h->master)
-				h = ERR_PTR(-EBUSY);
+			if (ics->master)
+				ics = ERR_PTR(-EBUSY);
 			else
-				h->master = 1;
+				ics->master = 1;
 		else
-			if (h->slaver)
-				h = ERR_PTR(-EBUSY);
+			if (ics->slaver)
+				ics = ERR_PTR(-EBUSY);
 			else
-				h->slaver = 1;
+				ics->slaver = 1;
 
 		goto out;
 	}
 
-	h = kmalloc(sizeof(struct hash_head), GFP_ATOMIC);
-	if (!h) {
-		h = ERR_PTR(-ENOMEM);
+	ics = kmalloc(sizeof(struct if_connections), GFP_ATOMIC);
+	if (!ics) {
+		ics = ERR_PTR(-ENOMEM);
 		goto out;
 	}
 
-	hash_init(h);
+	init_if_connections(ics);
 
-	h->idx = *idx;
+	ics->idx = *idx;
 	if (flags & IS_MASTER)
-		h->master = 1;
+		ics->master = 1;
 	else
-		h->slaver = 1;
-	list_add_tail(&h->list, &queue);
+		ics->slaver = 1;
+	list_add_tail(&ics->list, &queue);
 
 out:
-	if (colo_hash_head)
-		pr_warn("colo_hash_head: %p, h: %p\n", colo_hash_head, h);
-	colo_hash_head = h;
+	if (colo_ics)
+		pr_warn("colo_ics: %p, ics: %p\n", colo_ics, ics);
+	colo_ics = ics;
 	spin_unlock(&queue_lock);
-	return h;
+	return ics;
 }
 
 static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
@@ -93,7 +93,7 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 		goto error;
 	}
 
-	conn_info = insert(q->blo, skb, q->flags);
+	conn_info = insert(q->ics, skb, q->flags);
 	if (IS_ERR_OR_NULL(conn_info))
 		if (PTR_ERR(conn_info) != -EINPROGRESS)
 			goto error;
@@ -172,14 +172,14 @@ static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 	}
 	pr_info("master_idx is: %d, slaver_idx is: %d, flags: %02x\n", idx->master_idx, idx->slaver_idx, *flags);
 
-	q->blo = alloc_hash(idx, *flags);
-	if (IS_ERR(q->blo))
-		return PTR_ERR(q->blo);
+	q->ics = alloc_if_connections(idx, *flags);
+	if (IS_ERR(q->ics))
+		return PTR_ERR(q->ics);
 
 	if (*flags & IS_MASTER)
-		q->blo->master_data = q;
+		q->ics->master_data = q;
 	else
-		q->blo->slaver_data = q;
+		q->ics->slaver_data = q;
 	skb_queue_head_init(&q->rel);
 	q->sch = sch;
 	q->flags = *flags;

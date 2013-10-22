@@ -10,7 +10,7 @@
 #include "ip_fragment.h"
 
 struct sched_data {
-	struct hash_head *blo; /* packets not compared */
+	struct if_connections *ics; /* packets not compared */
 	struct sk_buff_head rel; /* packest compared successfully */
 	struct Qdisc* sch;
 	uint32_t flags;
@@ -18,7 +18,7 @@ struct sched_data {
 	struct ip_frags ipv4_frags;
 };
 
-extern struct hash_head *colo_hash_head;
+extern struct if_connections *colo_ics;
 extern struct list_head compare_head;
 extern spinlock_t compare_lock;
 extern wait_queue_head_t compare_queue;
