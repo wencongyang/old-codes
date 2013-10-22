@@ -208,6 +208,13 @@ get_tcphdr_info(struct tcphdr *tcp, int length,
 	if (length > 0)
 		tcphdr_info->flags |= HAVE_PAYLOAD;
 
+	if (tcp->rst)
+		/*
+		 * rst packet, not ack update, win update, or retransmitted
+		 * packet
+		 */
+		return;
+
 	if (tcphdr_info->length > 0)
 		goto check_retransmitted_packet;
 
