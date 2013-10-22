@@ -15,7 +15,6 @@
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
 #include <linux/semaphore.h>
-#include <linux/cdev.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
 #include <net/pkt_sched.h>
@@ -28,17 +27,9 @@
 #include "ip_fragment.h"
 #include "ipv4_fragment.h"
 
-int cmp_open(struct inode*, struct file*);
-int cmp_release(struct inode*, struct file*);
-long cmp_ioctl(struct file*, unsigned int, unsigned long);
 static int failover = 0;
 
 struct task_struct *compare_task;
-
-#define COMP_IOC_MAGIC 		'k'
-#define COMP_IOCTWAIT 		_IO(COMP_IOC_MAGIC, 0)
-#define COMP_IOCTSUSPEND 	_IO(COMP_IOC_MAGIC, 1)
-#define COMP_IOCTRESUME 	_IO(COMP_IOC_MAGIC, 2)
 
 struct proc_dir_entry* proc_entry;
 struct statistic_data {
@@ -47,126 +38,9 @@ struct statistic_data {
 	unsigned long long max_time;
 } statis;
 
-struct file_operations cmp_fops = {
-	.owner = THIS_MODULE,
-	.open = cmp_open,
-	.unlocked_ioctl = cmp_ioctl,
-	.release = cmp_release,
-};
-
-struct _cmp_dev {
-	struct semaphore sem; /* only one client can open this device */
-	struct cdev cdev;
-} cmp_dev;
-
-static void clear_slaver_queue(struct if_connections *ics);
-static void move_master_queue(struct if_connections *ics);
-static void release_queue(struct if_connections *ics);
-
 wait_queue_head_t queue;
-int cmp_major=0, cmp_minor=0;
 
-enum {
-	state_comparing,
-	state_incheckpoint,
-	state_failover,
-};
-
-static int state = state_comparing;
-
-static int cmp_setup_cdev(struct _cmp_dev *dev) {
-	int err, devno = MKDEV(cmp_major, cmp_minor);
-
-	cdev_init(&dev->cdev, &cmp_fops);
-	dev->cdev.owner = THIS_MODULE;
-	dev->cdev.ops = &cmp_fops;
-	err = cdev_add(&dev->cdev, devno, 1);
-
-	if (err) {
-		pr_warn("HA_compare: Error %d adding devices.\n", err);
-		return -1;
-	}
-
-	return 0;
-}
-
-int cmp_open(struct inode *inode, struct file *filp)
-{
-	struct _cmp_dev *dev;
-
-	dev = container_of(inode->i_cdev, struct _cmp_dev, cdev);
-	/* try to get the mutext, thus only one client can open this dev */
-	if (down_trylock(&dev->sem)) {
-		pr_notice("HA_compare: another client allready opened this dev.\n");
-		return -1;
-	}
-
-	pr_notice("HA_compare: open successfully.\n");
-	filp->private_data = dev;
-	return 0;
-}
-
-int cmp_release(struct inode *inode, struct file *filp)
-{
-	struct _cmp_dev *dev;
-
-	dev = container_of(inode->i_cdev, struct _cmp_dev, cdev);
-	up(&dev->sem);
-	pr_notice("HA_compare: close.\n");
-
-	return 0;
-}
-
-long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
-{
-	int ret;
-
-	switch(cmd) {
-	case COMP_IOCTWAIT:
-		/* wait for a new checkpoint */
-#if 1
-		ret = wait_event_interruptible_timeout(queue, state != state_comparing, 10);
-		if (ret == 0)
-			return -ETIME;
-
-		if (ret < 0)
-			return -ERESTART;
-#else
-		if (wait_event_interruptible(queue, state != state_comparing))
-			return -ERESTART;
-#endif
-
-		if (state == state_failover)
-			return -2;
-
-		pr_notice("HA_compare: --------start a new checkpoint.\n");
-
-		break;
-	case COMP_IOCTSUSPEND:
-		/*  Both side suspend the VM, at this point, no packets will
-		 *  send out from VM, so block skb queues(master&slaver) are
-		 *  stable. Move master block queue to a temporary queue, then
-		 *  they will be released when checkpoint ends. For slaver
-		 *  block queue, just drop them.
-		 */
-		pr_notice("HA_compare: --------both side suspended.\n");
-
-		move_master_queue(colo_ics);
-		clear_slaver_queue(colo_ics);
-		break;
-	case COMP_IOCTRESUME:
-		/*
-		 *  Checkpoint finish, relese skb in temporary queue
-		 */
-		pr_notice("HA_compare: --------checkpoint finish.\n");
-		release_queue(colo_ics);
-		state = state_comparing;
-
-		break;
-	}
-
-	return 0;
-}
+uint32_t state = state_comparing;
 
 struct arp_reply {
 	unsigned char		ar_sha[ETH_ALEN];
@@ -276,86 +150,6 @@ compare_skb(struct compare_info *m, struct compare_info *s)
 
 different:
 	return CHECKPOINT;
-}
-
-static void clear_slaver_queue(struct if_connections *ics)
-{
-	int i;
-	struct sk_buff *skb;
-	struct connect_info *conn_info;
-
-	for (i = 0; i < HASH_NR; i++) {
-		list_for_each_entry(conn_info, &ics->entry[i], list) {
-			skb = skb_dequeue(&conn_info->slaver_queue);
-			while (skb != NULL) {
-				skb_queue_tail(&conn_info->ics->slaver_data->rel, skb);
-				skb = skb_dequeue(&conn_info->slaver_queue);
-			}
-		}
-	}
-
-	/* clear ip fragments */
-	clear_ipv4_frags(&ics->slaver_data->ipv4_frags);
-
-	/* copy ipv4 fragments from master */
-	copy_ipv4_frags(&ics->master_data->ipv4_frags,
-			&ics->slaver_data->ipv4_frags);
-}
-
-static void update_compare_info(struct connect_info *conn_info, struct sk_buff *skb)
-{
-	struct ethhdr *eth = (struct ethhdr *)skb->data;
-	struct iphdr *ip;
-
-	if (htons(eth->h_proto) != ETH_P_IP)
-		return;
-
-	ip = (struct iphdr *)(skb->data + sizeof(*eth));
-	ipv4_update_compare_info(&conn_info->m_info, ip, skb);
-}
-
-static void move_master_queue(struct if_connections *ics)
-{
-	int i;
-	struct sk_buff *skb;
-	struct connect_info *conn_info;
-
-	for (i = 0; i < HASH_NR; i++) {
-		list_for_each_entry(conn_info, &ics->entry[i], list) {
-			skb = skb_dequeue(&conn_info->master_queue);
-			while (skb != NULL) {
-				update_compare_info(conn_info, skb);
-				skb_queue_tail(&ics->wait_for_release, skb);
-				skb = skb_dequeue(&conn_info->master_queue);
-			}
-
-			/*
-			 * copy compare info:
-			 *      We call this function when a new checkpoint is
-			 *      finished. The status of master and slaver is
-			 *      the same. So slaver's compare info shoule be
-			 *      the same as master's.
-			 */
-			memcpy(&conn_info->s_info, &conn_info->m_info,
-				sizeof(conn_info->s_info));
-		}
-	}
-}
-
-static void release_queue(struct if_connections *ics)
-{
-	struct sk_buff *skb;
-	int flag = 0;
-
-	skb = skb_dequeue(&ics->wait_for_release);
-	while (skb != NULL) {
-		flag = 1;
-		skb_queue_tail(&ics->master_data->rel, skb);
-		skb = skb_dequeue(&ics->wait_for_release);
-	}
-
-	if (flag)
-		netif_schedule_queue(ics->master_data->sch->dev_queue);
 }
 
 static void release_skb(struct sk_buff_head *head, struct sk_buff *skb)
@@ -624,22 +418,10 @@ int write_proc(struct file *file, const char *buffer, unsigned long count, void 
 static int __init compare_module_init(void)
 {
 	int result;
-	dev_t dev;
 
-	/* allocate a device id */
-	result = alloc_chrdev_region(&dev, cmp_minor, 1, "HA_compare");
-	if (result < 0) {
-		pr_err("HA_compare: can't get device id.\n");
+	result = colo_dev_init();
+	if (result)
 		return result;
-	}
-	cmp_major = MAJOR(dev);
-
-	/* setup device */
-	result = cmp_setup_cdev(&cmp_dev);
-	if (result) {
-		pr_err("HA_compare: can't setup device.\n");
-		goto err_setup;
-	}
 
 	/*
 	 * create kernel thread
@@ -654,7 +436,6 @@ static int __init compare_module_init(void)
 		goto err_thread;
 	}
 
-	sema_init(&cmp_dev.sem, 1);
 	init_waitqueue_head(&queue);
 
 	compare_tcp_init();
@@ -670,9 +451,7 @@ static int __init compare_module_init(void)
 	return 0;
 
 err_thread:
-	cdev_del(&cmp_dev.cdev);
-err_setup:
-	unregister_chrdev_region(MKDEV(cmp_major, cmp_minor), 1);
+	colo_dev_fini();
 
 	return result;
 }
@@ -684,11 +463,7 @@ static void __exit compare_module_exit(void)
 	compare_tcp_fini();
 	compare_udp_fini();
 
-	/* del device */
-	cdev_del(& cmp_dev.cdev);
-
-	/* free a device id */
-	unregister_chrdev_region(MKDEV(cmp_major, cmp_minor), 1);
+	colo_dev_fini();
 
 	remove_proc_entry("HA_compare", NULL);
 }

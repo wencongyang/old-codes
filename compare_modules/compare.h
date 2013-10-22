@@ -7,6 +7,13 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
+enum {
+	state_comparing,
+	state_incheckpoint,
+	state_failover,
+};
+extern uint32_t state;
+
 struct compare_info {
 	struct sk_buff *skb;
 	struct ethhdr *eth;
@@ -48,6 +55,11 @@ typedef struct compare_ops compare_ops_t;
 #define		CHECKPOINT		0x80000000
 
 extern uint32_t compare_other_packet(void *m, void *s, int length);
+extern wait_queue_head_t queue;
+
+/* compare device */
+extern int colo_dev_init(void);
+extern void colo_dev_fini(void);
 
 /* ipv4 */
 extern uint32_t ipv4_compare_packet(struct compare_info *m,
