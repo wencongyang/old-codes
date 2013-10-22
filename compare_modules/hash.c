@@ -107,34 +107,34 @@ static int skb_flow_dissect(const struct sk_buff *skb,
 	return 0;
 }
 
-static struct hash_value *alloc_hash_value(struct flow_keys *key)
+static struct connect_info *alloc_connect_info(struct flow_keys *key)
 {
-	struct hash_value *value;
+	struct connect_info *conn_info;
 
-	value = kzalloc(sizeof(*value), GFP_ATOMIC);
-	if (!value)
+	conn_info = kzalloc(sizeof(*conn_info), GFP_ATOMIC);
+	if (!conn_info)
 		return NULL;
 
-	value->key = *key;
-	INIT_LIST_HEAD(&value->list);
-	INIT_LIST_HEAD(&value->compare_list);
-	skb_queue_head_init(&value->master_queue);
-	skb_queue_head_init(&value->slaver_queue);
-	value->head = NULL;
+	conn_info->key = *key;
+	INIT_LIST_HEAD(&conn_info->list);
+	INIT_LIST_HEAD(&conn_info->compare_list);
+	skb_queue_head_init(&conn_info->master_queue);
+	skb_queue_head_init(&conn_info->slaver_queue);
+	conn_info->head = NULL;
 
-	return value;
+	return conn_info;
 }
 
-static struct hash_value *get_hash_value(struct list_head *head, struct flow_keys *key)
+static struct connect_info *get_connect_info(struct list_head *head, struct flow_keys *key)
 {
-	struct hash_value *value;
+	struct connect_info *conn_info;
 
-	list_for_each_entry(value, head, list) {
-		if (value->key.src == key->src &&
-		    value->key.dst == key->dst &&
-		    value->key.ports == key->ports &&
-		    value->key.ip_proto == key->ip_proto)
-			return value;
+	list_for_each_entry(conn_info, head, list) {
+		if (conn_info->key.src == key->src &&
+		    conn_info->key.dst == key->dst &&
+		    conn_info->key.ports == key->ports &&
+		    conn_info->key.ip_proto == key->ip_proto)
+			return conn_info;
 	}
 
 	return NULL;
@@ -162,10 +162,10 @@ static void free_fragments(struct sk_buff *head, struct sk_buff *except)
 	} while (skb != NULL);
 }
 
-struct hash_value *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags)
+struct connect_info *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags)
 {
 	struct flow_keys key;
-	struct hash_value *value;
+	struct connect_info *conn_info;
 	struct sk_buff *head = NULL;
 	uint32_t hash;
 	int i;
@@ -201,23 +201,23 @@ struct hash_value *insert(struct hash_head *h, struct sk_buff *skb, uint32_t fla
 	hash = jhash(&key, sizeof(key), JHASH_INITVAL);
 
 	i = hash % HASH_NR;
-	value = get_hash_value(&h->entry[i], &key);
-	if (unlikely(!value)) {
-		value = alloc_hash_value(&key);
-		if (unlikely(!value)) {
+	conn_info = get_connect_info(&h->entry[i], &key);
+	if (unlikely(!conn_info)) {
+		conn_info = alloc_connect_info(&key);
+		if (unlikely(!conn_info)) {
 			if (head)
 				free_fragments(head, skb);
 			return NULL;
 		}
 
-		value->head = h;
-		list_add_tail(&value->list, &h->entry[i]);
+		conn_info->head = h;
+		list_add_tail(&conn_info->list, &h->entry[i]);
 	}
 
 	if (flags & IS_MASTER)
-		skb_queue_tail(&value->master_queue, head ? head : skb);
+		skb_queue_tail(&conn_info->master_queue, head ? head : skb);
 	else
-		skb_queue_tail(&value->slaver_queue, head ? head : skb);
+		skb_queue_tail(&conn_info->slaver_queue, head ? head : skb);
 
-	return value;
+	return conn_info;
 }

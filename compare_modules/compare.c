@@ -89,7 +89,7 @@ struct _cmp_dev {
 static void clear_slaver_queue(struct hash_head *h);
 static void move_master_queue(struct hash_head *h);
 static void release_queue(struct hash_head *h);
-void update(struct hash_value *h);
+void update(struct connect_info *h);
 
 wait_queue_head_t queue;
 int cmp_major=0, cmp_minor=0;
@@ -322,14 +322,14 @@ static void clear_slaver_queue(struct hash_head *h)
 {
 	int i;
 	struct sk_buff *skb;
-	struct hash_value *value;
+	struct connect_info *conn_info;
 
 	for (i = 0; i < HASH_NR; i++) {
-		list_for_each_entry(value, &h->entry[i], list) {
-			skb = skb_dequeue(&value->slaver_queue);
+		list_for_each_entry(conn_info, &h->entry[i], list) {
+			skb = skb_dequeue(&conn_info->slaver_queue);
 			while (skb != NULL) {
-				skb_queue_tail(&value->head->slaver_data->rel, skb);
-				skb = skb_dequeue(&value->slaver_queue);
+				skb_queue_tail(&conn_info->head->slaver_data->rel, skb);
+				skb = skb_dequeue(&conn_info->slaver_queue);
 			}
 		}
 	}
@@ -341,7 +341,7 @@ static void clear_slaver_queue(struct hash_head *h)
 	copy_ipv4_frags(&h->master_data->ipv4_frags, &h->slaver_data->ipv4_frags);
 }
 
-static void update_compare_info(struct hash_value *value, struct sk_buff *skb)
+static void update_compare_info(struct connect_info *conn_info, struct sk_buff *skb)
 {
 	struct ethhdr *eth = (struct ethhdr *)skb->data;
 	struct iphdr *ip;
@@ -350,22 +350,22 @@ static void update_compare_info(struct hash_value *value, struct sk_buff *skb)
 		return;
 
 	ip = (struct iphdr *)(skb->data + sizeof(*eth));
-	ip_update_compare_info(&value->m_info, ip, skb);
+	ip_update_compare_info(&conn_info->m_info, ip, skb);
 }
 
 static void move_master_queue(struct hash_head *h)
 {
 	int i;
 	struct sk_buff *skb;
-	struct hash_value *value;
+	struct connect_info *conn_info;
 
 	for (i = 0; i < HASH_NR; i++) {
-		list_for_each_entry(value, &h->entry[i], list) {
-			skb = skb_dequeue(&value->master_queue);
+		list_for_each_entry(conn_info, &h->entry[i], list) {
+			skb = skb_dequeue(&conn_info->master_queue);
 			while (skb != NULL) {
-				update_compare_info(value, skb);
+				update_compare_info(conn_info, skb);
 				skb_queue_tail(&h->wait_for_release, skb);
-				skb = skb_dequeue(&value->master_queue);
+				skb = skb_dequeue(&conn_info->master_queue);
 			}
 
 			/*
@@ -375,8 +375,8 @@ static void move_master_queue(struct hash_head *h)
 			 *      the same. So slaver's compare info shoule be
 			 *      the same as master's.
 			 */
-			memcpy(&value->s_info, &value->m_info,
-				sizeof(value->s_info));
+			memcpy(&conn_info->s_info, &conn_info->m_info,
+				sizeof(conn_info->s_info));
 		}
 	}
 }
@@ -466,14 +466,14 @@ unsupported:
 	return 0;
 }
 
-static void compare(struct hash_value *hash_value)
+static void compare(struct connect_info *conn_info)
 {
 	struct sk_buff *skb_m;
 	struct sk_buff *skb_s;
 	int ret;
 	struct compare_info info_m, info_s;
 	struct timespec start, end, delta;
-	struct hash_head *h = hash_value->head;
+	struct hash_head *h = conn_info->head;
 	bool skip_compare_one = false;
 
 	getnstimeofday(&start);
@@ -486,8 +486,8 @@ static void compare(struct hash_value *hash_value)
 		if (state != state_comparing)
 			break;
 
-		skb_m = skb_dequeue(&hash_value->master_queue);
-		skb_s = skb_dequeue(&hash_value->slaver_queue);
+		skb_m = skb_dequeue(&conn_info->master_queue);
+		skb_s = skb_dequeue(&conn_info->slaver_queue);
 
 		if (!skb_m && !skb_s)
 			break;
@@ -495,17 +495,17 @@ static void compare(struct hash_value *hash_value)
 		if ((!skb_m || !skb_s) && skip_compare_one) {
 			/* We have checked skb_m or skb_s */
 			if (skb_m)
-				skb_queue_head(&hash_value->master_queue, skb_m);
+				skb_queue_head(&conn_info->master_queue, skb_m);
 
 			if (skb_s)
-				skb_queue_head(&hash_value->slaver_queue, skb_s);
+				skb_queue_head(&conn_info->slaver_queue, skb_s);
 			break;
 		}
 
 		info_m.skb = skb_m;
 		info_s.skb = skb_s;
-		info_m.private_data = &hash_value->m_info;
-		info_s.private_data = &hash_value->s_info;
+		info_m.private_data = &conn_info->m_info;
+		info_s.private_data = &conn_info->s_info;
 		if (!skb_m || !skb_s)
 			ret = compare_one_skb(&info_m, &info_s);
 		else
@@ -518,7 +518,7 @@ static void compare(struct hash_value *hash_value)
 				release_skb(&h->master_data->rel, skb_m);
 				netif_schedule_queue(h->master_data->sch->dev_queue);
 			} else if (skb_m) {
-				skb_queue_head(&hash_value->master_queue, skb_m);
+				skb_queue_head(&conn_info->master_queue, skb_m);
 			}
 
 			if (!skb_s && info_s.skb)
@@ -528,7 +528,7 @@ static void compare(struct hash_value *hash_value)
 				release_skb(&h->slaver_data->rel, skb_s);
 				netif_schedule_queue(h->slaver_data->sch->dev_queue);
 			} else if (skb_s) {
-				skb_queue_head(&hash_value->slaver_queue, skb_s);
+				skb_queue_head(&conn_info->slaver_queue, skb_s);
 			}
 			//pr_info("netif_schedule%u.\n", cnt);
 			if (!ret)
@@ -558,25 +558,25 @@ static void compare(struct hash_value *hash_value)
 	statis.total_time += statis.last_time;
 }
 
-static struct hash_value *get_hash_value(void)
+static struct connect_info *get_connect_info(void)
 {
-	struct hash_value *value = NULL;
+	struct connect_info *conn_info = NULL;
 
 	spin_lock_bh(&compare_lock);
 	if (list_empty(&compare_head))
 		goto out;
 
-	value = list_first_entry(&compare_head, struct hash_value,
+	conn_info = list_first_entry(&compare_head, struct connect_info,
 				 compare_list);
-	list_del_init(&value->compare_list);
+	list_del_init(&conn_info->compare_list);
 out:
 	spin_unlock_bh(&compare_lock);
-	return value;
+	return conn_info;
 }
 
 static int compare_kthread(void *data)
 {
-	struct hash_value *value;
+	struct connect_info *conn_info;
 
 	while(!kthread_should_stop()) {
 		wait_event_interruptible(compare_queue,
@@ -587,9 +587,9 @@ static int compare_kthread(void *data)
 			break;
 
 		while(!list_empty(&compare_head)) {
-			value = get_hash_value();
-			if (value)
-				compare(value);
+			conn_info = get_connect_info();
+			if (conn_info)
+				compare(conn_info);
 
 			if (kthread_should_stop())
 				break;
@@ -605,7 +605,7 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	int i, j;
 	struct sched_data *master_queue = colo_hash_head->master_data;
 	struct sched_data *slaver_queue = colo_hash_head->slaver_data;
-	struct hash_value *value;
+	struct connect_info *conn_info;
 
 	pr_info("STAT: update=%u, in_soft_irq=%u, total_time=%llu, last_time=%llu, max_time=%llu\n",
 		statis.update, statis.in_soft_irq, statis.total_time, statis.last_time, statis.max_time);
@@ -614,8 +614,8 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 
 	for (i = 0; i < HASH_NR; i++) {
 		j = 0;
-		list_for_each_entry(value, &master_queue->blo->entry[i], list) {
-			skb = skb_peek(&value->master_queue);
+		list_for_each_entry(conn_info, &master_queue->blo->entry[i], list) {
+			skb = skb_peek(&conn_info->master_queue);
 			if (skb != NULL)
 				pr_info("STAT: m_blo[%d, %d] not empty.\n", i, j);
 			j++;
@@ -628,8 +628,8 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 
 	for (i = 0; i < HASH_NR; i++) {
 		j = 0;
-		list_for_each_entry(value, &slaver_queue->blo->entry[i], list) {
-			skb = skb_peek(&value->slaver_queue);
+		list_for_each_entry(conn_info, &slaver_queue->blo->entry[i], list) {
+			skb = skb_peek(&conn_info->slaver_queue);
 			if (skb != NULL)
 				pr_info("STAT: s_blo[%d] not empty.\n", i);
 			j++;

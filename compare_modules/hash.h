@@ -28,7 +28,7 @@ struct flow_keys {
 struct hash_head;
 struct sched_data;
 
-struct hash_value {
+struct connect_info {
 	struct sk_buff_head master_queue;
 	struct sk_buff_head slaver_queue;
 	struct hash_head *head;
@@ -53,6 +53,6 @@ struct hash_head {
 };
 
 void hash_init(struct hash_head *h);
-struct hash_value *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags);
+struct connect_info *insert(struct hash_head *h, struct sk_buff *skb, uint32_t flags);
 
 #endif

@@ -85,7 +85,7 @@ out:
 static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
 	struct sched_data *q = qdisc_priv(sch);
-	struct hash_value *hash_value;
+	struct connect_info *conn_info;
 	int wakeup;
 
 	if (!skb_remove_foreign_references(skb)) {
@@ -93,16 +93,16 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 		goto error;
 	}
 
-	hash_value = insert(q->blo, skb, q->flags);
-	if (IS_ERR_OR_NULL(hash_value))
-		if (PTR_ERR(hash_value) != -EINPROGRESS)
+	conn_info = insert(q->blo, skb, q->flags);
+	if (IS_ERR_OR_NULL(conn_info))
+		if (PTR_ERR(conn_info) != -EINPROGRESS)
 			goto error;
 
 	sch->qstats.backlog += qdisc_pkt_len(skb);
 	sch->bstats.bytes += qdisc_pkt_len(skb);
 	sch->bstats.packets++;
 
-	if (PTR_ERR(hash_value) == -EINPROGRESS)
+	if (PTR_ERR(conn_info) == -EINPROGRESS)
 		goto out;
 
 	/*
@@ -110,8 +110,8 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 	 */
 	spin_lock(&compare_lock);
 	wakeup = list_empty(&compare_head);
-	if (list_empty(&hash_value->compare_list))
-		list_add_tail(&hash_value->compare_list, &compare_head);
+	if (list_empty(&conn_info->compare_list))
+		list_add_tail(&conn_info->compare_list, &compare_head);
 	spin_unlock(&compare_lock);
 	if (wakeup)
 		wake_up_interruptible(&compare_queue);
