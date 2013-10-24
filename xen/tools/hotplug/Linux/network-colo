@@ -141,7 +141,7 @@ function uninstall_master() {
     stop_master
 
     # shutdown $ifb1
-    tc qdisc del dev $ifb1 root handle 1: master
+    tc qdisc del dev $ifb1 root handle 1: colo
     ip link set $ifb1 down
 
     # don't forward packets from $pif to $ifb2
@@ -149,7 +149,7 @@ function uninstall_master() {
     tc qdisc del dev $pif ingress
 
     # shutdown $ifb2
-    tc qdisc del dev $ifb2 root handle 1: slaver
+    tc qdisc del dev $ifb2 root handle 1: colo
     ip link set $ifb2 down
 
     ifconfig $pif -promisc
