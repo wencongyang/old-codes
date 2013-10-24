@@ -82,6 +82,31 @@ out:
 	return ics;
 }
 
+static void free_if_connections(struct if_connections *ics, int flags)
+{
+	spin_lock(&queue_lock);
+
+	if (flags & IS_MASTER && ics->master) {
+		ics->master = 0;
+	} else if (!(flags & IS_MASTER) && ics->slaver) {
+		ics->slaver = 0;
+	} else {
+		goto out;
+	}
+
+	if (!ics->master && !ics->slaver) {
+		list_del_init(&ics->list);
+		if (colo_ics == ics)
+			colo_ics = NULL;
+		destroy_connections(ics, flags | DESTROY);
+		kfree(ics);
+	} else
+		destroy_connections(ics, flags);
+
+out:
+	spin_unlock(&queue_lock);
+}
+
 static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 {
 	struct colo_sched_data *q = qdisc_priv(sch);
@@ -188,6 +213,17 @@ static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 	return 0;
 }
 
+static void colo_fini(struct Qdisc *sch)
+{
+	struct colo_sched_data *q = qdisc_priv(sch);
+	struct sk_buff *skb;
+
+	clear_ipv4_frags(&q->ipv4_frags);
+	free_if_connections(q->ics, q->flags);
+	while ((skb = skb_dequeue(&q->rel)) != NULL)
+		kfree_skb(skb);
+}
+
 struct Qdisc_ops colo_qdisc_ops = {
 	.id          =       "colo",
 	.priv_size   =       sizeof(struct colo_sched_data),
@@ -195,6 +231,7 @@ struct Qdisc_ops colo_qdisc_ops = {
 	.dequeue     =       colo_dequeue,
 	.peek        =       qdisc_peek_head,
 	.init        =       colo_init,
+	.destroy     =       colo_fini,
 	.owner       =       THIS_MODULE,
 };
 
