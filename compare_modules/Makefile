@@ -1,6 +1,6 @@
 obj-m := sch_colo.o HA_compare.o
 
-sch_colo-objs := colo.o hash.o ipv4_fragment.o ip_fragment.o
+sch_colo-objs := colo.o if_connections.o ipv4_fragment.o ip_fragment.o
 HA_compare-objs := compare.o compare_device.o compare_tcp.o compare_udp.o compare_ipv4.o
 KERNELBUILD := /lib/modules/`uname -r`/build
 default:

@@ -1,7 +1,7 @@
 #include <linux/ip.h>
 #include <net/ip.h>
 
-#include "hash.h"
+#include "if_connections.h"
 #include "comm.h"
 #include "ipv4_fragment.h"
 
