@@ -120,6 +120,8 @@ static struct connect_info *alloc_connect_info(struct flow_keys *key)
 	INIT_LIST_HEAD(&conn_info->compare_list);
 	skb_queue_head_init(&conn_info->master_queue);
 	skb_queue_head_init(&conn_info->slaver_queue);
+	conn_info->state = 0;
+	init_waitqueue_head(&conn_info->wait);
 	conn_info->ics = NULL;
 
 	return conn_info;
@@ -221,4 +223,66 @@ struct connect_info *insert(struct if_connections *ics, struct sk_buff *skb,
 		skb_queue_tail(&conn_info->slaver_queue, head ? head : skb);
 
 	return conn_info;
+}
+
+static void destroy_connection_info(struct connect_info *conn_info, uint32_t flags)
+{
+	struct sk_buff_head *head;
+	struct sk_buff *skb;
+
+	if (flags & IS_MASTER)
+		head = &conn_info->master_queue;
+	else
+		head = &conn_info->slaver_queue;
+
+	while ((skb = skb_dequeue(head)) != NULL) {
+		if (FRAG_CB(skb)->flags & IS_FRAGMENT)
+			free_fragments(skb, NULL);
+		else
+			kfree_skb(skb);
+	}
+}
+
+static void wait_for_comparing_finished(struct connect_info *conn_info)
+{
+	spin_lock_bh(&compare_lock);
+	if (list_empty(&conn_info->list) && conn_info->state & IN_COMPARE)
+		goto wait;
+	if (!list_empty(&conn_info->list))
+		list_del_init(&conn_info->list);
+	spin_unlock_bh(&compare_lock);
+
+	return;
+
+wait:
+	spin_unlock_bh(&compare_lock);
+	wait_event_interruptible(conn_info->wait, !(conn_info->state & IN_COMPARE));
+}
+
+/*
+ * don't call it to destroy both master and slaver interface connections
+ * at the same time
+ */
+void destroy_connections(struct if_connections *ics, uint32_t flags)
+{
+	int i;
+	struct connect_info *conn_info, *temp;
+
+	for (i = 0; i < HASH_NR; i++) {
+		list_for_each_entry_safe(conn_info, temp, &ics->entry[i], list) {
+wait:
+			wait_for_comparing_finished(conn_info);
+			spin_lock_bh(&compare_lock);
+			if (list_empty(&conn_info->list) && conn_info->state & IN_COMPARE) {
+				spin_unlock_bh(&compare_lock);
+				goto wait;
+			}
+			if (!list_empty(&conn_info->list))
+				list_del_init(&conn_info->list);
+			destroy_connection_info(conn_info, flags);
+			spin_unlock_bh(&compare_lock);
+			if (flags & DESTROY)
+				kfree(conn_info);
+		}
+	}
 }

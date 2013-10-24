@@ -7,6 +7,7 @@
 #define HASH_NR 	10000
 
 #define IS_MASTER	(1 << 0)
+#define DESTROY		(1 << 16)
 
 struct colo_idx {
 	uint32_t master_idx;
@@ -36,11 +37,17 @@ struct connect_info {
 	struct flow_keys key;
 	struct list_head list;
 	struct list_head compare_list;
+	uint32_t state;
+	wait_queue_head_t wait;
 
 	/* transport layer defines it */
 	uint32_t m_info[8];
 	uint32_t s_info[8];
 };
+
+/* state */
+#define IN_COMPARE	(1 << 0)
+#define IN_DESTROY	(1 << 1)
 
 struct if_connections {
 	struct list_head entry[HASH_NR];
@@ -56,5 +63,6 @@ extern void init_if_connections(struct if_connections *ics);
 extern struct connect_info *insert(struct if_connections *ics,
 				   struct sk_buff *skb,
 				   uint32_t flags);
+extern void destroy_connections(struct if_connections *ics, uint32_t flags);
 
 #endif

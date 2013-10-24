@@ -321,6 +321,7 @@ static struct connect_info *get_connect_info(void)
 	conn_info = list_first_entry(&compare_head, struct connect_info,
 				 compare_list);
 	list_del_init(&conn_info->compare_list);
+	conn_info->state = IN_COMPARE;
 out:
 	spin_unlock_bh(&compare_lock);
 	return conn_info;
@@ -329,6 +330,7 @@ out:
 static int compare_kthread(void *data)
 {
 	struct connect_info *conn_info;
+	int wakeup;
 
 	while(!kthread_should_stop()) {
 		wait_event_interruptible(compare_queue,
@@ -340,8 +342,15 @@ static int compare_kthread(void *data)
 
 		while(!list_empty(&compare_head)) {
 			conn_info = get_connect_info();
-			if (conn_info)
+			if (conn_info) {
 				compare_one_connection(conn_info);
+				spin_lock_bh(&compare_lock);
+				wakeup = conn_info->state & IN_DESTROY;
+				conn_info->state = 0;
+				spin_unlock_bh(&compare_lock);
+				if (unlikely(wakeup))
+					wake_up_interruptible(&conn_info->wait);
+			}
 
 			if (kthread_should_stop())
 				break;
