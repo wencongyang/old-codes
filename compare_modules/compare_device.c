@@ -205,10 +205,9 @@ static int setup_colo_cdev(struct colo_device *dev)
 int colo_dev_init(void)
 {
 	int ret;
-	dev_t dev;
 
 	/* allocate a device id */
-	ret = alloc_chrdev_region(&dev, 0, 1, "HA_compare");
+	ret = alloc_chrdev_region(&colo_devno, 0, 1, "HA_compare");
 	if (ret < 0) {
 		pr_err("HA_compare: can't get device id.\n");
 		return ret;
