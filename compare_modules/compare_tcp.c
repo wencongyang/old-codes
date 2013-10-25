@@ -360,6 +360,127 @@ static uint32_t check_ack_only_packet(uint32_t m_flags, uint32_t s_flags,
 	return ret;
 }
 
+static void *get_next_opt(void *opts, void *end)
+{
+	uint8_t opcode, opsize;
+	uint8_t *optr = opts;
+	long length = end - opts;
+
+	while (length > 0) {
+		opcode = *optr++;
+		switch(opcode) {
+		case TCPOPT_EOL:
+			return NULL;
+		case TCPOPT_NOP:
+			length--;
+			continue;
+		default:
+			if (length == 1)
+				return NULL;
+
+			opsize = *optr;
+			if (opsize < 2 || opsize > length)
+				return NULL;
+			return optr - 1;
+		}
+	}
+
+	return NULL;
+}
+
+static void *get_next_opt_by_kind(void *opts, void *end, uint8_t kind)
+{
+	uint8_t *optr = get_next_opt(opts, end);
+	uint8_t opcode, opsize;
+
+	while (optr != NULL) {
+		opcode = *optr;
+		opsize = *(optr + 1);
+		if (opcode == kind)
+			return optr;
+
+		optr += opsize;
+		optr = get_next_opt(optr, end);
+	}
+
+	return NULL;
+}
+
+static uint32_t compare_opt(uint8_t *m_optr, uint8_t *s_optr)
+{
+	uint8_t m_opcode, m_opsize;
+	uint8_t s_opcode, s_opsize;
+
+	m_opcode = *m_optr++;
+	m_opsize = *m_optr++;
+	s_opcode = *s_optr++;
+	s_opsize = *s_optr++;
+
+	BUG_ON(m_opcode != s_opcode);
+	if (m_opsize != s_opsize)
+		/* TODO: SACK */
+		return CHECKPOINT;
+
+	if (m_opsize == 2)
+		return 0;
+
+	if (m_opcode != TCPOPT_TIMESTAMP)
+		return memcmp(m_optr, s_optr, m_opsize - 2) ? CHECKPOINT : 0;
+
+	/* TODO:  TIMESTAMP */
+	return 0;
+}
+
+static uint32_t
+compare_tcp_options(void *m_opts, void *m_opts_end, void *s_opts, void *s_opts_end)
+{
+	void *m_opt = get_next_opt(m_opts, m_opts_end);
+	void *s_opt = get_next_opt(s_opts, s_opts_end);
+	uint8_t opcode, opsize;
+	uint8_t *m_optr = m_opt;
+	uint8_t *s_optr = s_opt;
+	uint32_t ret;
+
+	if (!m_opt && !s_opt)
+		return 0;
+
+	if (!m_opt || !s_opt)
+		return CHECKPOINT;
+
+	while (m_optr != NULL) {
+		opcode = *m_optr;
+		opsize = *(m_optr + 1);
+
+		s_optr = get_next_opt_by_kind(s_opt, s_opts_end, opcode);
+		if (!s_optr)
+			/* TODO: SACK */
+			return CHECKPOINT;
+
+		ret = compare_opt(m_optr, s_optr);
+		if (ret)
+			return ret;
+
+		m_optr += opsize;
+		m_optr = get_next_opt(m_optr, m_opts_end);
+	}
+
+	s_optr = s_opt;
+	while (s_optr != NULL) {
+		opcode = *s_optr;
+		opsize = *(s_optr + 1);
+
+		m_optr = get_next_opt_by_kind(m_opt, m_opts_end, opcode);
+		if (!m_optr)
+			/* TODO: SACK */
+			return 1;
+
+		s_optr += opsize;
+		s_optr = get_next_opt(s_optr, s_opts_end);
+	}
+
+	return 0;
+}
+
 static int
 tcp_compare_header(struct compare_info *m, struct compare_info *s)
 {
@@ -432,6 +553,15 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 
 	/* data offset */
 	compare(doff);
+
+	ret = compare_tcp_options(m->ip_data + sizeof(struct tcphdr),
+				  m->ip_data + m->tcp->doff * 4,
+				  s->ip_data + sizeof(struct tcphdr),
+				  s->ip_data + s->tcp->doff * 4);
+	if (ret) {
+		pr_warn("HA_compare: tcp header's options are different\n");
+		return CHECKPOINT;
+	}
 
 	/* tcp window size */
 	if (!ignore_tcp_window)
