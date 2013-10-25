@@ -33,7 +33,7 @@ struct tcp_compare_info {
 	uint32_t rcv_nxt;
 	uint16_t flags;
 	uint16_t window;
-	uint32_t reserved[2];
+	uint32_t reserved[26];
 };
 
 #define TCP_CMP_INFO(compare_info) ((struct tcp_compare_info *)compare_info->private_data)

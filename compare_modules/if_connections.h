@@ -41,8 +41,8 @@ struct connect_info {
 	wait_queue_head_t wait;
 
 	/* transport layer defines it */
-	uint32_t m_info[8];
-	uint32_t s_info[8];
+	uint32_t m_info[32];
+	uint32_t s_info[32];
 };
 
 /* state */
