@@ -5,6 +5,13 @@
 
 #define NR_wait_resume 312
 
+enum {
+    dt_unknown,
+    dt_pv,
+    dt_hvm,
+    dt_pvhvm /* HVM with PV drivers */
+};
+
 struct restore_colo_data
 {
     unsigned long max_mem_pfn;
@@ -14,6 +21,8 @@ struct restore_colo_data
 
     /* which page is dirty? */
     unsigned long *dirty_pages;
+
+    unsigned int domtype;
 
     /* suspend evtchn */
     int local_port;
@@ -55,6 +64,7 @@ int restore_colo_init(struct restore_data *comm_data, void **data)
     struct restore_colo_data *colo_data;
     struct domain_info_context *dinfo = comm_data->dinfo;
     DECLARE_HYPERCALL;
+    unsigned long pvirq;
 
     if (dirty_pages)
         /* restore_colo_init() is called more than once?? */
@@ -85,6 +95,8 @@ int restore_colo_init(struct restore_data *comm_data, void **data)
         goto err;
     }
 
+    colo_data->domtype = dt_pv;
+
     goto skip_hvm;
 
 hvm:
@@ -105,6 +117,12 @@ hvm:
              "/local/domain/0/device-model/%d/command", comm_data->dom);
     snprintf(colo_data->state_path, 50,
              "/local/domain/0/device-model/%d/state", comm_data->dom);
+
+    if (xc_get_hvm_param(comm_data->xch, comm_data->dom, HVM_PARAM_CALLBACK_IRQ, &pvirq) < 0) {
+        PERROR("Could not get hvm param");
+        goto err;
+    }
+    colo_data->domtype = pvirq ? dt_pvhvm: dt_hvm;
 
 skip_hvm:
     slaver_dirty_pages = xc_hypercall_buffer_alloc_pages(xch, slaver_dirty_pages, NRPAGES(BITMAP_SIZE));
