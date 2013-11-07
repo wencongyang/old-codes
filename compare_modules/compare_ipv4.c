@@ -124,7 +124,7 @@ __ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 			pr_warn("HA_compare: slaver %s: %u\n", #elem,	\
 				s->ip->elem);				\
 			print_debuginfo(m, s);				\
-			return CHECKPOINT;				\
+			return CHECKPOINT | UPDATE_COMPARE_INFO;	\
 		}							\
 	} while (0)
 
@@ -138,7 +138,7 @@ __ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 	if (memcmp((char *)m->ip+20, (char*)s->ip+20, m->ip->ihl*4 - 20)) {
 		pr_warn("HA_compare: iphdr option is different\n");
 		print_debuginfo(m, s);
-		return CHECKPOINT;
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
 
 	m_fragment = ip_is_fragment(m->ip);
@@ -173,7 +173,7 @@ __ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 				pr_warn("HA_compare: the length of packet is different\n");
 				print_debuginfo(m, s);
 				rcu_read_unlock();
-				return CHECKPOINT;
+				return CHECKPOINT | UPDATE_COMPARE_INFO;
 			}
 			ret = ipv4_compare_fragment(m, s);
 		}
@@ -186,7 +186,7 @@ __ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 				pr_warn("HA_compare: the length of packet is different\n");
 				print_debuginfo(m, s);
 				rcu_read_unlock();
-				return CHECKPOINT;
+				return CHECKPOINT | UPDATE_COMPARE_INFO;
 			}
 			ret = compare_other_packet(m->ip_data, s->ip_data, m->length);
 		}
@@ -218,8 +218,11 @@ uint32_t ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 {
 	uint32_t ret = __ipv4_compare_packet(m, s);
 
-	if (unlikely(ret & CHECKPOINT))
+	if (unlikely(ret & CHECKPOINT)) {
 		same_count = 0;
+		if (ret & UPDATE_COMPARE_INFO)
+			ipv4_update_compare_info(m->private_data, m->ip, m->skb);
+	}
 
 	return ret;
 }
@@ -253,7 +256,7 @@ uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
 	int ret;
 
 	if (!m_skb || !s_skb)
-		return CHECKPOINT;
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	if (len <= 0)
 		return SAME_PACKET;
@@ -281,7 +284,7 @@ uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
 		cmp_len = min3(m_len, s_len, len);
 		ret = memcmp(m_data, s_data, cmp_len);
 		if (ret)
-			return CHECKPOINT;
+			return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 		len -= cmp_len;
 		if (len == 0)
@@ -292,7 +295,7 @@ uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
 	} while(len > 0);
 #undef NEXT_DATA
 
-	return CHECKPOINT;
+	return CHECKPOINT | UPDATE_COMPARE_INFO;
 }
 
 uint32_t ipv4_compare_one_packet(struct compare_info *m, struct compare_info *s)
@@ -355,8 +358,11 @@ uint32_t ipv4_compare_one_packet(struct compare_info *m, struct compare_info *s)
 	rcu_read_unlock();
 
 err:
-	if (unlikely(ret & CHECKPOINT))
+	if (unlikely(ret & CHECKPOINT)) {
 		same_count = 0;
+		if (info == m && ret & UPDATE_COMPARE_INFO)
+			ipv4_update_compare_info(m->private_data, m->ip, m->skb);
+	}
 
 	return ret;
 

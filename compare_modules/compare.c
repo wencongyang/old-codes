@@ -73,7 +73,7 @@ static void debug_print_arp(const struct arphdr *arp)
 
 uint32_t compare_other_packet(void *m, void *s, int length)
 {
-	return memcmp(m, s, length) ? CHECKPOINT : SAME_PACKET;
+	return memcmp(m, s, length) ? CHECKPOINT | UPDATE_COMPARE_INFO : SAME_PACKET;
 }
 
 static uint32_t

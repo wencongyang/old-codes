@@ -53,6 +53,7 @@ typedef struct compare_ops compare_ops_t;
 #define		DROP_SLAVER		0x02
 #define		SAME_PACKET		(BYPASS_MASTER | DROP_SLAVER)
 #define		CHECKPOINT		0x80000000
+#define		UPDATE_COMPARE_INFO	0x40000000
 
 extern uint32_t compare_other_packet(void *m, void *s, int length);
 extern wait_queue_head_t queue;

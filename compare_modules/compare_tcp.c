@@ -362,7 +362,7 @@ static uint32_t check_ack_only_packet(uint32_t m_flags, uint32_t s_flags,
 	/* case 1,3-5 */
 	if (((m_flags & FIN) && (s_flags & HAVE_PAYLOAD)) ||
 	    ((m_flags & HAVE_PAYLOAD) && (s_flags & FIN)))
-		return CHECKPOINT;
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	/* case 2,6-8 */
 	if (m_flags & HAVE_PAYLOAD)
@@ -431,16 +431,16 @@ static uint32_t compare_opt(uint8_t *m_optr, uint8_t *s_optr)
 	BUG_ON(m_opcode != s_opcode);
 	if (m_opsize != s_opsize)
 		/* TODO: SACK */
-		return CHECKPOINT;
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	if (m_opsize == 2)
 		return 0;
 
 	if (m_opcode != TCPOPT_TIMESTAMP)
-		return memcmp(m_optr, s_optr, m_opsize - 2) ? CHECKPOINT : 0;
+		return memcmp(m_optr, s_optr, m_opsize - 2) ? CHECKPOINT | UPDATE_COMPARE_INFO : 0;
 
 	if (!ignore_tcp_timestamp)
-		return memcmp(m_optr, s_optr, m_opsize - 2) ? CHECKPOINT : 0;
+		return memcmp(m_optr, s_optr, m_opsize - 2) ? CHECKPOINT | UPDATE_COMPARE_INFO : 0;
 
 	/* TODO:  TIMESTAMP */
 	return 0;
@@ -460,7 +460,7 @@ compare_tcp_options(void *m_opts, void *m_opts_end, void *s_opts, void *s_opts_e
 		return 0;
 
 	if (!m_opt || !s_opt)
-		return CHECKPOINT;
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	while (m_optr != NULL) {
 		opcode = *m_optr;
@@ -469,7 +469,7 @@ compare_tcp_options(void *m_opts, void *m_opts_end, void *s_opts, void *s_opts_e
 		s_optr = get_next_opt_by_kind(s_opt, s_opts_end, opcode);
 		if (!s_optr)
 			/* TODO: SACK */
-			return CHECKPOINT;
+			return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 		ret = compare_opt(m_optr, s_optr);
 		if (ret)
@@ -487,7 +487,7 @@ compare_tcp_options(void *m_opts, void *m_opts_end, void *s_opts, void *s_opts_e
 		m_optr = get_next_opt_by_kind(m_opt, m_opts_end, opcode);
 		if (!m_optr)
 			/* TODO: SACK */
-			return 1;
+			return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 		s_optr += opsize;
 		s_optr = get_next_opt(s_optr, s_opts_end);
@@ -508,7 +508,7 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 		if (unlikely(m->tcp->elem != s->tcp->elem)) {			\
 			pr_warn("HA_compare: tcp header's %s is different\n",	\
 				#elem);						\
-			return CHECKPOINT;					\
+			return CHECKPOINT | UPDATE_COMPARE_INFO;		\
 		}								\
 	} while (0)
 
@@ -545,7 +545,7 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 			s_seq -= 1;
 		if (unlikely(m_seq != s_seq)) {
 			pr_warn("HA_compare: tcp header's seq is different\n");
-			return CHECKPOINT;
+			return CHECKPOINT | UPDATE_COMPARE_INFO;
 		}
 	} else
 		compare(seq);
@@ -555,20 +555,20 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 	s_flags = *(uint8_t *)((char *)s->tcp + 13);
 	if ((m_flags & TCP_CMP_FLAGS_MASK) != (s_flags & TCP_CMP_FLAGS_MASK)) {
 		pr_warn("HA_compare: tcp header's flags is different\n");
-		return CHECKPOINT;
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
 
 	if (!ignore_tcp_psh) {
 		if (m->tcp->psh != s->tcp->psh) {
 			pr_warn("HA_compare: tcp header's flags is different\n");
-			return CHECKPOINT;
+			return CHECKPOINT | UPDATE_COMPARE_INFO;
 		}
 	}
 
 	if (!ignore_tcp_fin) {
 		if (m->tcp->fin != s->tcp->fin) {
 			pr_warn("HA_compare: tcp header's flags is different\n");
-			return CHECKPOINT;
+			return CHECKPOINT | UPDATE_COMPARE_INFO;
 		}
 	}
 
@@ -589,7 +589,7 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 				  s->ip_data + s->tcp->doff * 4);
 	if (ret) {
 		pr_warn("HA_compare: tcp header's options are different\n");
-		return CHECKPOINT;
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
 
 	/* tcp window size */
@@ -661,7 +661,7 @@ static uint32_t tcp_compare_packet(struct compare_info *m, struct compare_info *
 		ret = compare_other_packet(m->tcp_data, s->tcp_data, min(m_len, s_len));
 		if (ret & CHECKPOINT) {
 			pr_warn("HA_compare: tcp data is different\n");
-			return CHECKPOINT;
+			return CHECKPOINT | UPDATE_COMPARE_INFO;
 		}
 	}
 
@@ -709,7 +709,7 @@ static uint32_t tcp_compare_payload(struct compare_info *m, struct compare_info 
 	s_off = s->tcp->doff * 4;
 
 	if (m->length - m_off != s->length - s_off)
-		return CHECKPOINT;
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	return ipv4_transport_compare_fragment(m_head, s_head, m_off, s_off,
 					       m->length - m_off);
@@ -722,7 +722,7 @@ tcp_compare_fragment(struct compare_info *m, struct compare_info *s)
 	struct sk_buff *s_skb = s->skb;
 	struct tcphdr *m_tcp = NULL, *old_m_tcp = NULL;
 	struct tcphdr *s_tcp = NULL, *old_s_tcp = NULL;
-	int ret = CHECKPOINT;
+	int ret = CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	if (FRAG_CB(m_skb)->len < sizeof(struct tcphdr) ||
 	    FRAG_CB(m_skb)->len < m->tcp->doff * 4) {
@@ -877,7 +877,7 @@ tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
 
 	if ((tcphdr_info.flags & HAVE_PAYLOAD) &&
 	    (TCP_CMP_INFO(other_info)->flags & FIN))
-		return CHECKPOINT;
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	if (tcphdr_info.flags & (HAVE_PAYLOAD | SYN))
 		/*
