@@ -830,6 +830,11 @@ tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
 	struct tcphdr *tcp;
 	int ret = 0;
 
+	/* compare one packet is only for tcp ack, window and fin */
+	if (!ignore_ack_packet && !ignore_ack_difference &&
+	    !ignore_tcp_window && !ignore_tcp_fin)
+		return 0;
+
 	if (m->skb) {
 		info = m;
 		other_info = s;
