@@ -34,6 +34,10 @@ bool ignore_tcp_fin = 1;
 module_param(ignore_tcp_fin, bool, 0644);
 MODULE_PARM_DESC(ignore_tcp_fin, "ignore tcp fin");
 
+bool ignore_tcp_timestamp = 1;
+module_param(ignore_tcp_timestamp, bool, 0644);
+MODULE_PARM_DESC(ignore_tcp_timestamp, "ignore tcp timestamp");
+
 struct tcp_compare_info {
 	struct net_device *dev;
 	uint32_t skb_iif;
@@ -433,6 +437,9 @@ static uint32_t compare_opt(uint8_t *m_optr, uint8_t *s_optr)
 		return 0;
 
 	if (m_opcode != TCPOPT_TIMESTAMP)
+		return memcmp(m_optr, s_optr, m_opsize - 2) ? CHECKPOINT : 0;
+
+	if (!ignore_tcp_timestamp)
 		return memcmp(m_optr, s_optr, m_opsize - 2) ? CHECKPOINT : 0;
 
 	/* TODO:  TIMESTAMP */
