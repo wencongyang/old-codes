@@ -30,6 +30,10 @@ bool ignore_tcp_psh = 1;
 module_param(ignore_tcp_psh, bool, 0644);
 MODULE_PARM_DESC(ignore_tcp_psh, "ignore tcp psh");
 
+bool ignore_tcp_fin = 1;
+module_param(ignore_tcp_fin, bool, 0644);
+MODULE_PARM_DESC(ignore_tcp_fin, "ignore tcp fin");
+
 struct tcp_compare_info {
 	struct net_device *dev;
 	uint32_t skb_iif;
@@ -549,6 +553,13 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 
 	if (!ignore_tcp_psh) {
 		if (m->tcp->psh != s->tcp->psh) {
+			pr_warn("HA_compare: tcp header's flags is different\n");
+			return CHECKPOINT;
+		}
+	}
+
+	if (!ignore_tcp_fin) {
+		if (m->tcp->fin != s->tcp->fin) {
 			pr_warn("HA_compare: tcp header's flags is different\n");
 			return CHECKPOINT;
 		}
