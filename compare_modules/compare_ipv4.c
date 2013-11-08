@@ -236,7 +236,7 @@ void ipv4_update_compare_info(void *info, struct iphdr *ip, struct sk_buff *skb)
 
 	protocol = ip->protocol;
 	data = (char *)ip + ip->ihl * 4;
-	len = ip->tot_len - ip->ihl * 4;
+	len = htons(ip->tot_len) - ip->ihl * 4;
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[protocol]);
