@@ -853,6 +853,12 @@ tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
 	if (unlikely(tcphdr_info.flags & ERR_SKB))
 		return ret;
 
+	if (!ignore_ack_difference && tcphdr_info.flags & ACK_UPDATE)
+		return 0;
+
+	if (!ignore_tcp_window && tcphdr_info.flags & WIN_UPDATE)
+		return 0;
+
 	/* more check for window and ack_seq update */
 	update_tcphdr_flags(info, other_info, &tcphdr_info);
 
