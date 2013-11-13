@@ -14,7 +14,7 @@ bool ignore_retransmitted_packet = 1;
 module_param(ignore_retransmitted_packet, bool, 0644);
 MODULE_PARM_DESC(ignore_retransmitted_packet, "bypass retransmitted packets");
 
-bool compare_tcp_data = 0;
+bool compare_tcp_data = 1;
 module_param(compare_tcp_data, bool, 0644);
 MODULE_PARM_DESC(compare_tcp_data, "compare tcp data");
 
