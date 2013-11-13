@@ -119,9 +119,9 @@ __ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 		if (unlikely(m->ip->elem != s->ip->elem)) {		\
 			pr_warn("HA_compare: iphdr's %s is different\n",\
 				#elem);					\
-			pr_warn("HA_compare: master %s: %u\n", #elem,	\
+			pr_warn("HA_compare: master %s: %x\n", #elem,	\
 				m->ip->elem);				\
-			pr_warn("HA_compare: slaver %s: %u\n", #elem,	\
+			pr_warn("HA_compare: slaver %s: %x\n", #elem,	\
 				s->ip->elem);				\
 			print_debuginfo(m, s);				\
 			return CHECKPOINT | UPDATE_COMPARE_INFO;	\
