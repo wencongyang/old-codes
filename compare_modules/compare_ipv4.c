@@ -222,6 +222,8 @@ uint32_t ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 		same_count = 0;
 		if (ret & UPDATE_COMPARE_INFO)
 			ipv4_update_compare_info(m->private_data, m->ip, m->skb);
+	} else if (ret == SAME_PACKET) {
+		same_count++;
 	}
 
 	return ret;
