@@ -45,7 +45,8 @@ struct tcp_compare_info {
 	uint32_t rcv_nxt;
 	uint16_t flags;
 	uint16_t window;
-	uint32_t reserved[26];
+	uint32_t timestamp;
+	uint32_t reserved[25];
 };
 
 #define TCP_CMP_INFO(compare_info) ((struct tcp_compare_info *)compare_info->private_data)
@@ -56,6 +57,7 @@ struct tcphdr_info {
 	uint32_t ack_seq;
 	int length;
 	unsigned int flags;
+	uint32_t *timestamp;
 	uint16_t window;
 };
 
@@ -66,6 +68,7 @@ struct tcphdr_info {
 
 /* If this bit is not set, TCP_CMP_INFO() is invalid */
 #define		VALID		0x08
+#define		VALID_TIMESTAMP	0x10
 
 #define		TCP_CMP_INFO_MASK	0xFFFF
 
@@ -196,6 +199,32 @@ update_tcp_fin(struct tcphdr *tcp, struct sk_buff *skb, bool clear)
 	inet_proto_csum_replace4(&tcp->check, skb, old_seq, tcp->seq, 0);
 }
 
+static void *get_next_opt_by_kind(void *opts, void *end, uint8_t kind);
+/*
+ * if we generate a new packet for master, the old timestamp is from
+ * slaver packet. Use the timestamp from master packet instead of it.
+ */
+static void
+update_tcp_timestamp(struct tcphdr *tcp, struct sk_buff *skb,
+		     uint32_t new_timestamp)
+{
+	uint32_t *old_timestamp =
+		get_next_opt_by_kind(tcp + 1, (char *)tcp + tcp->doff * 4,
+				     TCPOPT_TIMESTAMP);
+
+	if (!old_timestamp)
+		return;
+
+	old_timestamp = (uint32_t *)((char *)old_timestamp + 2);
+
+	if (htonl(*old_timestamp) == new_timestamp)
+		return;
+
+	inet_proto_csum_replace4(&tcp->check, skb, *old_timestamp,
+				 htonl(new_timestamp), 0);
+	*old_timestamp = htonl(new_timestamp);
+}
+
 static void
 get_tcphdr_info(struct tcphdr *tcp, int length,
 		struct tcp_compare_info *tcp_info,
@@ -235,6 +264,16 @@ get_tcphdr_info(struct tcphdr *tcp, int length,
 	}
 
 	tcphdr_info->end_seq += tcphdr_info->length;
+
+	/* timestamp */
+	tcphdr_info->timestamp =
+		get_next_opt_by_kind(tcp + 1, (char *)tcp + tcp->doff * 4,
+				     TCPOPT_TIMESTAMP);
+
+	if (tcphdr_info->timestamp)
+		tcphdr_info->timestamp =
+			(uint32_t *)((char *)tcphdr_info->timestamp + 2);
+
 	if (!(tcp_info->flags & VALID))
 		return;
 
@@ -292,11 +331,21 @@ update_tcp_compare_info(struct tcp_compare_info *tcp_info,
 			struct tcphdr_info *tcphdr_info,
 			struct sk_buff *skb)
 {
+	uint32_t timestamp = htonl(*tcphdr_info->timestamp);
+
 	if (tcphdr_info->flags & ACK_UPDATE || !(tcp_info->flags & VALID))
 		tcp_info->rcv_nxt = tcphdr_info->ack_seq;
 
 	if (!(tcphdr_info->flags & OLD_ACK))
 		tcp_info->window = tcphdr_info->window;
+
+	if (tcp_info->flags & VALID_TIMESTAMP) {
+		if (after(timestamp, tcp_info->timestamp))
+			tcp_info->timestamp = timestamp;
+	} else {
+		tcp_info->timestamp = timestamp;
+		tcp_info->flags |= VALID_TIMESTAMP;
+	}
 
 	if (!(tcphdr_info->flags & RETRANSMIT)) {
 		uint16_t old_flags = tcp_info->flags;
@@ -308,6 +357,9 @@ update_tcp_compare_info(struct tcp_compare_info *tcp_info,
 		 */
 		if (old_flags & FIN && tcphdr_info->length == 0)
 			tcp_info->flags |= FIN;
+
+		if (old_flags & VALID_TIMESTAMP)
+			tcp_info->flags |= VALID_TIMESTAMP;
 	}
 
 	if (!(tcphdr_info->flags & RETRANSMIT) && tcphdr_info->length > 0)
@@ -912,9 +964,12 @@ send_packet:
 		new_skb = skb;
 	update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info, info->skb);
 
-	tcp = m->tcp;
-	update_tcp_ackseq(tcp, new_skb, TCP_CMP_INFO(other_info)->rcv_nxt);
-	update_tcp_window(tcp, new_skb, TCP_CMP_INFO(other_info)->window);
+	if (info == s) {
+		tcp = m->tcp;
+		update_tcp_ackseq(tcp, new_skb, TCP_CMP_INFO(other_info)->rcv_nxt);
+		update_tcp_window(tcp, new_skb, TCP_CMP_INFO(other_info)->window);
+		update_tcp_timestamp(tcp, new_skb,TCP_CMP_INFO(other_info)->timestamp);
+	}
 
 	return info == m ? BYPASS_MASTER : SAME_PACKET;
 }
