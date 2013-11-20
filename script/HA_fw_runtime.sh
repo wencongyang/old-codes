@@ -13,6 +13,9 @@ function getvif() {
 
 function start() {
 	echo "start"
+
+	ip link set dev $1 qlen 40960
+
 	tc qdisc add dev $1 root handle 1: prio
 	tc filter add dev $1 parent 1: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress mirror dev eth0
 	tc filter add dev $1 parent 1: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress mirror dev eth0
@@ -58,12 +61,15 @@ function install() {
 	mknod /dev/$device c $major 0
 
 	ifconfig eth0 promisc
+	ip link set dev eth0 qlen 40960
 
 	modprobe ifb
 	ip link set ifb0 up
+	ip link set ifb0 qlen 40960
 	tc qdisc add dev ifb0 root handle 1: master
 
 	ip link set ifb1 up
+	ip link set ifb1 qlen 40960
 	tc qdisc add dev ifb1 root handle 1: slaver
 	tc qdisc add dev eth0 ingress
 	tc filter add dev eth0 parent ffff: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev ifb1	
