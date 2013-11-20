@@ -449,7 +449,7 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
 		if firstTime == True:
 		#if 1 == 0:
 			util.runcmd('ifconfig colo_tap0 promisc')
-		
+			util.runcmd('ip link set dev colo_tap0 qlen 40960')
 			util.runcmd('tc qdisc add dev colo_tap0 ingress')
 			util.runcmd('tc filter add dev colo_tap0 parent ffff: '
 				'protocol ip prio 10 u32 match u32 0 0 flowid 1:2 '
@@ -458,6 +458,7 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
 				'protocol arp prio 11 u32 match u32 0 0 flowid 1:2 '
 				'action mirred egress redirect dev %s' % vnif)
 
+			util.runcmd('ip link set dev %s qlen 40960' % vnif)
 			util.runcmd('tc qdisc add dev %s ingress' % vnif)
 			util.runcmd('tc filter add dev %s parent ffff: '
 				'protocol ip prio 10 u32 match u32 0 0 flowid 1:2 '
