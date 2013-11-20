@@ -1,0 +1,29 @@
+building steps for pvm:
+
+1. dom0
+   The .config file exists, so you only need to do the following thing:
+   cd dom0
+   make
+   make modules_install
+   make install
+2. domU
+   Run the following commands:
+   cd xen
+   ln -sf ../domU/ linux-2.6.18-xen.hg
+   edit config/Linux.mk to update the value of KERNELS:
+       KERNELS ?= linux-2.6-xenU
+3. xen
+   Run the following commands:
+   cd xen
+   make tools
+   make xen
+   make install-tools
+   make install-xen
+4. update grub.conf
+   Add a new entry into grub.conf:
+title xen (3.2.0dom0)
+    root (hd0,0)
+    kernel /xen-4.1.0-rc7-pre.gz dom0_mem=min:4g,max:4g,4g
+    module /vmlinuz-3.2.0dom0 ro root=UUID=cd39d2df-4c32-4b88-b429-de4e6d344159 rd_NO_LUKS rd_NO_LVM LANG=en_US.UTF-8 rd_NO_MD SYSFONT=latarcyrheb-sun16  KEYBOARDTYPE=pc KEYTABLE=us rd_NO_DM nopat intel_iommu=on
+    module /initramfs-3.2.0dom0.img
+
