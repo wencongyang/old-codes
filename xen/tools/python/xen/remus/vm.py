@@ -59,11 +59,17 @@ def parsedominfo(dominfo):
                 val = None
             else:
                 val = elem[1]
-            if isinstance(val, list):
-                val = s2d(elem[1:])
-            if isinstance(name, list):
-                # hack for ['cpus', [[1]]]
-                return s2d(elem)
+            if name != 'cpus':
+                # don't convert cpus, it is too complicated, and we don't use
+                # it in remus.
+                # cpus can be:
+                #   ['cpus', [[1]]]
+                #   ['cpus', [[1], [1]]]
+                #   ['cpus', [[1, 2], [1, 2]]]
+                # s2d[elem] can only handle the 1st case, ant it will triger
+                # exception for the 2nd and 3rd case
+                if isinstance(val, list):
+                    val = s2d(elem[1:])
             if name in r:
                 for k, v in val.iteritems():
                     if k in r[name]:
