@@ -1484,6 +1484,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         if ( last_iter )
         {
             print_stats( xch, dom, sent_this_iter, &stats, 1);
+            colo_output_log(stderr, "send %llu pages\n", sent_this_iter);
 
             DPRINTF("Total pages sent= %ld (%.2fx)\n",
                     total_sent, ((float)total_sent)/dinfo->p2m_size );

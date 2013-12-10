@@ -5,8 +5,7 @@
 
 #include <xs.h>
 #include <xenctrl.h>
-#include <xc_private.h>
-#include <xg_save_restore.h>
+#include <xc_save_restore_colo.h>
 
 #include "checkpoint.h"
 
@@ -326,7 +325,7 @@ static int notify_slaver_suspend(CheckpointObject *self)
     if (self->first_time == 1)
         return 0;
 
-    fprintf(stderr, "nofity slaver suspend\n");
+    colo_output_log(stderr, "nofity slaver suspend\n");
     return write_exact(fd, "continue", 8);
 }
 
@@ -349,7 +348,7 @@ static int wait_slaver_suspend(CheckpointObject *self)
         PERROR("read \"%s\", expect \"suspend\"", buf);
         return -1;
     }
-    fprintf(stderr, "read suspend from slaver\n");
+    colo_output_log(stderr, "read suspend from slaver\n");
 
     return 0;
 }
@@ -362,7 +361,7 @@ static int notify_slaver_start_checkpoint(CheckpointObject *self)
     if (self->first_time == 1)
         return 0;
 
-    fprintf(stderr, "notify slaver to start new checkpoint\n");
+    colo_output_log(stderr, "notify slaver to start new checkpoint\n");
     if ( write_exact(fd, "start", 5) < 0) {
         PERROR("write start");
         return -1;
@@ -385,7 +384,7 @@ static int notify_slaver_resume(CheckpointObject *self)
     xc_interface *xch = self->cps.xch;
     char buf[7];
 
-    fprintf(stderr, "wait slaver to finish updating memory\n");
+    colo_output_log(stderr, "wait slaver to finish updating memory\n");
     /* wait slaver to finish update memory, device state... */
     if ( read_exact(fd, buf, 6) < 0) {
         PERROR("read: finish");
@@ -397,15 +396,15 @@ static int notify_slaver_resume(CheckpointObject *self)
         ERROR("read \"%s\", expect \"finish\"", buf);
         return -1;
     }
-    fprintf(stderr, "read finish from slaver\n");
+    colo_output_log(stderr, "read finish from slaver\n");
 
     if (!self->first_time) {
-        fprintf(stderr, "flush packets\n");
+        colo_output_log(stderr, "flush packets\n");
         /* flush queued packets now */
         ioctl(self->dev_fd, COMP_IOCTFLUSH);
     }
 
-    fprintf(stderr, "notify slaver to resume VM\n");
+    colo_output_log(stderr, "notify slaver to resume VM\n");
     /* notify slaver to resume vm*/
     if (write_exact(fd, "resume", 6) < 0) {
         PERROR("write: resume");
@@ -443,7 +442,7 @@ static int wait_slaver_resume(CheckpointObject *self)
     xc_interface *xch = self->cps.xch;
     char buf[7];
 
-    fprintf(stderr, "wait slaver to resume vm\n");
+    colo_output_log(stderr, "wait slaver to resume vm\n");
     if (read_exact(fd, buf, 6) < 0) {
         PERROR("read resume");
         return -1;
@@ -454,7 +453,7 @@ static int wait_slaver_resume(CheckpointObject *self)
         ERROR("read \"%s\", expect \"resume\"", buf);
         return -1;
     }
-    fprintf(stderr, "read resume from slaver\n");
+    colo_output_log(stderr, "read resume from slaver\n");
 
     return 0;
 }
@@ -469,14 +468,14 @@ static int colo_postresume(CheckpointObject *self)
         return rc;
 
     if (self->first_time) {
-        fprintf(stderr, "install network\n");
+        colo_output_log(stderr, "install network\n");
         rc = install_fw_network(self);
         if (rc < 0) {
-            fprintf(stderr, "install network fails\n");
+            colo_output_log(stderr, "install network fails\n");
             return rc;
         }
     } else {
-        fprintf(stderr, "notify compare module to resume\n");
+        colo_output_log(stderr, "notify compare module to resume\n");
         ioctl(dev_fd, COMP_IOCTRESUME);
         syscall(NR_vif_block, 0);
     }
@@ -511,7 +510,7 @@ static void wait_new_checkpoint(CheckpointObject *self)
 
         if (err == -1) {
             if (errno != ETIME && errno != ERESTART) {
-                fprintf(stderr, "ioctl() returns -1, errno: %d\n", errno);
+                colo_output_log(stderr, "ioctl() returns -1, errno: %d\n", errno);
                 break;
             }
             saved_errno = errno;
@@ -556,7 +555,7 @@ static int suspend_trampoline(void* data)
 
   if (self->colo) {
     if (notify_slaver_suspend(self) < 0) {
-      fprintf(stderr, "nofitying slaver suspend fails\n");
+      colo_output_log(stderr, "nofitying slaver suspend fails\n");
       return 0;
     }
   }
@@ -582,7 +581,7 @@ static int suspend_trampoline(void* data)
   /* suspend_cb() should be called after both sides are suspended */
   if (self->colo) {
     if (wait_slaver_suspend(self) < 0) {
-      fprintf(stderr, "waiting slaver suspend fails\n");
+      colo_output_log(stderr, "waiting slaver suspend fails\n");
       return 0;
     }
   }
@@ -593,8 +592,6 @@ static int suspend_trampoline(void* data)
   PyEval_RestoreThread(self->threadstate);
   result = PyObject_CallFunction(self->suspend_cb, NULL);
   self->threadstate = PyEval_SaveThread();
-
-  fprintf(stderr, "suspend_cb() returns %p(%p)\n", result, Py_None);
 
   if (!result)
     return 0;
@@ -611,7 +608,7 @@ static int suspend_trampoline(void* data)
 start_checkpoint:
   if (self->colo) {
     if (notify_slaver_start_checkpoint(self) < 0) {
-      fprintf(stderr, "nofitying slaver to start checkpoint fails\n");
+      colo_output_log(stderr, "nofitying slaver to start checkpoint fails\n");
       return 0;
     }
 
@@ -637,7 +634,7 @@ static int postcopy_trampoline(void* data)
   int rc = 0;
 
   /* send qemu state before writing other data to fd */
-  fprintf(stderr, "call postflush to send qemu\n");
+  colo_output_log(stderr, "call postflush to send qemu\n");
   if (checkpoint_postflush(&self->cps) < 0) {
       fprintf(stderr, "%s\n", checkpoint_error(&self->cps));
       return 0;
@@ -645,7 +642,7 @@ static int postcopy_trampoline(void* data)
 
   if (self->colo) {
     if (notify_slaver_resume(self) < 0) {
-      fprintf(stderr, "nofitying slaver resume fails\n");
+      colo_output_log(stderr, "nofitying slaver resume fails\n");
       return 0;
     }
   }
@@ -670,7 +667,7 @@ static int postcopy_trampoline(void* data)
 
   if (self->colo) {
     if (colo_postresume(self) < 0) {
-      fprintf(stderr, "postresume fails\n");
+      colo_output_log(stderr, "postresume fails\n");
       return 0;
     }
   }
@@ -689,7 +686,7 @@ static int checkpoint_trampoline(void* data)
 
   if (self->colo && self->first_time) {
     if (pre_checkpoint(self) < 0) {
-      fprintf(stderr, "pre_checkpoint() fails\n");
+      colo_output_log(stderr, "pre_checkpoint() fails\n");
       return -1;
     }
   }
@@ -721,13 +718,14 @@ wait_checkpoint:
   if (self->dirtypg) {
     /* when checkpoint, we send "continue" which len = 8, */
     if (write_exact(self->cps.fd, "dirtypg_", 8) < 0) {
-      fprintf(stderr, "writing dirtypg fails\n");
+      colo_output_log(stderr, "writing dirtypg fails\n");
       return -1;
     }
     return 2;
   }
 
-  fprintf(stderr, "\n\nnew checkpoint..........\n");
+  fprintf(stderr, "\n\n");
+  colo_output_log(stderr, "new checkpoint..........\n");
 
   return 1;
 }
@@ -744,9 +742,9 @@ static int post_sendstate_trampoline(void* data)
   /* In colo mode, guest is running on slaver side, so we should
    * send XC_SAVE_ID_LAST_CHECKPOINT to slaver.
    */
-  fprintf(stderr, "writing XC_SAVE_ID_LAST_CHECKPOINT to slaver\n");
+  colo_output_log(stderr, "writing XC_SAVE_ID_LAST_CHECKPOINT to slaver\n");
   if (write_exact(fd, &i, sizeof(int)) < 0) {
-    fprintf(stderr, "writing XC_SAVE_ID_LAST_CHECKPOINT fails\n");
+    colo_output_log(stderr, "writing XC_SAVE_ID_LAST_CHECKPOINT fails\n");
     return -1;
   }
 

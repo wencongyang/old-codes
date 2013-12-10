@@ -1,6 +1,8 @@
 #ifndef XC_SAVE_RESTORE_COLO_H
 #define XC_SAVE_RESTORE_COLO_H
 
+#include <sys/time.h>
+
 #include <xg_save_restore.h>
 #include <xg_private.h>
 
@@ -42,5 +44,17 @@ static inline void clear_bit (int nr, volatile void * addr)
 static inline void set_bit ( int nr, volatile void * addr)
 {
     BITMAP_ENTRY(nr, addr) |= (1UL << BITMAP_SHIFT(nr));
+}
+
+static inline void colo_output_log(FILE *file, const char *fmt, ...)
+{
+    va_list ap;
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    fprintf(file, "[%lu.%06lu]", tv.tv_sec, tv.tv_usec);
+    va_start(ap, fmt);
+    vfprintf(file, fmt, ap);
+    va_end(ap);
 }
 #endif
