@@ -61,7 +61,7 @@ function stop_master() {
 # load_module module parameter
 function load_module()
 {
-    module=$1
+    local module=$1
     shift
 
     lsmod | grep -q "$module"
@@ -92,6 +92,7 @@ function install_master() {
     echo "install master"
     load_module sch_colo
     load_module HA_compare
+    load_module HA_compare_icmp
 
     if [[ ! -e "/dev/$device" ]]; then
         major=$(awk "\$2==\"$module\" {print \$1}" /proc/devices)
@@ -165,8 +166,8 @@ function install_slaver()
 
     # forward packets from $pif to $vif
     tc qdisc add dev $pif ingress
-    tc filter add dev eth0 parent ffff: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $vif
-    tc filter add dev eth0 parent ffff: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $vif
+    tc filter add dev $pif parent ffff: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $vif
+    tc filter add dev $pif parent ffff: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $vif
 
     ip link set $vif qlen $qlen
     # forward packets from $vif to $pif
