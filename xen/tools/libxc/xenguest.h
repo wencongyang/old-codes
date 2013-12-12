@@ -50,6 +50,9 @@ struct save_callbacks {
 
     /* to be provided as the last argument to each callback function */
     void* data;
+
+    /* use a thread to transfer dirty pages? */
+    bool thread;
 };
 
 /**

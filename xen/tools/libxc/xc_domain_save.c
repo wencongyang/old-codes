@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <semaphore.h>
+#include <pthread.h>
 
 #include "xc_private.h"
 #include "xc_dom.h"
@@ -938,6 +940,13 @@ struct transmit_data {
     int completed;
     int dirtypg;
     int debug;
+
+    /* thread control:
+     *      true: the transmit thread should stop
+     * It is only modified in checkpoint thread, so there is no
+     * lock to protect it.
+     */
+    bool stop;
 };
 
 static int transmit_dirty_pages(struct transmit_data *tdata)
@@ -1233,6 +1242,181 @@ static int transmit_dirty_pages(struct transmit_data *tdata)
     return 0;
 }
 
+struct transmit_thread_info {
+    struct transmit_data *tdata;
+    bool error;
+    bool run;
+
+    pthread_t transmit_thread;
+    sem_t start_sem;
+    sem_t stop_sem;
+};
+
+static uint64_t count_dirty_pages(const unsigned long *bitmap, int size)
+{
+    int i;
+    uint64_t count = 0;
+
+    for (i = 0; i < size / BITS_PER_LONG; i++) {
+        if (bitmap[i] == 0)
+            continue;
+        count += hweight32(bitmap[i] & 0xffffffff);
+        count += hweight32((bitmap[i] >> 32) & 0xffffffff);
+    }
+
+    if (size % BITS_PER_LONG != 0) {
+        int last_size = size - size / BITS_PER_LONG;
+        uint64_t last_mask = (1 << last_size) - 1;
+        uint64_t last_bitmap = bitmap[i] & last_mask;
+
+        count += hweight32(last_bitmap & 0xffffffff);
+        count += hweight32((last_bitmap >> 32) & 0xffffffff);
+    }
+
+    return count;
+}
+
+static void *transmit_dirty_pages_thread(void *data)
+{
+    struct transmit_thread_info *tinfo = data;
+    struct transmit_data *tdata = tinfo->tdata;
+    struct domain_info_context *dinfo = tdata->dinfo;
+    xc_interface *xch = tdata->xch;
+    uint32_t dom = tdata->dom;
+    DECLARE_HYPERCALL_BUFFER(unsigned long, to_send);
+    int rc;
+
+    to_send = tdata->to_send;
+    XC__HYPERCALL_BUFFER_NAME(to_send).hbuf = to_send;
+    tinfo->tdata->dirtypg = 2;
+    while (1) {
+        if (xc_shadow_control(xch, dom,
+                              XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
+                              dinfo->p2m_size, NULL, 0, NULL) != dinfo->p2m_size) {
+            PERROR("Error flushing shadow PT");
+            colo_output_log(stderr, "Error flushing shadow PT\n");
+            tinfo->error = true;
+            break;
+        }
+
+        if (!count_dirty_pages(to_send, dinfo->p2m_size)) {
+            /* no dirty pages, just sleep */
+            usleep(500);
+            goto skip_iter;
+        }
+
+        /* write "dirtypg_" */
+        if (write_exact(tdata->io_fd, "dirtypg_", 8) < 0) {
+            colo_output_log(stderr, "writing dirtypg fails\n");
+            tinfo->error = true;
+            break;
+        }
+
+        rc = transmit_dirty_pages(tinfo->tdata);
+        if (rc < 0) {
+            colo_output_log(stderr, "transfering dirty pages fails\n");
+            tinfo->error = true;
+            break;
+        }
+
+skip_iter:
+        if (!tinfo->tdata->stop)
+            continue;
+
+        /* notify the checkpoint thread we have stopped */
+        rc = sem_post(&tinfo->stop_sem);
+        if (rc < 0) {
+            tinfo->error = true;
+            break;
+        }
+
+        /* wait the checkpoint finishes, and then we can start
+         * transfer dirty pages
+         */
+        do {
+            rc = sem_wait(&tinfo->start_sem);
+            if (rc < 0 && errno != EINTR)
+                break;
+        } while (rc < 0);
+        if (rc < 0) {
+            tinfo->error = true;
+            break;
+        }
+        tinfo->tdata->dirtypg = 2;
+    }
+
+    return (void *)-1;
+}
+
+static int create_transmit_thread(struct transmit_thread_info *tinfo)
+{
+    int rc;
+
+    if (tinfo->run) {
+        colo_output_log(stderr, "transmit thread is already running\n");
+        return -1;
+    }
+
+    tinfo->error = false;
+    rc = sem_init(&tinfo->start_sem, 0, 0);
+    if (rc < 0)
+        return -1;
+
+    rc = sem_init(&tinfo->stop_sem, 0, 0);
+    if (rc < 0)
+        return -1;
+
+    rc = pthread_create(&tinfo->transmit_thread, NULL,
+                        transmit_dirty_pages_thread, tinfo);
+    if (rc) {
+        colo_output_log(stderr, "creating transmit thread fails\n");
+        return -1;
+    }
+
+    tinfo->run = true;
+    return 0;
+}
+
+static int stop_transmit_thread(struct transmit_thread_info *tinfo)
+{
+    int rc;
+
+    if (!tinfo->run)
+        /* We don't use thread to transfer diry pages */
+        goto out;
+
+    if (tinfo->error)
+        return -1;
+
+    /* wait transmit thread stop */
+    tinfo->tdata->stop = true;
+    do {
+        rc = sem_wait(&tinfo->stop_sem);
+        if (rc < 0 && errno != EINTR)
+            return -1;
+    } while (rc < 0);
+
+out:
+    tinfo->tdata->dirtypg = 1;
+    return 0;
+}
+
+static int start_transmit_thread(struct transmit_thread_info *tinfo)
+{
+    int rc;
+
+    if (!tinfo->run)
+        return 0;
+
+    tinfo->tdata->stop = false;
+    /* notify transmit thread to continue */
+    rc = sem_post(&tinfo->start_sem);
+    if (rc < 0)
+        return -1;
+
+    return 0;
+}
+
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
                    struct save_callbacks* callbacks, int hvm)
@@ -1296,6 +1480,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     struct domain_info_context *dinfo = &ctx->dinfo;
 
     struct transmit_data tdata;
+    struct transmit_thread_info tinfo;
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -1523,6 +1708,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     /* pretend we sent all the pages last iteration */
     tdata.sent_last_iter = dinfo->p2m_size;
     tdata.ctx = ctx;
+
+    memset(&tinfo, 0, sizeof(tinfo));
+    tinfo.tdata = &tdata;
 
   copypages:
 
@@ -2005,17 +2193,26 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         callbacks->postcopy(callbacks->data);
 
 wait_cp:
+    if (tinfo.run) {
+        start_transmit_thread(&tinfo);
+        colo_output_log(stderr, "transmit thread is started\n");
+    } else if (callbacks->thread) {
+        rc = create_transmit_thread(&tinfo);
+        if (rc < 0)
+        {
+            ERROR("Creating transmit thread fails");
+            goto out;
+        }
+        colo_output_log(stderr, "transmit thread is created\n");
+    }
     /* checkpoint_cb can spend arbitrarily long in between rounds */
     if (!rc && callbacks->checkpoint)
-        tdata.dirtypg = callbacks->checkpoint(callbacks->data);
+        frc = callbacks->checkpoint(callbacks->data);
     else
-        /*
-         * If we meet some error during checkpoint, rc is not 0,
-         * and tdata.dirtypg is callbacks->checkpoint()'s last return value.
-         */
-        tdata.dirtypg = 0;
+        frc = 0;
 
-    if (tdata.dirtypg == 2) {
+    if (frc == 2) {
+        tdata.dirtypg = 2;
         if ( xc_shadow_control(xch, dom,
                                XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
                                dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
@@ -2025,8 +2222,13 @@ wait_cp:
         goto copypages;
     }
 
-    if (tdata.dirtypg > 0)
+    if (frc > 0)
     {
+        if (callbacks->thread) {
+            stop_transmit_thread(&tinfo);
+            colo_output_log(stderr, "transmit thread is stoped\n");
+        } else
+            tdata.dirtypg = 1;
         /* reset stats timer */
         print_stats(xch, dom, 0, &stats, 0);
 

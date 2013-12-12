@@ -38,6 +38,7 @@ typedef struct {
   int first_time;
   int dev_fd;
   int dirtypg;
+  int thread;
 } CheckpointObject;
 
 static int suspend_trampoline(void* data);
@@ -190,6 +191,7 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
     self->colo = 0;
   self->first_time = 1;
   self->dirtypg = 0;
+  self->thread = 1;
 
   if (check_cb && check_cb != Py_None) {
     if (!PyCallable_Check(check_cb)) {
@@ -205,6 +207,7 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   callbacks.checkpoint = checkpoint_trampoline;
   callbacks.post_sendstate = post_sendstate_trampoline;
   callbacks.data = self;
+  callbacks.thread = self->thread;
 
   self->threadstate = PyEval_SaveThread();
   rc = checkpoint_start(&self->cps, fd, &callbacks);
@@ -532,6 +535,9 @@ static void wait_new_checkpoint(CheckpointObject *self)
         }
 
         Py_DECREF(result);
+
+        if (self->thread)
+            continue;
 
 #define periodically_dirtypg 1
         if (err == -1 && saved_errno == ETIME && periodically_dirtypg) {
