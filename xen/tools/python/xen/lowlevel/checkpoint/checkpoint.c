@@ -37,8 +37,6 @@ typedef struct {
   int colo;
   int first_time;
   int dev_fd;
-  int dirtypg;
-  int thread;
 } CheckpointObject;
 
 static int suspend_trampoline(void* data);
@@ -190,8 +188,6 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   else
     self->colo = 0;
   self->first_time = 1;
-  self->dirtypg = 0;
-  self->thread = 1;
 
   if (check_cb && check_cb != Py_None) {
     if (!PyCallable_Check(check_cb)) {
@@ -207,7 +203,7 @@ static PyObject* pycheckpoint_start(PyObject* obj, PyObject* args) {
   callbacks.checkpoint = checkpoint_trampoline;
   callbacks.post_sendstate = post_sendstate_trampoline;
   callbacks.data = self;
-  callbacks.thread = self->thread;
+  callbacks.thread = !!self->colo;
 
   self->threadstate = PyEval_SaveThread();
   rc = checkpoint_start(&self->cps, fd, &callbacks);
@@ -505,7 +501,6 @@ static void wait_new_checkpoint(CheckpointObject *self)
     int err, saved_errno;
     PyObject* result;
 
-    self->dirtypg = 0;
     while (1) {
         err = ioctl(dev_fd, COMP_IOCTWAIT);
         if (err == 0)
@@ -535,15 +530,6 @@ static void wait_new_checkpoint(CheckpointObject *self)
         }
 
         Py_DECREF(result);
-
-        if (self->thread)
-            continue;
-
-#define periodically_dirtypg 1
-        if (err == -1 && saved_errno == ETIME && periodically_dirtypg) {
-          self->dirtypg = 1;
-          return;
-        }
     }
 
     syscall(NR_vif_block, 1);
@@ -687,9 +673,6 @@ static int checkpoint_trampoline(void* data)
 
   PyObject* result;
 
-  if (self->dirtypg)
-    goto wait_checkpoint;
-
   if (self->colo && self->first_time) {
     if (pre_checkpoint(self) < 0) {
       colo_output_log(stderr, "pre_checkpoint() fails\n");
@@ -719,15 +702,6 @@ static int checkpoint_trampoline(void* data)
 wait_checkpoint:
   if (self->colo) {
     wait_new_checkpoint(self);
-  }
-
-  if (self->dirtypg) {
-    /* when checkpoint, we send "continue" which len = 8, */
-    if (write_exact(self->cps.fd, "dirtypg_", 8) < 0) {
-      colo_output_log(stderr, "writing dirtypg fails\n");
-      return -1;
-    }
-    return 2;
   }
 
   fprintf(stderr, "\n\n");

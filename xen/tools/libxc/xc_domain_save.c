@@ -938,7 +938,6 @@ struct transmit_data {
     int last_iter;
     int iter;
     int completed;
-    bool dirtypg;
     int debug;
 
     /* thread control:
@@ -1228,17 +1227,6 @@ static int transmit_dirty_pages(struct transmit_data *tdata)
         tdata->sent_this_iter += batch;
     } /* end of this while loop for this iteration */
 
-    if (tdata->dirtypg) {
-        batch = 0;
-        if ( wrexact(io_fd, &batch, sizeof(unsigned int)) )
-        {
-            PERROR("Error when writing to state file (2)");
-            return -1;
-        }
-        if ( outbuf_flush(xch, ob, io_fd) < 0 )
-            PERROR("Error when flushing output buffer");
-    }
-
     return 0;
 }
 
@@ -1283,12 +1271,13 @@ static void *transmit_dirty_pages_thread(void *data)
     struct domain_info_context *dinfo = tdata->dinfo;
     xc_interface *xch = tdata->xch;
     uint32_t dom = tdata->dom;
+    struct outbuf *ob = tdata->ob;
+    int last_iter = tdata->last_iter;
     DECLARE_HYPERCALL_BUFFER(unsigned long, to_send);
-    int rc;
+    int rc, batch;
 
     to_send = tdata->to_send;
     XC__HYPERCALL_BUFFER_NAME(to_send).hbuf = to_send;
-    tinfo->tdata->dirtypg = true;
     while (1) {
         if (xc_shadow_control(xch, dom,
                               XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
@@ -1319,6 +1308,15 @@ static void *transmit_dirty_pages_thread(void *data)
             break;
         }
 
+        batch = 0;
+        if (wrexact(tdata->io_fd, &batch, sizeof(unsigned int))) {
+            PERROR("Error when writing to state file (2)");
+            tinfo->error = true;
+            break;
+        }
+        if (outbuf_flush(xch, ob, tdata->io_fd) < 0)
+            PERROR("Error when flushing output buffer");
+
 skip_iter:
         if (!tinfo->tdata->stop)
             continue;
@@ -1342,7 +1340,6 @@ skip_iter:
             tinfo->error = true;
             break;
         }
-        tinfo->tdata->dirtypg = true;
     }
 
     return (void *)-1;
@@ -1397,7 +1394,6 @@ static int stop_transmit_thread(struct transmit_thread_info *tinfo)
     } while (rc < 0);
 
 out:
-    tinfo->tdata->dirtypg = false;
     return 0;
 }
 
@@ -1734,12 +1730,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         xc_report_progress_step(xch, dinfo->p2m_size, dinfo->p2m_size);
 
         total_sent += tdata.sent_this_iter;
-
-        if (tdata.dirtypg)
-        {
-            rc = 0;
-            goto wait_cp;
-        }
 
         if ( tdata.last_iter )
         {
@@ -2192,7 +2182,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     if ( !rc && callbacks->postcopy )
         callbacks->postcopy(callbacks->data);
 
-wait_cp:
     if (tinfo.run) {
         start_transmit_thread(&tinfo);
         colo_output_log(stderr, "transmit thread is started\n");
@@ -2210,17 +2199,6 @@ wait_cp:
         frc = callbacks->checkpoint(callbacks->data);
     else
         frc = 0;
-
-    if (frc == 2) {
-        tdata.dirtypg = true;
-        if ( xc_shadow_control(xch, dom,
-                               XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
-                               dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
-        {
-            PERROR("Error flushing shadow PT");
-        }
-        goto copypages;
-    }
 
     if (frc > 0)
     {
