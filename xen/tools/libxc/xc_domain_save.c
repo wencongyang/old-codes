@@ -908,6 +908,331 @@ static int colo_ro_map_and_cache(xc_interface *xch, uint32_t dom,
     return 0;
 }
 
+#define wrexact(fd, buf, len) write_buffer(xch, last_iter, ob, (fd), (buf), (len))
+#ifdef ratewrite
+#undef ratewrite
+#endif
+#define ratewrite(fd, live, buf, len) ratewrite_buffer(xch, last_iter, ob, (fd), (live), (buf), (len))
+struct transmit_data {
+    int io_fd;
+    uint32_t dom;
+    struct domain_info_context *dinfo;
+    xc_interface *xch;
+    int hvm;
+    int live;
+    unsigned long *to_send, *to_skip;
+    unsigned long *to_fix;
+    xen_pfn_t *pfn_type;
+    unsigned long *pfn_batch;
+    int *pfn_err;
+    struct outbuf *ob;
+    char *page;
+    struct save_ctx *ctx;
+
+    unsigned int sent_this_iter;
+    unsigned int skip_this_iter;
+    unsigned int sent_last_iter;
+    unsigned long needed_to_fix;
+    int last_iter;
+    int iter;
+    int completed;
+    int dirtypg;
+    int debug;
+};
+
+static int transmit_dirty_pages(struct transmit_data *tdata)
+{
+    int io_fd = tdata->io_fd;
+    struct domain_info_context *dinfo = tdata->dinfo;
+    xc_interface *xch = tdata->xch;
+    int last_iter = tdata->last_iter;
+    uint32_t dom = tdata->dom;
+    int hvm = tdata->hvm;
+    int completed = tdata->completed;
+    int debug = tdata->debug;
+    int live = tdata->live;
+    unsigned long *to_send = tdata->to_send;
+    unsigned long *to_fix = tdata->to_fix;
+    xen_pfn_t *pfn_type = tdata->pfn_type;
+    unsigned long *pfn_batch = tdata->pfn_batch;
+    int *pfn_err = tdata->pfn_err;
+    struct outbuf *ob = tdata->ob;
+    char *page = tdata->page;
+    struct save_ctx *ctx = tdata->ctx;
+    unsigned int N, batch, run;
+    int frc, race = 0, j;
+    DECLARE_HYPERCALL_BUFFER(unsigned long, to_skip);
+
+    to_skip = tdata->to_skip;
+    XC__HYPERCALL_BUFFER_NAME(to_skip).hbuf = to_skip;
+
+    tdata->sent_this_iter = 0;
+    tdata->skip_this_iter = 0;
+    N = 0;
+
+    while ( N < dinfo->p2m_size )
+    {
+        xc_report_progress_step(xch, N, dinfo->p2m_size);
+
+        if ( !last_iter )
+        {
+            /* Slightly wasteful to peek the whole array every time,
+               but this is fast enough for the moment. */
+            frc = xc_shadow_control(
+                xch, dom, XEN_DOMCTL_SHADOW_OP_PEEK, HYPERCALL_BUFFER(to_skip),
+                dinfo->p2m_size, NULL, 0, NULL);
+            if ( frc != dinfo->p2m_size )
+            {
+                ERROR("Error peeking shadow bitmap");
+                return -1;
+            }
+        }
+
+        /* load pfn_type[] with the mfn of all the pages we're doing in
+           this batch. */
+        for  ( batch = 0;
+               (batch < MAX_BATCH_SIZE) && (N < dinfo->p2m_size);
+               N++ )
+        {
+            int n = N;
+
+            if ( debug )
+            {
+                DPRINTF("%d pfn= %08lx mfn= %08lx %d",
+                        tdata->iter, (unsigned long)n,
+                        hvm ? 0 : pfn_to_mfn(n),
+                        test_bit(n, to_send));
+                if ( !hvm && is_mapped(pfn_to_mfn(n)) )
+                    DPRINTF("  [mfn]= %08lx",
+                            mfn_to_pfn(pfn_to_mfn(n)&0xFFFFF));
+                DPRINTF("\n");
+            }
+
+            if ( completed )
+            {
+                /* for sparse bitmaps, word-by-word may save time */
+                if ( !to_send[N >> ORDER_LONG] )
+                {
+                    /* incremented again in for loop! */
+                    N += BITS_PER_LONG - 1;
+                    continue;
+                }
+
+                if ( !test_bit(n, to_send) )
+                   continue;
+
+                pfn_batch[batch] = n;
+                if ( hvm )
+                    pfn_type[batch] = n;
+                else
+                    pfn_type[batch] = pfn_to_mfn(n);
+            }
+            else
+            {
+                if ( !last_iter &&
+                     test_bit(n, to_send) &&
+                     test_bit(n, to_skip) )
+                    tdata->skip_this_iter++; /* stats keeping */
+
+                if ( !((test_bit(n, to_send) && !test_bit(n, to_skip)) ||
+                       (test_bit(n, to_send) && last_iter) ||
+                       (test_bit(n, to_fix)  && last_iter)) )
+                    continue;
+
+                /*
+                 ** we get here if:
+                 **  1. page is marked to_send & hasn't already been re-dirtied
+                 **  2. (ignore to_skip in last iteration)
+                 **  3. add in pages that still need fixup (net bufs)
+                 */
+
+                pfn_batch[batch] = n;
+
+                /* Hypercall interfaces operate in PFNs for HVM guests
+                 * and MFNs for PV guests */
+                if ( hvm )
+                    pfn_type[batch] = n;
+                else
+                    pfn_type[batch] = pfn_to_mfn(n);
+
+                if ( !is_mapped(pfn_type[batch]) )
+                {
+                    /*
+                     ** not currently in psuedo-physical map -- set bit
+                     ** in to_fix since we must send this page in last_iter
+                     ** unless its sent sooner anyhow, or it never enters
+                     ** pseudo-physical map (e.g. for ballooned down doms)
+                     */
+                    set_bit(n, to_fix);
+                    continue;
+                }
+
+                if ( last_iter &&
+                     test_bit(n, to_fix) &&
+                     !test_bit(n, to_send) )
+                {
+                    tdata->needed_to_fix++;
+                    DPRINTF("Fix! iter %d, pfn %x. mfn %lx\n",
+                            tdata->iter, n, pfn_type[batch]);
+                }
+                clear_bit(n, to_fix);
+            }
+
+            batch++;
+        }
+
+        if ( batch == 0 )
+            break; /* vanishingly unlikely... */
+
+        if (colo_ro_map_and_cache(xch, dom, pfn_batch, pfn_type, pfn_err,
+                                  batch) < 0)
+        {
+            PERROR("map batch failed");
+            return -1;
+        }
+
+        /* Get page types */
+        if ( xc_get_pfn_type_batch(xch, dom, batch, pfn_type) )
+        {
+            PERROR("get_pfn_type_batch failed");
+            return -1;
+        }
+
+        for ( run = j = 0; j < batch; j++ )
+        {
+            unsigned long gmfn = pfn_batch[j];
+
+            if ( !hvm )
+                gmfn = pfn_to_mfn(gmfn);
+
+            if ( pfn_err[j] )
+            {
+                if ( pfn_type[j] == XEN_DOMCTL_PFINFO_XTAB )
+                    continue;
+                DPRINTF("map fail: page %i mfn %08lx err %d\n",
+                        j, gmfn, pfn_err[j]);
+                pfn_type[j] = XEN_DOMCTL_PFINFO_XTAB;
+                continue;
+            }
+
+            if ( pfn_type[j] == XEN_DOMCTL_PFINFO_XTAB )
+            {
+                DPRINTF("type fail: page %i mfn %08lx\n", j, gmfn);
+                continue;
+            }
+
+            /* canonicalise mfn->pfn */
+            pfn_type[j] |= pfn_batch[j];
+            ++run;
+
+            if ( debug )
+            {
+                if ( hvm )
+                    DPRINTF("%d pfn=%08lx sum=%08lx\n",
+                            tdata->iter,
+                            pfn_type[j],
+                            csum_page(pages_base[pfn_batch[j]]));
+                else
+                    DPRINTF("%d pfn= %08lx mfn= %08lx [mfn]= %08lx"
+                            " sum= %08lx\n",
+                            tdata->iter,
+                            pfn_type[j],
+                            gmfn,
+                            mfn_to_pfn(gmfn),
+                            csum_page(pages_base[pfn_batch[j]]));
+            }
+        }
+
+        if ( !run )
+        {
+            continue; /* bail on this batch: no valid pages */
+        }
+
+        if ( wrexact(io_fd, &batch, sizeof(unsigned int)) )
+        {
+            PERROR("Error when writing to state file (2)");
+            return -1;
+        }
+
+        if ( sizeof(unsigned long) < sizeof(*pfn_type) )
+            for ( j = 0; j < batch; j++ )
+                ((unsigned long *)pfn_type)[j] = pfn_type[j];
+        if ( wrexact(io_fd, pfn_type, sizeof(unsigned long)*batch) )
+        {
+            PERROR("Error when writing to state file (3)");
+            return -1;
+        }
+        if ( sizeof(unsigned long) < sizeof(*pfn_type) )
+            while ( --j >= 0 )
+                pfn_type[j] = ((unsigned long *)pfn_type)[j];
+
+        /* entering this loop, pfn_type is now in pfns (Not mfns) */
+        for ( j = 0; j < batch; j++ )
+        {
+            unsigned long pfn, pagetype;
+            void *spage = pages_base[pfn_batch[j]];
+
+            pfn      = pfn_type[j] & ~XEN_DOMCTL_PFINFO_LTAB_MASK;
+            pagetype = pfn_type[j] &  XEN_DOMCTL_PFINFO_LTAB_MASK;
+
+            /* skip pages that aren't present */
+            if ( pagetype == XEN_DOMCTL_PFINFO_XTAB )
+                continue;
+
+            pagetype &= XEN_DOMCTL_PFINFO_LTABTYPE_MASK;
+
+            if ( (pagetype >= XEN_DOMCTL_PFINFO_L1TAB) &&
+                 (pagetype <= XEN_DOMCTL_PFINFO_L4TAB) )
+            {
+                /* We have a pagetable page: need to rewrite it. */
+                race =
+                    canonicalize_pagetable(ctx, pagetype, pfn, spage, page);
+
+                if ( race && !tdata->live )
+                {
+                    ERROR("Fatal PT race (pfn %lx, type %08lx)", pfn,
+                          pagetype);
+                    return -1;
+                }
+
+                if ( ratewrite(io_fd, live, page, PAGE_SIZE) != PAGE_SIZE )
+                {
+                    PERROR("Error when writing to state file (4b)"
+                           " (errno %d)", errno);
+                    return -1;
+                }
+            }
+            else
+            {
+                /* stop accumulate write temporarily. we will add it
+                 * back via writev() when needed.
+                 */
+                if (ratewrite(io_fd, live, spage, PAGE_SIZE) != PAGE_SIZE)
+                {
+                    PERROR("Error when writing to state file (4c)"
+                           " (errno %d)", errno);
+                    return -1;
+                }
+            }
+        } /* end of the write out for this batch */
+
+        tdata->sent_this_iter += batch;
+    } /* end of this while loop for this iteration */
+
+    if (tdata->dirtypg == 2) {
+        batch = 0;
+        if ( wrexact(io_fd, &batch, sizeof(unsigned int)) )
+        {
+            PERROR("Error when writing to state file (2)");
+            return -1;
+        }
+        if ( outbuf_flush(xch, ob, io_fd) < 0 )
+            PERROR("Error when flushing output buffer");
+    }
+
+    return 0;
+}
+
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
                    struct save_callbacks* callbacks, int hvm)
@@ -915,11 +1240,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     xc_dominfo_t info;
     DECLARE_DOMCTL;
 
-    int rc = 1, frc, i, j, last_iter = 0, iter = 0;
+    int rc = 1, frc, i, j;
     int live  = (flags & XCFLAGS_LIVE);
-    int debug = (flags & XCFLAGS_DEBUG);
-    int race = 0, sent_last_iter, skip_this_iter = 0;
-    unsigned int sent_this_iter = 0;
     int tmem_saved = 0;
 
     /* The new domain's shared-info frame number. */
@@ -952,7 +1274,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     xc_shadow_op_stats_t stats;
 
-    unsigned long needed_to_fix = 0;
     unsigned long total_sent    = 0;
 
     uint64_t vcpumap = 1ULL;
@@ -974,8 +1295,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     static struct save_ctx *ctx = &_ctx;
     struct domain_info_context *dinfo = &ctx->dinfo;
 
-    int completed = 0;
-    int dirtypg = 0;
+    struct transmit_data tdata;
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -1071,11 +1391,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             goto out;
         }
     }
-
-    last_iter = !live;
-
-    /* pretend we sent all the pages last iteration */
-    sent_last_iter = dinfo->p2m_size;
 
     /* Setup to_send / to_fix and to_skip bitmaps */
     to_send = xc_hypercall_buffer_alloc_pages(xch, to_send, NRPAGES(BITMAP_SIZE));
@@ -1187,317 +1502,76 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         goto out;
     }
 
+    /* prepare transmit data */
+    memset(&tdata, 0, sizeof(tdata));
+    tdata.io_fd = io_fd;
+    tdata.dom = dom;
+    tdata.dinfo = dinfo;
+    tdata.xch = xch;
+    tdata.hvm = hvm;
+    tdata.to_send = to_send;
+    tdata.to_skip = to_skip;
+    tdata.pfn_type = pfn_type;
+    tdata.pfn_batch = pfn_batch;
+    tdata.pfn_err = pfn_err;
+    tdata.to_fix = to_fix;
+    tdata.ob = &ob;
+    tdata.debug = (flags & XCFLAGS_DEBUG);
+    tdata.live = live;
+    tdata.page = page;
+    tdata.last_iter = !live;
+    /* pretend we sent all the pages last iteration */
+    tdata.sent_last_iter = dinfo->p2m_size;
+    tdata.ctx = ctx;
+
   copypages:
-#define wrexact(fd, buf, len) write_buffer(xch, last_iter, &ob, (fd), (buf), (len))
-#ifdef ratewrite
-#undef ratewrite
-#endif
-#define ratewrite(fd, live, buf, len) ratewrite_buffer(xch, last_iter, &ob, (fd), (live), (buf), (len))
 
     /* Now write out each data page, canonicalising page tables as we go... */
     for ( ; ; )
     {
-        unsigned int N, batch, run;
         char reportbuf[80];
 
         snprintf(reportbuf, sizeof(reportbuf),
                  "Saving memory: iter %d (last sent %u skipped %u)",
-                 iter, sent_this_iter, skip_this_iter);
+                 tdata.iter, tdata.sent_this_iter, tdata.skip_this_iter);
 
         xc_report_progress_start(xch, reportbuf, dinfo->p2m_size);
 
-        iter++;
-        sent_this_iter = 0;
-        skip_this_iter = 0;
-        N = 0;
+        tdata.iter++;
 
-        while ( N < dinfo->p2m_size )
-        {
-            xc_report_progress_step(xch, N, dinfo->p2m_size);
-
-            if ( !last_iter )
-            {
-                /* Slightly wasteful to peek the whole array every time,
-                   but this is fast enough for the moment. */
-                frc = xc_shadow_control(
-                    xch, dom, XEN_DOMCTL_SHADOW_OP_PEEK, HYPERCALL_BUFFER(to_skip),
-                    dinfo->p2m_size, NULL, 0, NULL);
-                if ( frc != dinfo->p2m_size )
-                {
-                    ERROR("Error peeking shadow bitmap");
-                    goto out;
-                }
-            }
-
-            /* load pfn_type[] with the mfn of all the pages we're doing in
-               this batch. */
-            for  ( batch = 0;
-                   (batch < MAX_BATCH_SIZE) && (N < dinfo->p2m_size);
-                   N++ )
-            {
-                int n = N;
-
-                if ( debug )
-                {
-                    DPRINTF("%d pfn= %08lx mfn= %08lx %d",
-                            iter, (unsigned long)n,
-                            hvm ? 0 : pfn_to_mfn(n),
-                            test_bit(n, to_send));
-                    if ( !hvm && is_mapped(pfn_to_mfn(n)) )
-                        DPRINTF("  [mfn]= %08lx",
-                                mfn_to_pfn(pfn_to_mfn(n)&0xFFFFF));
-                    DPRINTF("\n");
-                }
-
-                if ( completed )
-                {
-                    /* for sparse bitmaps, word-by-word may save time */
-                    if ( !to_send[N >> ORDER_LONG] )
-                    {
-                        /* incremented again in for loop! */
-                        N += BITS_PER_LONG - 1;
-                        continue;
-                    }
-
-                    if ( !test_bit(n, to_send) )
-                       continue;
-
-                    pfn_batch[batch] = n;
-                    if ( hvm )
-                        pfn_type[batch] = n;
-                    else
-                        pfn_type[batch] = pfn_to_mfn(n);
-                }
-                else
-                {
-                    if ( !last_iter &&
-                         test_bit(n, to_send) &&
-                         test_bit(n, to_skip) )
-                        skip_this_iter++; /* stats keeping */
-
-                    if ( !((test_bit(n, to_send) && !test_bit(n, to_skip)) ||
-                           (test_bit(n, to_send) && last_iter) ||
-                           (test_bit(n, to_fix)  && last_iter)) )
-                        continue;
-
-                    /*
-                    ** we get here if:
-                    **  1. page is marked to_send & hasn't already been re-dirtied
-                    **  2. (ignore to_skip in last iteration)
-                    **  3. add in pages that still need fixup (net bufs)
-                    */
-
-                    pfn_batch[batch] = n;
-
-                    /* Hypercall interfaces operate in PFNs for HVM guests
-                     * and MFNs for PV guests */
-                    if ( hvm )
-                        pfn_type[batch] = n;
-                    else
-                        pfn_type[batch] = pfn_to_mfn(n);
-                    
-                    if ( !is_mapped(pfn_type[batch]) )
-                    {
-                        /*
-                        ** not currently in psuedo-physical map -- set bit
-                        ** in to_fix since we must send this page in last_iter
-                        ** unless its sent sooner anyhow, or it never enters
-                        ** pseudo-physical map (e.g. for ballooned down doms)
-                        */
-                        set_bit(n, to_fix);
-                        continue;
-                    }
-
-                    if ( last_iter &&
-                         test_bit(n, to_fix) &&
-                         !test_bit(n, to_send) )
-                    {
-                        needed_to_fix++;
-                        DPRINTF("Fix! iter %d, pfn %x. mfn %lx\n",
-                                iter, n, pfn_type[batch]);
-                    }
-
-                    clear_bit(n, to_fix);
-                }
-                
-                batch++;
-            }
-
-            if ( batch == 0 )
-                goto skip; /* vanishingly unlikely... */
-
-            if (colo_ro_map_and_cache(xch, dom, pfn_batch, pfn_type, pfn_err,
-                                      batch) < 0)
-            {
-                PERROR("map batch failed");
-                goto out;
-            }
-
-            /* Get page types */
-            if ( xc_get_pfn_type_batch(xch, dom, batch, pfn_type) )
-            {
-                PERROR("get_pfn_type_batch failed");
-                goto out;
-            }
-
-            for ( run = j = 0; j < batch; j++ )
-            {
-                unsigned long gmfn = pfn_batch[j];
-
-                if ( !hvm )
-                    gmfn = pfn_to_mfn(gmfn);
-
-                if ( pfn_err[j] )
-                {
-                    if ( pfn_type[j] == XEN_DOMCTL_PFINFO_XTAB )
-                        continue;
-                    DPRINTF("map fail: page %i mfn %08lx err %d\n",
-                            j, gmfn, pfn_err[j]);
-                    pfn_type[j] = XEN_DOMCTL_PFINFO_XTAB;
-                    continue;
-                }
-
-                if ( pfn_type[j] == XEN_DOMCTL_PFINFO_XTAB )
-                {
-                    DPRINTF("type fail: page %i mfn %08lx\n", j, gmfn);
-                    continue;
-                }
-
-                /* canonicalise mfn->pfn */
-                pfn_type[j] |= pfn_batch[j];
-                ++run;
-
-                if ( debug )
-                {
-                    if ( hvm )
-                        DPRINTF("%d pfn=%08lx sum=%08lx\n",
-                                iter,
-                                pfn_type[j],
-                                csum_page(pages_base[pfn_batch[j]]));
-                    else
-                        DPRINTF("%d pfn= %08lx mfn= %08lx [mfn]= %08lx"
-                                " sum= %08lx\n",
-                                iter,
-                                pfn_type[j],
-                                gmfn,
-                                mfn_to_pfn(gmfn),
-                                csum_page(pages_base[pfn_batch[j]]));
-                }
-            }
-
-            if ( !run )
-            {
-                continue; /* bail on this batch: no valid pages */
-            }
-
-            if ( wrexact(io_fd, &batch, sizeof(unsigned int)) )
-            {
-                PERROR("Error when writing to state file (2)");
-                goto out;
-            }
-
-            if ( sizeof(unsigned long) < sizeof(*pfn_type) )
-                for ( j = 0; j < batch; j++ )
-                    ((unsigned long *)pfn_type)[j] = pfn_type[j];
-            if ( wrexact(io_fd, pfn_type, sizeof(unsigned long)*batch) )
-            {
-                PERROR("Error when writing to state file (3)");
-                goto out;
-            }
-            if ( sizeof(unsigned long) < sizeof(*pfn_type) )
-                while ( --j >= 0 )
-                    pfn_type[j] = ((unsigned long *)pfn_type)[j];
-
-            /* entering this loop, pfn_type is now in pfns (Not mfns) */
-            for ( j = 0; j < batch; j++ )
-            {
-                unsigned long pfn, pagetype;
-                void *spage = pages_base[pfn_batch[j]];
-
-                pfn      = pfn_type[j] & ~XEN_DOMCTL_PFINFO_LTAB_MASK;
-                pagetype = pfn_type[j] &  XEN_DOMCTL_PFINFO_LTAB_MASK;
-
-                /* skip pages that aren't present */
-                if ( pagetype == XEN_DOMCTL_PFINFO_XTAB )
-                    continue;
-
-                pagetype &= XEN_DOMCTL_PFINFO_LTABTYPE_MASK;
-
-                if ( (pagetype >= XEN_DOMCTL_PFINFO_L1TAB) &&
-                     (pagetype <= XEN_DOMCTL_PFINFO_L4TAB) )
-                {
-                    /* We have a pagetable page: need to rewrite it. */
-                    race = 
-                        canonicalize_pagetable(ctx, pagetype, pfn, spage, page); 
-
-                    if ( race && !live )
-                    {
-                        ERROR("Fatal PT race (pfn %lx, type %08lx)", pfn,
-                              pagetype);
-                        goto out;
-                    }
-
-                    if ( ratewrite(io_fd, live, page, PAGE_SIZE) != PAGE_SIZE )
-                    {
-                        PERROR("Error when writing to state file (4b)"
-                              " (errno %d)", errno);
-                        goto out;
-                    }
-                }
-                else
-                {
-                    /* stop accumulate write temporarily. we will add it
-                     * back via writev() when needed.
-                     */
-                    if (ratewrite(io_fd, live, spage, PAGE_SIZE) != PAGE_SIZE)
-                    {
-                        PERROR("Error when writing to state file (4c)"
-                               " (errno %d)", errno);
-                        goto out;
-                    }
-                }
-            } /* end of the write out for this batch */
-
-            sent_this_iter += batch;
-        } /* end of this while loop for this iteration */
-
-      skip:
+        frc = transmit_dirty_pages(&tdata);
+        if (frc < 0)
+            goto out;
 
         xc_report_progress_step(xch, dinfo->p2m_size, dinfo->p2m_size);
 
-        total_sent += sent_this_iter;
+        total_sent += tdata.sent_this_iter;
 
-        if (dirtypg == 2) {
-            batch = 0;
-            if ( wrexact(io_fd, &batch, sizeof(unsigned int)) )
-            {
-                PERROR("Error when writing to state file (2)");
-                goto out;
-            }
-            if ( outbuf_flush(xch, &ob, io_fd) < 0 ) {
-                PERROR("Error when flushing output buffer");
-                 rc = 1;
-            }
+        if (tdata.dirtypg == 2)
+        {
+            rc = 0;
             goto wait_cp;
         }
 
-        if ( last_iter )
+        if ( tdata.last_iter )
         {
-            print_stats( xch, dom, sent_this_iter, &stats, 1);
-            colo_output_log(stderr, "send %llu pages\n", sent_this_iter);
+            print_stats( xch, dom, tdata.sent_this_iter, &stats, 1);
+            colo_output_log(stderr, "send %llu pages\n", tdata.sent_this_iter);
 
             DPRINTF("Total pages sent= %ld (%.2fx)\n",
                     total_sent, ((float)total_sent)/dinfo->p2m_size );
-            DPRINTF("(of which %ld were fixups)\n", needed_to_fix  );
+            DPRINTF("(of which %ld were fixups)\n", tdata.needed_to_fix  );
         }
 
-        if ( last_iter && debug )
+        if ( tdata.last_iter && tdata.debug )
         {
             int id = XC_SAVE_ID_ENABLE_VERIFY_MODE;
             memset(to_send, 0xff, BITMAP_SIZE);
-            debug = 0;
+            tdata.debug = 0;
             DPRINTF("Entering debug resend-all mode\n");
 
+#undef wrexact
+#define wrexact(fd, buf, len) write_buffer(xch, tdata.last_iter, &ob, (fd), (buf), (len))
             /* send "-1" to put receiver into debug mode */
             if ( wrexact(io_fd, &id, sizeof(int)) )
             {
@@ -1508,18 +1582,18 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             continue;
         }
 
-        if ( last_iter )
+        if ( tdata.last_iter )
             break;
 
         if ( live )
         {
-            if ( ((sent_this_iter > sent_last_iter) && RATE_IS_MAX()) ||
-                 (iter >= max_iters) ||
-                 (sent_this_iter+skip_this_iter < 50) ||
+            if ( ((tdata.sent_this_iter > tdata.sent_last_iter) && RATE_IS_MAX()) ||
+                 (tdata.iter >= max_iters) ||
+                 (tdata.sent_this_iter+tdata.skip_this_iter < 50) ||
                  (total_sent > dinfo->p2m_size*max_factor) )
             {
                 DPRINTF("Start last iteration\n");
-                last_iter = 1;
+                tdata.last_iter = 1;
 
                 if ( suspend_and_state(callbacks->suspend, callbacks->data,
                                        xch, io_fd, dom, &info) )
@@ -1553,9 +1627,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                 goto out;
             }
 
-            sent_last_iter = sent_this_iter;
+            tdata.sent_last_iter = tdata.sent_this_iter;
 
-            print_stats(xch, dom, sent_this_iter, &stats, 1);
+            print_stats(xch, dom, tdata.sent_this_iter, &stats, 1);
 
         }
     } /* end of infinite for loop */
@@ -1917,7 +1991,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     rc = 0;
 
  out:
-    completed = 1;
+    tdata.completed = 1;
 
     /* Flush last write and discard cache for file. */
     if ( outbuf_flush(xch, &ob, io_fd) < 0 ) {
@@ -1933,9 +2007,15 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 wait_cp:
     /* checkpoint_cb can spend arbitrarily long in between rounds */
     if (!rc && callbacks->checkpoint)
-        dirtypg = callbacks->checkpoint(callbacks->data);
+        tdata.dirtypg = callbacks->checkpoint(callbacks->data);
+    else
+        /*
+         * If we meet some error during checkpoint, rc is not 0,
+         * and tdata.dirtypg is callbacks->checkpoint()'s last return value.
+         */
+        tdata.dirtypg = 0;
 
-    if (dirtypg == 2) {
+    if (tdata.dirtypg == 2) {
         if ( xc_shadow_control(xch, dom,
                                XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
                                dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
@@ -1945,7 +2025,7 @@ wait_cp:
         goto copypages;
     }
 
-    if (dirtypg > 0)
+    if (tdata.dirtypg > 0)
     {
         /* reset stats timer */
         print_stats(xch, dom, 0, &stats, 0);
