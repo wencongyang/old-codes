@@ -1252,27 +1252,15 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                 if ( completed )
                 {
                     /* for sparse bitmaps, word-by-word may save time */
-                    if ( !to_send[N >> ORDER_LONG] && (dirtypg != 1 || !to_skip[N >> ORDER_LONG]) )
+                    if ( !to_send[N >> ORDER_LONG] )
                     {
                         /* incremented again in for loop! */
                         N += BITS_PER_LONG - 1;
                         continue;
                     }
 
-                    switch (dirtypg) {
-                    case 2:
-                        if (!test_bit(n, to_send) || test_bit(n, to_skip))
-                            continue;
-                        break;
-                    case 1:
-                        if (!test_bit(n, to_send) && !test_bit(n, to_skip))
-                            continue;
-                        break;
-                    default:
-                        if ( !test_bit(n, to_send) )
-                           continue;
-                        break;
-                    }
+                    if ( !test_bit(n, to_send) )
+                       continue;
 
                     pfn_batch[batch] = n;
                     if ( hvm )
@@ -1941,16 +1929,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     if ( !rc && callbacks->postcopy )
         callbacks->postcopy(callbacks->data);
 
-     memset(to_skip, 0x0, BITMAP_SIZE);
 wait_cp:
     /* checkpoint_cb can spend arbitrarily long in between rounds */
     if (!rc && callbacks->checkpoint)
         dirtypg = callbacks->checkpoint(callbacks->data);
 
     if (dirtypg == 2) {
-        memcpy(to_send, to_skip, BITMAP_SIZE);
         if ( xc_shadow_control(xch, dom,
-                               XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_skip),
+                               XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
                                dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
         {
             PERROR("Error flushing shadow PT");
