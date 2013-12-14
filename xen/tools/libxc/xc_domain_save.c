@@ -1254,28 +1254,25 @@ static void merge_bits(unsigned long *to, unsigned long *from, int size)
         to[i] |= from[i];
 }
 
-static uint64_t count_dirty_pages(const unsigned long *bitmap, int size)
+/* return false if some pages are dirty */
+static bool check_dirty_pages(const unsigned long *bitmap, int size)
 {
     int i;
-    uint64_t count = 0;
 
-    for (i = 0; i < size / BITS_PER_LONG; i++) {
-        if (bitmap[i] == 0)
-            continue;
-        count += hweight32(bitmap[i] & 0xffffffff);
-        count += hweight32((bitmap[i] >> 32) & 0xffffffff);
-    }
+    for (i = 0; i < size / BITS_PER_LONG; i++)
+        if (bitmap[i] != 0)
+            return false;
 
     if (size % BITS_PER_LONG != 0) {
         int last_size = size - size / BITS_PER_LONG;
         uint64_t last_mask = (1 << last_size) - 1;
         uint64_t last_bitmap = bitmap[i] & last_mask;
 
-        count += hweight32(last_bitmap & 0xffffffff);
-        count += hweight32((last_bitmap >> 32) & 0xffffffff);
+        if (last_bitmap != 0)
+            return false;
     }
 
-    return count;
+    return true;
 }
 
 static void *transmit_dirty_pages_thread(void *data)
@@ -1304,7 +1301,7 @@ static void *transmit_dirty_pages_thread(void *data)
             break;
         }
 
-        if (!count_dirty_pages(to_send, dinfo->p2m_size)) {
+        if (check_dirty_pages(to_send, dinfo->p2m_size)) {
             /* no dirty pages, just sleep */
             usleep(500);
             goto skip_iter;
