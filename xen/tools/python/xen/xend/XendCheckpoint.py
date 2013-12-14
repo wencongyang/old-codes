@@ -330,13 +330,15 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
         except:
             pass
 
-        if handler.store_mfn is None:
+        if inputHandler.store_mfn is None:
             raise XendError('Could not read store MFN')
 
         if not is_hvm and handler.console_mfn is None:
             raise XendError('Could not read console MFN')
 
-        restoreHandler.resume(True, paused, None)
+        if not self.colo:
+            # In colo mode, the vm is resumed in xc_restore
+            restoreHandler.resume(True, paused, None)
 
         return dominfo
     except Exception, exn:
