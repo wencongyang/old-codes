@@ -939,6 +939,7 @@ struct transmit_data {
     int iter;
     int completed;
     int debug;
+    bool clear_dirty_pages;
 
     /* thread control:
      *      true: the transmit thread should stop
@@ -980,6 +981,9 @@ static int transmit_dirty_pages(struct transmit_data *tdata)
 
     while ( N < dinfo->p2m_size )
     {
+        if (tdata->stop)
+            break;
+
         xc_report_progress_step(xch, N, dinfo->p2m_size);
 
         if ( !last_iter )
@@ -1022,7 +1026,7 @@ static int transmit_dirty_pages(struct transmit_data *tdata)
                 if ( !to_send[N >> ORDER_LONG] )
                 {
                     /* incremented again in for loop! */
-                    N += BITS_PER_LONG - 1;
+                    N += BITS_PER_LONG - N % BITS_PER_LONG - 1;
                     continue;
                 }
 
@@ -1034,6 +1038,8 @@ static int transmit_dirty_pages(struct transmit_data *tdata)
                     pfn_type[batch] = n;
                 else
                     pfn_type[batch] = pfn_to_mfn(n);
+                if (tdata->clear_dirty_pages)
+                    clear_bit(n, to_send);
             }
             else
             {
@@ -1240,6 +1246,14 @@ struct transmit_thread_info {
     sem_t stop_sem;
 };
 
+static void merge_bits(unsigned long *to, unsigned long *from, int size)
+{
+    int i;
+
+    for (i = 0; i < BITS_TO_LONGS(size); i++)
+        to[i] |= from[i];
+}
+
 static uint64_t count_dirty_pages(const unsigned long *bitmap, int size)
 {
     int i;
@@ -1275,9 +1289,11 @@ static void *transmit_dirty_pages_thread(void *data)
     int last_iter = tdata->last_iter;
     DECLARE_HYPERCALL_BUFFER(unsigned long, to_send);
     int rc, batch;
+    unsigned long *to_skip = tdata->to_skip;
 
     to_send = tdata->to_send;
     XC__HYPERCALL_BUFFER_NAME(to_send).hbuf = to_send;
+    tdata->clear_dirty_pages = true;
     while (1) {
         if (xc_shadow_control(xch, dom,
                               XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
@@ -1321,6 +1337,8 @@ skip_iter:
         if (!tinfo->tdata->stop)
             continue;
 
+        memcpy(to_skip, to_send, BITMAP_SIZE);
+
         /* notify the checkpoint thread we have stopped */
         rc = sem_post(&tinfo->stop_sem);
         if (rc < 0) {
@@ -1340,6 +1358,7 @@ skip_iter:
             tinfo->error = true;
             break;
         }
+        tdata->clear_dirty_pages = true;
     }
 
     return (void *)-1;
@@ -1394,6 +1413,8 @@ static int stop_transmit_thread(struct transmit_thread_info *tinfo)
     } while (rc < 0);
 
 out:
+    tinfo->tdata->clear_dirty_pages = false;
+    tinfo->tdata->stop = false;
     return 0;
 }
 
@@ -1404,7 +1425,6 @@ static int start_transmit_thread(struct transmit_thread_info *tinfo)
     if (!tinfo->run)
         return 0;
 
-    tinfo->tdata->stop = false;
     /* notify transmit thread to continue */
     rc = sem_post(&tinfo->start_sem);
     if (rc < 0)
@@ -2226,6 +2246,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         {
             PERROR("Error flushing shadow PT");
         }
+
+        merge_bits(to_send, to_skip, dinfo->p2m_size);
 
         goto copypages;
     }
