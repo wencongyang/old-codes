@@ -3,8 +3,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#define NR_wait_resume 312
-
 enum {
     dt_unknown,
     dt_pv,
@@ -1002,14 +1000,6 @@ int finish_colo(struct restore_data *comm_data, void *data)
             return -1;
         }
     }
-
-    if (colo_data->domtype != dt_hvm)
-        /* wait for pv driver */
-        while(1) {
-            rc = syscall(NR_wait_resume);
-            if (rc == 0)
-                break;
-        }
 
     if (colo_data->first_time) {
         if (install_fw_network(comm_data) < 0)

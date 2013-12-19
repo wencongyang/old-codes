@@ -16,7 +16,6 @@
 #define COMP_IOCTWAIT     _IO(COMP_IOC_MAGIC, 0)
 #define COMP_IOCTFLUSH    _IO(COMP_IOC_MAGIC, 1)
 #define COMP_IOCTRESUME   _IO(COMP_IOC_MAGIC, 2)
-#define NR_wait_resume 312
 #define NR_vif_block   313
 
 static PyObject* CheckpointError;
@@ -464,12 +463,6 @@ static int colo_postresume(CheckpointObject *self)
 {
     int rc;
     int dev_fd = self->dev_fd;
-
-    while(1) {
-        rc = syscall(NR_wait_resume);
-        if (rc == 0)
-            break;
-    }
 
     rc = wait_slaver_resume(self);
     if (rc < 0)
