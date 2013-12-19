@@ -46,6 +46,7 @@ struct restore_colo_data
     struct xs_handle *xsh;
     char command_path[50];
     char state_path[50];
+    int watching_shutdown;
 
     /* debug */
     FILE *fp;
@@ -804,6 +805,118 @@ static int install_fw_network(struct restore_data *comm_data)
     return -1;
 }
 
+/* returns -1 on error or death, 0 if domain is running, 1 if suspended */
+static int check_suspend(struct restore_data *comm_data,
+                         struct restore_colo_data *colo_data)
+{
+    struct xs_handle *xsh = colo_data->xsh;
+    xc_interface *xch = comm_data->xch;
+    uint32_t dom = comm_data->dom;
+    unsigned int count;
+    int xsfd;
+    char **vec;
+    char buf[16];
+    xc_dominfo_t info;
+    fd_set rfds;
+    int rc;
+
+    xsfd = xs_fileno(xsh);
+    snprintf(buf, sizeof(buf), "%d", dom);
+
+    /* loop on watch if it fires for another domain */
+    while (1) {
+        FD_ZERO(&rfds);
+        FD_SET(xsfd, &rfds);
+
+        rc = select(xsfd + 1, &rfds, NULL, NULL, NULL);
+        if (rc < 0) {
+            ERROR("error polling fd: %s", strerror(errno));
+            return -1;
+        }
+        if (!FD_ISSET(xsfd, &rfds)) {
+            ERROR("unknown error polling fd");
+            return -1;
+        }
+
+        vec = xs_read_watch(xsh, &count);
+        if (colo_data->watching_shutdown == 1) {
+            colo_data->watching_shutdown = 2;
+            return 0;
+        }
+
+        if (!vec)
+            continue;
+
+        if (!strcmp(vec[XS_WATCH_TOKEN], buf))
+            break;
+    }
+
+    if (xc_domain_getinfo(xch, dom, 1, &info) != 1) {
+        ERROR( "error getting info for domain %u", dom);
+        return -1;
+    }
+
+    if (!info.shutdown) {
+        ERROR("domain %u not shut down", dom);
+        return 0;
+    }
+
+    if (info.shutdown_reason != SHUTDOWN_suspend)
+        return -1;
+
+    return 1;
+}
+
+static int setup_suspend_watch(struct restore_data *comm_data,
+                               struct restore_colo_data *colo_data)
+{
+    struct xs_handle *xsh = colo_data->xsh;
+    xc_interface *xch = comm_data->xch;
+    uint32_t dom = comm_data->dom;
+    char buf[16];
+
+    /* write domain ID to watch so we can ignore other domain shutdowns */
+    snprintf(buf, sizeof(buf), "%u", dom);
+    if (!xs_watch(xsh, "@releaseDomain", buf)) {
+        ERROR("Could not bind to shutdown watch");
+        return -1;
+    }
+
+    /* watch fires once on registration */
+    colo_data->watching_shutdown = 1;
+    check_suspend(comm_data, colo_data);
+
+    return 0;
+}
+
+static int setup_suspend_evtchn(struct restore_data *comm_data,
+                                struct restore_colo_data *colo_data)
+{
+    xc_interface *xch = comm_data->xch;
+    uint32_t dom = comm_data->dom;
+    xc_evtchn *xce = colo_data->xce;
+    int remote_port;
+    int local_port;
+
+    sleep(10);
+    remote_port = xs_suspend_evtchn_port(dom);
+    if (remote_port < 0) {
+        fprintf(colo_data->fp, "getting remote_suspend port fails\n");
+        fflush(colo_data->fp);
+        ERROR("getting remote suspend port fails");
+        return -1;
+    }
+
+    local_port = xc_suspend_evtchn_init(xch, xce, dom, remote_port);
+    if (local_port < 0) {
+        ERROR("initializing suspend evtchn fails");
+        return -1;
+    }
+
+    colo_data->local_port = local_port;
+    return 0;
+}
+
 /* we are ready to start the guest when this functions is called. We
  * will return until we need to do a new checkpoint or some error occurs.
  *
@@ -822,12 +935,9 @@ int finish_colo(struct restore_data *comm_data, void *data)
     xc_interface *xch = comm_data->xch;
     uint32_t dom = comm_data->dom;
     struct domain_info_context *dinfo = comm_data->dinfo;
-    xc_evtchn *xce = colo_data->xce;
 
     int rc;
     char str[10];
-    int remote_port;
-    int local_port = colo_data->local_port;
 
     fprintf(colo_data->fp, "call finish_colo()\n");
     fflush(colo_data->fp);
@@ -880,11 +990,13 @@ int finish_colo(struct restore_data *comm_data, void *data)
         }
     }
 
-    while(1) {
-        rc = syscall(NR_wait_resume);
-        if (rc == 0)
-            break;
-    }
+    if (colo_data->domtype != dt_hvm)
+        /* wait for pv driver */
+        while(1) {
+            rc = syscall(NR_wait_resume);
+            if (rc == 0)
+                break;
+        }
 
     if (colo_data->first_time) {
         if (install_fw_network(comm_data) < 0)
@@ -895,26 +1007,57 @@ int finish_colo(struct restore_data *comm_data, void *data)
     write_exact(comm_data->io_fd, "resume", 6);
 
     if (colo_data->first_time) {
-        sleep(10);
-        remote_port = xs_suspend_evtchn_port(dom);
-        if (remote_port < 0) {
-            fprintf(colo_data->fp, "getting remote_suspend port fails\n");
-            fflush(colo_data->fp);
-            ERROR("getting remote suspend port fails");
+        if (colo_data->domtype != dt_hvm)
+            rc = setup_suspend_evtchn(comm_data, colo_data);
+        else
+            rc = setup_suspend_watch(comm_data, colo_data);
+        if (rc < 0)
             return -1;
-        }
-
-        local_port = xc_suspend_evtchn_init(xch, xce, dom, remote_port);
-        if (local_port < 0) {
-            ERROR("initializing suspend evtchn fails");
-            return -1;
-        }
-
-        colo_data->local_port = local_port;
     }
 
     memset(colo_data->dirty_pages, 0x0, BITMAP_SIZE);
     return 1;
+}
+
+static int evtchn_suspend(xc_interface *xch, xc_evtchn *xce, int local_port)
+{
+    int rc;
+
+    /* notify the suspend evtchn */
+    rc = xc_evtchn_notify(xce, local_port);
+    if (rc < 0)
+    {
+        ERROR("notifying the suspend evtchn fails");
+        return -1;
+    }
+
+    rc = xc_await_suspend(xch, xce, local_port);
+    if (rc < 0)
+    {
+        ERROR("waiting suspend fails");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int suspend_hvm(struct restore_data *comm_data,
+                       struct restore_colo_data *colo_data)
+{
+    xc_interface *xch = comm_data->xch;
+    uint32_t dom = comm_data->dom;
+    int rc = -1;
+
+    rc = xc_domain_shutdown(xch, dom, SHUTDOWN_suspend);
+    if (rc < 0) {
+        ERROR("shutdown hypercall failed");
+        return -1;
+    }
+
+    if (check_suspend(comm_data, colo_data) != 1)
+       return -1;
+
+    return 0;
 }
 
 /*
@@ -956,19 +1099,17 @@ int colo_wait_checkpoint(struct restore_data *comm_data, void *data)
         return 0;
     }
 
-    /* notify the suspend evtchn */
-    rc = xc_evtchn_notify(xce, local_port);
-    if (rc < 0)
+    if (colo_data->domtype != dt_hvm)
     {
-        ERROR("notifying the suspend evtchn fails");
-        return -1;
+        rc = evtchn_suspend(xch, xce, local_port);
+        if (rc < 0)
+            return -1;
     }
-
-    rc = xc_await_suspend(xch, xce, local_port);
-    if (rc < 0)
+    else
     {
-        ERROR("waiting suspend fails");
-        return -1;
+        rc = suspend_hvm(comm_data, colo_data);
+        if (rc < 0)
+            return -1;
     }
 
     if (comm_data->hvm && xc_suspend_qemu(xch, xsh, dom) < 0) {
