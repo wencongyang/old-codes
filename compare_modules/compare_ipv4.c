@@ -67,7 +67,7 @@ static void debug_print_ip(const struct compare_info *info, const struct iphdr *
 	if (ops && ops->debug_print)
 		ops->debug_print(info, data);
 	else
-		pr_warn("HA_compare: unkown protocol: %u\n", protocol);
+		pr_warn("HA_compare: unknown protocol: %u\n", protocol);
 	rcu_read_unlock();
 }
 
