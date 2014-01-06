@@ -766,7 +766,8 @@ out:
     return ret;
 }
 
-static int install_fw_network(struct restore_data *comm_data)
+static int install_fw_network(struct restore_data *comm_data,
+                              struct restore_colo_data *colo_data)
 {
     pid_t pid;
     xc_interface *xch = comm_data->xch;
@@ -775,7 +776,10 @@ static int install_fw_network(struct restore_data *comm_data)
 
     char vif[20];
 
-    snprintf(vif, sizeof(vif), "vif%u.0", comm_data->dom);
+    if (colo_data->domtype != dt_hvm)
+        snprintf(vif, sizeof(vif), "vif%u.0", comm_data->dom);
+    else
+        snprintf(vif, sizeof(vif), "tap%u.0", comm_data->dom);
 
     pid = vfork();
     if (pid < 0) {
@@ -993,17 +997,12 @@ int finish_colo(struct restore_data *comm_data, void *data)
 
     if (!colo_data->first_time && comm_data->hvm) {
         xs_write(colo_data->xsh, XBT_NULL, colo_data->command_path,
-                 "continue", 8);
+                 "resume", 6);
         rc = wait_qemu_dm(colo_data);
         if (rc != 0) {
             ERROR("waiting qemu-dm resume");
             return -1;
         }
-    }
-
-    if (colo_data->first_time) {
-        if (install_fw_network(comm_data) < 0)
-            return -1;
     }
 
     /* notify master vm is resumed */
@@ -1020,6 +1019,9 @@ int finish_colo(struct restore_data *comm_data, void *data)
         else
             rc = setup_suspend_watch(comm_data, colo_data);
         if (rc < 0)
+            return -1;
+
+        if (install_fw_network(comm_data, colo_data) < 0)
             return -1;
     }
 
