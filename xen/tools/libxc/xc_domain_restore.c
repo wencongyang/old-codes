@@ -1450,13 +1450,26 @@ getpages:
 
     if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
         PERROR("error when buffering batch, finishing");
+        if (callbacks) {
+            /* colo, and the vm is running */
+            colo_output_log(fp, "failover\n");
+            rc = 0;
+            goto resume_vm;
+        }
         goto finish;
     }
+    colo_output_log(fp, "1. receive %d pages\n", pagebuf.nr_pages);
     memset(&tmptail, 0, sizeof(tmptail));
     tmptail.ishvm = hvm;
     if ( buffer_tail(xch, ctx, &tmptail, io_fd, max_vcpu_id, vcpumap,
                      ext_vcpucontext, vcpuextstate, vcpuextstate_size) < 0 ) {
         ERROR ("error buffering image tail, finishing");
+        if (callbacks) {
+            /* colo, and the vm is running */
+            colo_output_log(fp, "failover\n");
+            rc = 0;
+            goto resume_vm;
+        }
         goto finish;
     }
     tailbuf_free(&tailbuf);
@@ -2002,6 +2015,11 @@ out_restore:
             PERROR("Error finishing restore");
             goto out;
         }
+        if (rc == 0)
+        {
+            colo_output_log(fp, "failover\n");
+            goto out;
+        }
     }
 
 out_wait_checkpoint:
@@ -2015,12 +2033,17 @@ out_wait_checkpoint:
             goto out;
         }
 
+        if (rc == 3)
+            goto resume_vm;
+
         if (rc == 2) {
             if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
                 PERROR("error when buffering batch, finishing");
-                rc = -1;
+                colo_output_log(fp, "failover\n");
+                rc = 0;
                 goto out;
             }
+            colo_output_log(fp, "2. receive %d pages\n", pagebuf.nr_pages);
             dirtypg = 1;
             goto loadpages;
         }
@@ -2051,6 +2074,10 @@ out_wait_checkpoint:
     DPRINTF("Restore exit with rc=%d\n", rc);
 
     return rc;
+
+resume_vm:
+    rc = callbacks->resume_vm(&callbacks->comm_data, callbacks->data);
+    goto out;
 }
 /*
  * Local variables:

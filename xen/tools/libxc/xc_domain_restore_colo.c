@@ -936,6 +936,7 @@ int finish_colo(struct restore_data *comm_data, void *data)
 
     int rc;
     char str[10];
+    bool failover = false;
 
     colo_output_log(colo_data->fp, "call finish_colo()\n");
     /* output the store-mfn & console-mfn */
@@ -966,13 +967,19 @@ int finish_colo(struct restore_data *comm_data, void *data)
     }
 
     /* wait domain resume, then connect the suspend evtchn */
-    read_exact(0, str, 6);
-    str[6] = '\0';
-    if (strcmp(str, "resume"))
-    {
-        ERROR("read %s, expect resume", str);
-        return -1;
+    read_exact(0, str, 8);
+    str[8] = '\0';
+    if (!strcmp(str, "_resume_"))
+        goto resume;
+    if (!strcmp(str, "failover")) {
+        failover = true;
+        goto resume;
     }
+
+    ERROR("read %s, expect resume", str);
+    return -1;
+
+resume:
     colo_output_log(colo_data->fp, "read %s from python\n", str);
 
     if (!colo_data->first_time && comm_data->hvm) {
@@ -985,10 +992,11 @@ int finish_colo(struct restore_data *comm_data, void *data)
         }
     }
 
-    /* notify master vm is resumed */
-    write_exact(comm_data->io_fd, "resume", 6);
+    if (!failover)
+        /* notify master vm is resumed */
+        write_exact(comm_data->io_fd, "resume", 6);
 
-    if (colo_data->first_time) {
+    if (colo_data->first_time && !failover) {
         if (colo_data->domtype == dt_hvm) {
             rc = update_hvm_type(comm_data, colo_data);
             if (rc < 0)
@@ -1006,7 +1014,7 @@ int finish_colo(struct restore_data *comm_data, void *data)
     }
 
     memset(colo_data->dirty_pages, 0x0, BITMAP_SIZE);
-    return 1;
+    return failover ? 0 : 1;
 }
 
 static int evtchn_suspend(xc_interface *xch, xc_evtchn *xce, int local_port)
@@ -1053,9 +1061,10 @@ static int suspend_hvm(struct restore_data *comm_data,
 /*
  * return value:
  * -1: error
- *  0: continue to start vm
+ *  0: failover
  *  1: continue to do a checkpoint
  *  2: dirty page transmission
+ *  3: resume vm and failover
  */
 int colo_wait_checkpoint(struct restore_data *comm_data, void *data)
 {
@@ -1112,7 +1121,7 @@ int colo_wait_checkpoint(struct restore_data *comm_data, void *data)
     read_exact(comm_data->io_fd, str, 5);
     str[5] = '\0';
     if (strcmp(str, "start"))
-        return -1;
+        return 3;
 
     /* memset(colo_data->slaver_dirty_pages, 0x0, BITMAP_SIZE); */
     if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_CLEAN,
@@ -1179,4 +1188,30 @@ int colo_wait_checkpoint(struct restore_data *comm_data, void *data)
     colo_data->first_time = 0;
 
     return 1;
+}
+
+int colo_resume_vm(struct restore_data *comm_data, void *data)
+{
+    struct restore_colo_data *colo_data = data;
+    xc_interface *xch = comm_data->xch;
+    uint32_t dom = comm_data->dom;
+    int rc;
+
+    rc = xc_domain_resume(xch, dom, 2);
+    if (rc != 0) {
+        colo_output_log(colo_data->fp, "resuming domain fails\n");
+        return -1;
+    }
+
+    if (!colo_data->first_time && comm_data->hvm) {
+        xs_write(colo_data->xsh, XBT_NULL, colo_data->command_path,
+                 "continue", 8);
+        rc = wait_qemu_dm(colo_data);
+        if (rc != 0) {
+            ERROR("waiting qemu-dm resume");
+            return -1;
+        }
+    }
+
+    return 0;
 }

@@ -336,9 +336,11 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
         if not is_hvm and handler.console_mfn is None:
             raise XendError('Could not read console MFN')
 
-        if not self.colo:
+        if not colo:
             # In colo mode, the vm is resumed in xc_restore
             restoreHandler.resume(True, paused, None)
+        else:
+            util.runcmd("/etc/xen/scripts/network-colo slaver uninstall vif%d.0 eth0" % dominfo.getDomid());
 
         return dominfo
     except Exception, exn:
@@ -369,6 +371,7 @@ class RestoreHandler:
     def resume(self, finish, paused, child):
         log.debug("call resume...")
         fd = self.fd
+        failover = False
         dominfo = self.dominfo
         handler = self.inputHandler
         restore_image = self.restore_image
@@ -381,11 +384,15 @@ class RestoreHandler:
         if self.colo and not finish:
             # notify master that checkpoint finishes
             self.log("write", "master", "finish")
-            write_exact(fd, "finish", "failed to write finish done")
-            buf = read_exact(fd, 6, "failed to read resume flag")
-            if buf != "resume":
-                return False
-            self.log("read", "master", "resume")
+            try:
+                write_exact(fd, "finish", "failed to write finish done")
+                buf = read_exact(fd, 6, "failed to read resume flag")
+                if buf != "resume":
+                    return False
+                self.log("read", "master", "resume")
+            except Exception, e:
+                log.debug("failover")
+                failover = True
 
         from xen.xend import XendDomain
 
@@ -411,9 +418,14 @@ class RestoreHandler:
             ResumeDomain(dominfo.domid)
 
         if self.colo and not finish:
-            self.log("write", "xc_restore", "resume")
-            child.tochild.write("resume")
-            child.tochild.flush()
+            if failover:
+                self.log("write", "xc_restore", "failover")
+                child.tochild.write("failover")
+                child.tochild.flush()
+            else:
+                self.log("write", "xc_restore", "_resume_")
+                child.tochild.write("_resume_")
+                child.tochild.flush()
 
             log.debug("dom info port: %s %s" % (dominfo.store_port, dominfo.console_port))
             dominfo.store_port = self.store_port

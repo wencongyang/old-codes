@@ -61,6 +61,7 @@ main(int argc, char **argv)
         callback.update_p2m = update_p2m_table;
         callback.finish_restotre = finish_colo;
         callback.wait_checkpoint = colo_wait_checkpoint;
+        callback.resume_vm = colo_resume_vm;
         callback.data = NULL;
         callback_p = &callback;
     }

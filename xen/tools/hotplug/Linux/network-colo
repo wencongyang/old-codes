@@ -176,6 +176,7 @@ function install_slaver()
     tc filter add dev $vif parent ffff: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress redirect dev $pif
 
     brctl delif eth1 $vif
+    exit 0
 }
 
 function uninstall_slaver()
@@ -193,6 +194,7 @@ function uninstall_slaver()
     ifconfig $pif -promisc
 
     brctl addif eth1 $vif
+    exit 0
 }
 
 if [[ $1 != "master" && $1 != "slaver" ]]; then

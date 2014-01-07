@@ -14,6 +14,7 @@ extern int colo_hvm_clear_page(struct restore_data *, void *, unsigned long pfn)
 extern int update_p2m_table(struct restore_data *, void *);
 extern int finish_colo(struct restore_data *, void *);
 extern int colo_wait_checkpoint(struct restore_data *, void *);
+extern int colo_resume_vm(struct restore_data *, void *);
 
 /*
 ** During (live) save/migrate, we maintain a number of bitmaps to track

@@ -118,11 +118,14 @@ struct restore_callbacks {
     int (*finish_restotre)(struct restore_data *comm_data, void *data);
     /* Return value:
      *   -1: error
-     *    0: continue to start vm
+     *    0: failover
      *    1: continue to do a checkpoint
      *    2: dirty page transmission
+     *    3: resume vm and failover
      */
     int (*wait_checkpoint)(struct restore_data *comm_data, void *data);
+    /* callback to resume vm before failover */
+    int (*resume_vm)(struct restore_data *comm_data, void *data);
 
     /* xc_domain_restore() init it */
     struct restore_data comm_data;
