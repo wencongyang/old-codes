@@ -103,8 +103,8 @@ td_vbd_t *device_vbd = NULL;
 td_image_t *remus_image = NULL;
 struct tap_disk tapdisk_remus;
 
-/* cache 10M(20480 sectors) data */
-#define MAX_WRITE_REQS 20480
+/* cache 100M(204800 sectors) data */
+#define MAX_WRITE_REQS 204800
 uint64_t write_reqs;
 
 struct ramdisk {
@@ -694,6 +694,8 @@ static int mwrite(int fd, void* buf, size_t len)
 again:
 		FD_ZERO(&wfds);
 		FD_SET(fd, &wfds);
+		tv.tv_sec = HEARTBEAT_MS / 1000;
+		tv.tv_usec = (HEARTBEAT_MS % 1000) * 1000;
 		if (!(rc = select(fd + 1, NULL, &wfds, NULL, &tv))) {
 			RPRINTF("time out during write\n");
 			goto again;
