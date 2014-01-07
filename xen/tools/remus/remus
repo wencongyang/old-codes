@@ -11,7 +11,11 @@ import optparse, os, re, select, signal, sys, time
 from xen.remus import save, util, vm
 from xen.remus.device import ReplicatedDisk, ReplicatedDiskException
 from xen.remus.device import BufferedNIC, BufferedNICException
-from xen.xend import XendOptions
+from xen.xend import XendDomain
+from xen.xend import XendOptions, XendConfig
+from xen.xend import sxp
+import xen.lowlevel.xc
+from xen.xend.XendConstants import *
 
 class CfgException(Exception): pass
 
@@ -163,12 +167,32 @@ def run(cfg):
         if closure.cmd == 'r2':
             die()
 
+    def check_pvdrv():
+        p = sxp.Parser()
+        p.input(vm.sxprtostr(dom.dominfo))
+        vmconfig = p.get_val()
+        domconfig = XendConfig.XendConfig(sxp_obj = vmconfig)
+        is_hvm = domconfig.is_hvm()
+        xc = xen.lowlevel.xc.xc()
+        if is_hvm:
+            pvdrv = xc.hvm_get_param(dom.dom['domid'], HVM_PARAM_CALLBACK_IRQ)
+        else:
+            pvdrv = True
+        return pvdrv
+
     def setup():
         'setup network'
         if cfg.colo:
+            vifno = 0
+            pvdrv = check_pvdrv()
             for vif in dom.vifs:
-                print "setup %s" % vif.dev
-                print util.runcmd(['/etc/xen/scripts/network-colo', 'master', 'install', vif.dev, 'eth0'])
+                if not pvdrv:
+                    vifstr = 'tap%d.%d' % (dom.dom['domid'], vifno)
+                    vifno += 1
+                else:
+                    vifstr = vif.dev
+                print "setup %s" % vifstr
+                print util.runcmd(['/etc/xen/scripts/network-colo', 'master', 'install', vifstr, 'eth0'])
                 return True
         return False
 
