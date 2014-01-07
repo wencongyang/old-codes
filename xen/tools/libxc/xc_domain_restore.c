@@ -26,8 +26,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "xg_private.h"
-#include "xg_save_restore.h"
+#include "xc_save_restore_colo.h"
 #include "xc_dom.h"
 
 #include <xen/hvm/ioreq.h>
@@ -1395,8 +1394,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         }
     }
 
-    fprintf(fp, "Load pages finishs\n");
-    fflush(fp);
+    colo_output_log(fp, "Load pages finishs\n");
 
     /*
      * Ensure we flush all machphys updates before potential PAE-specific
@@ -1441,16 +1439,14 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     {
         // DPRINTF("Last checkpoint, finishing\n");
 
-        fprintf(fp, "Last checkpoint\n");
-        fflush(fp);
+        colo_output_log(fp, "Last checkpoint\n");
         goto finish;
     }
 
 getpages:
     // DPRINTF("Buffered checkpoint\n");
 
-    fprintf(fp, "Buffered checkpoint\n");
-    fflush(fp);
+    colo_output_log(fp, "Buffered checkpoint\n");
 
     if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
         PERROR("error when buffering batch, finishing");
@@ -1924,8 +1920,7 @@ getpages:
         goto out;
     }
 
-    fprintf(fp, "dump_qemu finishs\n");
-    fflush(fp);
+    colo_output_log(fp, "dump_qemu finishs\n");
 
 #define hvm_xc_clear_domain_page(x,d,p) ({					\
     (callbacks && callbacks->hvm_clear_page) ?					\
@@ -1942,8 +1937,7 @@ getpages:
         goto out;
     }
 
-    fprintf(fp, "clear pages\n");
-    fflush(fp);
+    colo_output_log(fp, "clear pages\n");
 
     if ( skip_set_param )
         goto skip_set_hvm_param;
@@ -1964,8 +1958,7 @@ getpages:
         goto out;
     }
 
-    fprintf(fp, "setting HVM params\n");
-    fflush(fp);
+    colo_output_log(fp, "setting HVM params\n");
 
 skip_set_hvm_param:
     *store_mfn = tailbuf.u.hvm.magicpfns[2];
@@ -1997,15 +1990,13 @@ skip_set_hvm_param:
         goto out;
     }
 
-    fprintf(fp, "setting the HVM context\n");
-    fflush(fp);
+    colo_output_log(fp, "setting the HVM context\n");
 
 out_restore:
     if ( callbacks && callbacks->finish_restotre )
     {
         rc = callbacks->finish_restotre(&callbacks->comm_data, callbacks->data);
-        fprintf(fp, "finish_restore returns %d\n", rc);
-        fflush(fp);
+        colo_output_log(fp, "finish_restore returns %d\n", rc);
         if ( rc < 0 )
         {
             PERROR("Error finishing restore");
@@ -2017,8 +2008,7 @@ out_wait_checkpoint:
     if ( callbacks && callbacks->wait_checkpoint )
     {
         rc = callbacks->wait_checkpoint(&callbacks->comm_data, callbacks->data);
-        fprintf(fp, "wait_checkpoint returns %d\n", rc);
-        fflush(fp);
+        colo_output_log(fp, "wait_checkpoint returns %d\n", rc);
         if ( rc < 0 )
         {
             PERROR("Error fwait_checkpoint");

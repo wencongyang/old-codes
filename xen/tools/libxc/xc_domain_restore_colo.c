@@ -166,8 +166,7 @@ void restore_colo_free(struct restore_data *comm_data, void *data)
     if (!colo_data)
         return;
 
-    fprintf(colo_data->fp, "call restore_colo_free()\n");
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "call restore_colo_free()\n");
     free(colo_data->pfn_type_slaver);
     free(colo_data->pagebase);
     free(colo_data->pfn_batch_slaver);
@@ -207,8 +206,7 @@ static int pin_l1(struct restore_data *comm_data,
     unsigned long *pfn_type_slaver = colo_data->pfn_type_slaver;
     unsigned long *dirty_pages = colo_data->dirty_pages;
 
-    fprintf(colo_data->fp, "call pin_l1()\n");
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "call pin_l1()\n");
     for (i = 0; i < dinfo->p2m_size; i++)
     {
         switch ( pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
@@ -273,8 +271,7 @@ static int unpin_pagetable(struct restore_data *comm_data,
     unsigned long *pfn_type_slaver = colo_data->pfn_type_slaver;
     unsigned long *dirty_pages = colo_data->dirty_pages;
 
-    fprintf(colo_data->fp, "call unpin_pagetable()\n");
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "call unpin_pagetable()\n");
     for (i = 0; i < dinfo->p2m_size; i++)
     {
         if ( (pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 )
@@ -345,17 +342,15 @@ static int update_memory(struct restore_data *comm_data,
     char *pagebuff;
     unsigned long count;
 
-    fprintf(colo_data->fp, "call update_memory()\n");
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "call update_memory()\n");
 
     if (hvm && !colo_data->vm_mm) {
         unsigned long *pfn_type = calloc(dinfo->p2m_size,
                                          sizeof(unsigned long));
         unsigned long k;
 
-        fprintf(colo_data->fp, "p2m_size: %lu\n", dinfo->p2m_size);
-        fprintf(colo_data->fp, "max_mem_pfn: %lu\n", max_mem_pfn);
-        fflush(colo_data->fp);
+        colo_output_log(colo_data->fp, "p2m_size: %lu\n", dinfo->p2m_size);
+        colo_output_log(colo_data->fp, "max_mem_pfn: %lu\n", max_mem_pfn);
 
         for (k = 0; k < dinfo->p2m_size; k++)
             pfn_type[k] = k;
@@ -365,8 +360,7 @@ static int update_memory(struct restore_data *comm_data,
                                                colo_data->pfn_err,
                                                dinfo->p2m_size);
         if (!colo_data->vm_mm) {
-            fprintf(colo_data->fp, "can't map vm total memory\n");
-            fflush(colo_data->fp);
+            colo_output_log(colo_data->fp, "can't map vm total memory\n");
             PERROR("can't map vm total memory");
             return 1;
         }
@@ -376,8 +370,7 @@ static int update_memory(struct restore_data *comm_data,
     for (pfn = 0; pfn < max_mem_pfn; pfn++) {
         if (!test_bit(pfn, dirty_pages)) {
             if (colo_data->first_time) {
-                fprintf(colo_data->fp, "skip pfn: %lu\n", pfn);
-                fflush(colo_data->fp);
+                colo_output_log(colo_data->fp, "skip pfn: %lu\n", pfn);
             }
             continue;
         }
@@ -385,8 +378,7 @@ static int update_memory(struct restore_data *comm_data,
         pagetype = pfn_type[pfn] & XEN_DOMCTL_PFINFO_LTAB_MASK;
         if (pagetype == XEN_DOMCTL_PFINFO_XTAB) {
             if (hvm && colo_data->pfn_err[pfn] == 0) {
-                fprintf(colo_data->fp, "unmapped page: %lu, pfn_err: %d\n", pfn, colo_data->pfn_err[pfn]);
-                fflush(colo_data->fp);
+                colo_output_log(colo_data->fp, "unmapped page: %lu, pfn_err: %d\n", pfn, colo_data->pfn_err[pfn]);
             }
             /* a bogus/unmapped page: skip it */
             continue;
@@ -397,8 +389,7 @@ static int update_memory(struct restore_data *comm_data,
         region_mfn_slaver = mfn;
         if (hvm) {
             if (colo_data->pfn_err[pfn]) {
-                fprintf(colo_data->fp, "xc_map_foreign_bulk failed\n");
-                fflush(colo_data->fp);
+                colo_output_log(colo_data->fp, "xc_map_foreign_bulk failed\n");
                 ERROR("update_memory: xc_map_foreign_bulk failed");
                 return 1;
             }
@@ -409,8 +400,7 @@ static int update_memory(struct restore_data *comm_data,
                                                      &region_mfn_slaver,
                                                      &pfn_err, 1);
             if (!region_base_slaver || pfn_err) {
-                fprintf(colo_data->fp, "xc_map_foreign_bulk failed\n");
-                fflush(colo_data->fp);
+                colo_output_log(colo_data->fp, "xc_map_foreign_bulk failed\n");
                 PERROR("update_memory: xc_map_foreign_bulk failed");
                 return 1;
             }
@@ -431,8 +421,7 @@ static int update_memory(struct restore_data *comm_data,
         }
     }
 
-    fprintf(colo_data->fp, "update %lu pages\n", count);
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "update %lu pages\n", count);
 
     /*
      * Ensure we flush all machphys updates before potential PAE-specific
@@ -463,8 +452,7 @@ static int pin_pagetable(struct restore_data *comm_data,
     xc_interface *xch = comm_data->xch;
     unsigned long *dirty_pages = colo_data->dirty_pages;
 
-    fprintf(colo_data->fp, "call pin_pagetable()\n");
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "call pin_pagetable()\n");
     for ( i = 0; i < dinfo->p2m_size; i++ )
     {
         if ( (pfn_type[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 )
@@ -537,8 +525,7 @@ static int unpin_l1(struct restore_data *comm_data,
     unsigned long *pfn_type_slaver = colo_data->pfn_type_slaver;
     unsigned long *dirty_pages = colo_data->dirty_pages;
 
-    fprintf(colo_data->fp, "call unpin_l1()\n");
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "call unpin_l1()\n");
     for (i = 0; i < dinfo->p2m_size; i++)
     {
         switch ( pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
@@ -639,8 +626,7 @@ int update_p2m_table(struct restore_data *comm_data, void *data)
     xen_pfn_t *live_p2m_one;
     unsigned long *p2m;
 
-    fprintf(colo_data->fp, "call update_p2m_table()\n");
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "call update_p2m_table()\n");
     j = 0;
     for (i = 0; i < P2M_FL_ENTRIES; i++)
     {
@@ -745,16 +731,14 @@ static int wait_qemu_dm(struct restore_colo_data *colo_data)
             if (!vec)
                 goto out;
 
-            fprintf(colo_data->fp, "vec contents: %s|%s\n", vec[XS_WATCH_PATH], vec[XS_WATCH_TOKEN]);
-            fflush(colo_data->fp);
+            colo_output_log(colo_data->fp, "vec contents: %s|%s\n", vec[XS_WATCH_PATH], vec[XS_WATCH_TOKEN]);
             th = xs_transaction_start(xs);
             buf = xs_read(xs, th, vec[XS_WATCH_PATH], &len);
             xs_transaction_end(xs, th, false);
             if (!buf)
                 goto out;
 
-            fprintf(colo_data->fp, "read \"%s\" from %s\n", buf, vec[XS_WATCH_PATH]);
-            fflush(colo_data->fp);
+            colo_output_log(colo_data->fp, "read \"%s\" from %s\n", buf, vec[XS_WATCH_PATH]);
             ret = strcmp(buf, "running");
             if (!ret)
                 break;
@@ -897,8 +881,7 @@ static int setup_suspend_evtchn(struct restore_data *comm_data,
 
     remote_port = xs_suspend_evtchn_port(dom);
     if (remote_port < 0) {
-        fprintf(colo_data->fp, "getting remote_suspend port fails\n");
-        fflush(colo_data->fp);
+        colo_output_log(colo_data->fp, "getting remote_suspend port fails\n");
         ERROR("getting remote suspend port fails");
         return -1;
     }
@@ -954,8 +937,7 @@ int finish_colo(struct restore_data *comm_data, void *data)
     int rc;
     char str[10];
 
-    fprintf(colo_data->fp, "call finish_colo()\n");
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "call finish_colo()\n");
     /* output the store-mfn & console-mfn */
     printf("store-mfn %li\n", comm_data->store_mfn);
     printf("console-mfn %li\n", comm_data->console_mfn);
@@ -963,8 +945,7 @@ int finish_colo(struct restore_data *comm_data, void *data)
     /* notify python code checkpoint finish */
     printf("finish\n");
     fflush(stdout);
-    fprintf(colo_data->fp, "write finish to python\n");
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "write finish to python\n");
 
     if (colo_data->first_time || !comm_data->hvm) {
         /* we need to know which pages are dirty to restore the guest */
@@ -992,8 +973,7 @@ int finish_colo(struct restore_data *comm_data, void *data)
         ERROR("read %s, expect resume", str);
         return -1;
     }
-    fprintf(colo_data->fp, "read %s from python\n", str);
-    fflush(colo_data->fp);
+    colo_output_log(colo_data->fp, "read %s from python\n", str);
 
     if (!colo_data->first_time && comm_data->hvm) {
         xs_write(colo_data->xsh, XBT_NULL, colo_data->command_path,
@@ -1157,8 +1137,7 @@ int colo_wait_checkpoint(struct restore_data *comm_data, void *data)
     if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_OFF, NULL, 0, NULL,
                           0, NULL) < 0 )
     {
-        fprintf(colo_data->fp, "disabling dirty-log fails\n");
-        fflush(colo_data->fp);
+        colo_output_log(colo_data->fp, "disabling dirty-log fails\n");
         ERROR("disabling dirty-log fails");
         return -1;
     }

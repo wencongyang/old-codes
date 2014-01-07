@@ -55,6 +55,7 @@ static inline void colo_output_log(FILE *file, const char *fmt, ...)
     fprintf(file, "[%lu.%06lu]", tv.tv_sec, tv.tv_usec);
     va_start(ap, fmt);
     vfprintf(file, fmt, ap);
+    fflush(file);
     va_end(ap);
 }
 #endif
