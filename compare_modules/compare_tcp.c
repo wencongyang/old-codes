@@ -331,20 +331,21 @@ update_tcp_compare_info(struct tcp_compare_info *tcp_info,
 			struct tcphdr_info *tcphdr_info,
 			struct sk_buff *skb)
 {
-	uint32_t timestamp = htonl(*tcphdr_info->timestamp);
-
 	if (tcphdr_info->flags & ACK_UPDATE || !(tcp_info->flags & VALID))
 		tcp_info->rcv_nxt = tcphdr_info->ack_seq;
 
 	if (!(tcphdr_info->flags & OLD_ACK))
 		tcp_info->window = tcphdr_info->window;
 
-	if (tcp_info->flags & VALID_TIMESTAMP) {
-		if (after(timestamp, tcp_info->timestamp))
+	if (tcphdr_info->timestamp) {
+		uint32_t timestamp = htonl(*tcphdr_info->timestamp);
+		if (tcp_info->flags & VALID_TIMESTAMP) {
+			if (after(timestamp, tcp_info->timestamp))
+				tcp_info->timestamp = timestamp;
+		} else {
 			tcp_info->timestamp = timestamp;
-	} else {
-		tcp_info->timestamp = timestamp;
-		tcp_info->flags |= VALID_TIMESTAMP;
+			tcp_info->flags |= VALID_TIMESTAMP;
+		}
 	}
 
 	if (!(tcphdr_info->flags & RETRANSMIT)) {
