@@ -135,7 +135,7 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case COMP_IOCTWAIT:
 		/* wait for a new checkpoint */
 #if 1
-		ret = wait_event_interruptible_timeout(queue, state != state_comparing, 10);
+		ret = wait_event_interruptible_timeout(queue, state != state_comparing, arg);
 		if (ret == 0)
 			return -ETIME;
 

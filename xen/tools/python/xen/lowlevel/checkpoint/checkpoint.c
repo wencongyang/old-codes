@@ -500,9 +500,11 @@ static void wait_new_checkpoint(CheckpointObject *self)
     int dev_fd = self->dev_fd;
     int err, saved_errno;
     PyObject* result;
+    int count = 0;
 
-    while (1) {
-        err = ioctl(dev_fd, COMP_IOCTWAIT);
+    while (count < 20) {
+        count++;
+        err = ioctl(dev_fd, COMP_IOCTWAIT, 500);
         if (err == 0)
             break;
 
