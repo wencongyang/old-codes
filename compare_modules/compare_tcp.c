@@ -274,9 +274,6 @@ get_tcp_hdr_info(struct tcphdr *tcp, int length,
 		tcp_hinfo->timestamp =
 			(uint32_t *)((char *)tcp_hinfo->timestamp + 2);
 
-	if (!(tcp_cinfo->flags & VALID))
-		return;
-
 	if (length > 0)
 		tcp_hinfo->flags |= HAVE_PAYLOAD;
 
@@ -285,6 +282,13 @@ get_tcp_hdr_info(struct tcphdr *tcp, int length,
 		 * rst packet, not ack update, win update, or retransmitted
 		 * packet
 		 */
+		return;
+
+	/*
+	 * This packet is the first packet, and we can not check whether it is
+	 * an ack update, win update, or retransmitted packet.
+	 */
+	if (!(tcp_cinfo->flags & VALID))
 		return;
 
 	if (tcp_hinfo->length > 0)
