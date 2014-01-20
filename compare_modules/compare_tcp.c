@@ -144,7 +144,7 @@ static void debug_print_tcp(const struct compare_info *info, const void *data)
 static void
 update_tcp_window(struct tcphdr *tcp, struct sk_buff *skb, uint16_t new_window)
 {
-	uint16_t old_window = htons(tcp->window);
+	uint16_t old_window = ntohs(tcp->window);
 
 	if (new_window >= old_window)
 		return;
@@ -158,7 +158,7 @@ update_tcp_window(struct tcphdr *tcp, struct sk_buff *skb, uint16_t new_window)
 static void
 update_tcp_ackseq(struct tcphdr *tcp, struct sk_buff *skb, uint32_t new_ack)
 {
-	uint32_t old_ack = htonl(tcp->ack_seq);
+	uint32_t old_ack = ntohl(tcp->ack_seq);
 
 	if (!before(new_ack, old_ack))
 		return;
