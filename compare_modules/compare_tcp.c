@@ -188,7 +188,7 @@ update_tcp_fin(struct tcphdr *tcp, struct sk_buff *skb, bool clear)
 	uint32_t old_seq = tcp->seq;
 
 	tcp->fin = !clear;
-	new_value=((uint32_t *)tcp)[6];
+	new_value=((uint16_t *)tcp)[6];
 
 	inet_proto_csum_replace2(&tcp->check, skb, old_value, new_value, 0);
 	if (clear)
