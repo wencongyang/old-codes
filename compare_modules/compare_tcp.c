@@ -124,10 +124,10 @@ static void debug_print_tcp(const struct compare_info *info, const void *data)
 	const struct tcphdr *tcp = data;
 	struct tcp_compare_info *tcp_info;
 
-	src_port = htons(tcp->source);
-	dst_port = htons(tcp->dest);
-	ack = htonl(tcp->ack_seq);
-	seq = htonl(tcp->seq);
+	src_port = ntohs(tcp->source);
+	dst_port = ntohs(tcp->dest);
+	ack = ntohl(tcp->ack_seq);
+	seq = ntohl(tcp->seq);
 	pr_warn("HA_compare:[TCP] src=%u, dst=%u, seq = %u,"
 		" ack=%u\n", src_port, dst_port, seq,
 		ack);
@@ -195,7 +195,7 @@ update_tcp_fin(struct tcphdr *tcp, struct sk_buff *skb, bool clear)
 		return;
 
 	/* update the seq number */
-	tcp->seq = htonl(htonl(old_seq) - 1);
+	tcp->seq = htonl(ntohl(old_seq) - 1);
 	inet_proto_csum_replace4(&tcp->check, skb, old_seq, tcp->seq, 0);
 }
 
@@ -217,7 +217,7 @@ update_tcp_timestamp(struct tcphdr *tcp, struct sk_buff *skb,
 
 	old_timestamp = (uint32_t *)((char *)old_timestamp + 2);
 
-	if (htonl(*old_timestamp) == new_timestamp)
+	if (ntohl(*old_timestamp) == new_timestamp)
 		return;
 
 	inet_proto_csum_replace4(&tcp->check, skb, *old_timestamp,
@@ -232,10 +232,10 @@ get_tcphdr_info(struct tcphdr *tcp, int length,
 {
 	length -= tcp->doff * 4;
 
-	tcphdr_info->seq = htonl(tcp->seq);
+	tcphdr_info->seq = ntohl(tcp->seq);
 	tcphdr_info->end_seq = tcphdr_info->seq;
 	tcphdr_info->length = length;
-	tcphdr_info->window = htons(tcp->window);
+	tcphdr_info->window = ntohs(tcp->window);
 
 	if (unlikely(length < 0)) {
 		tcphdr_info->flags |= ERR_SKB;
@@ -260,7 +260,7 @@ get_tcphdr_info(struct tcphdr *tcp, int length,
 
 	if (tcp->ack) {
 		tcphdr_info->flags |= ACK;
-		tcphdr_info->ack_seq = htonl(tcp->ack_seq);
+		tcphdr_info->ack_seq = ntohl(tcp->ack_seq);
 	}
 
 	tcphdr_info->end_seq += tcphdr_info->length;
@@ -338,7 +338,7 @@ update_tcp_compare_info(struct tcp_compare_info *tcp_info,
 		tcp_info->window = tcphdr_info->window;
 
 	if (tcphdr_info->timestamp) {
-		uint32_t timestamp = htonl(*tcphdr_info->timestamp);
+		uint32_t timestamp = ntohl(*tcphdr_info->timestamp);
 		if (tcp_info->flags & VALID_TIMESTAMP) {
 			if (after(timestamp, tcp_info->timestamp))
 				tcp_info->timestamp = timestamp;
@@ -589,8 +589,8 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 
 	/* seq */
 	if ((TCP_CMP_INFO(m)->flags & FIN) != (TCP_CMP_INFO(s)->flags & FIN)) {
-		uint32_t m_seq = htonl(m->tcp->seq);
-		uint32_t s_seq = htonl(s->tcp->seq);
+		uint32_t m_seq = ntohl(m->tcp->seq);
+		uint32_t s_seq = ntohl(s->tcp->seq);
 
 		if (TCP_CMP_INFO(m)->flags & FIN)
 			m_seq -= 1;
