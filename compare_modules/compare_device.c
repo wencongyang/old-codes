@@ -49,7 +49,7 @@ static void update_compare_info(struct connect_info *conn_info, struct sk_buff *
 	struct ethhdr *eth = (struct ethhdr *)skb->data;
 	struct iphdr *ip;
 
-	if (htons(eth->h_proto) != ETH_P_IP)
+	if (eth->h_proto != htons(ETH_P_IP))
 		return;
 
 	ip = (struct iphdr *)(skb->data + sizeof(*eth));
