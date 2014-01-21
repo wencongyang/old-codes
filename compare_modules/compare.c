@@ -54,10 +54,10 @@ static void debug_print_arp(const struct arphdr *arp)
 	struct arp_reply *temp;
 
 	pr_warn("HA_compare:[ARP] ar_hrd=%u, ar_pro=%u\n",
-		htons(arp->ar_hrd), htons(arp->ar_pro));
+		ntohs(arp->ar_hrd), ntohs(arp->ar_pro));
 	pr_warn("HA_compare:[ARP] ar_hln=%u, ar_pln=%u, ar_op=%u\n",
-		arp->ar_hln, arp->ar_pln, htons(arp->ar_op));
-	if (htons(arp->ar_op) == ARPOP_REPLY || htons(arp->ar_op) == ARPOP_REQUEST) {
+		arp->ar_hln, arp->ar_pln, ntohs(arp->ar_op));
+	if (ntohs(arp->ar_op) == ARPOP_REPLY || ntohs(arp->ar_op) == ARPOP_REQUEST) {
 		temp = (struct arp_reply *)((char*)arp + sizeof(struct arphdr));
 		pr_warn("HA_compare:[ARP] ar_sha: %pM, ar_sip: %pI4\n", temp->ar_sha, temp->ar_sip);
 		pr_warn("HA_compare:[ARP] ar_tha: %pM, ar_tip: %pI4\n", temp->ar_tha, temp->ar_tip);
