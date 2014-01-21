@@ -54,8 +54,8 @@ EXPORT_SYMBOL(unregister_compare_ops);
 
 static void debug_print_ip(const struct compare_info *info, const struct iphdr *ip)
 {
-	unsigned short len = htons(ip->tot_len);
-	unsigned short id = htons(ip->id);
+	unsigned short len = ntohs(ip->tot_len);
+	unsigned short id = ntohs(ip->id);
 	unsigned char protocol = ip->protocol;
 	void *data = (char *)ip + ip->ihl * 4;
 	const compare_ops_t * ops;
@@ -146,18 +146,18 @@ __ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 	m->ip_data = (char *)m->ip + m->ip->ihl * 4;
 	if (m_fragment)
 		m->length = FRAG_CB(m->skb)->tot_len;
-	else if (m->length <= htons(m->ip->tot_len))
+	else if (m->length <= ntohs(m->ip->tot_len))
 		m->length -= m->ip->ihl * 4;
 	else
-		m->length = htons(m->ip->tot_len) - m->ip->ihl * 4;
+		m->length = ntohs(m->ip->tot_len) - m->ip->ihl * 4;
 
 	s->ip_data = (char *)s->ip + s->ip->ihl * 4;
 	if (s_fragment)
 		s->length = FRAG_CB(s->skb)->tot_len;
-	else if (s->length <= htons(s->ip->tot_len))
+	else if (s->length <= ntohs(s->ip->tot_len))
 		s->length -= s->ip->ihl * 4;
 	else
-		s->length = htons(s->ip->tot_len) - s->ip->ihl * 4;
+		s->length = ntohs(s->ip->tot_len) - s->ip->ihl * 4;
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[m->ip->protocol]);
@@ -209,7 +209,7 @@ __ipv4_compare_packet(struct compare_info *m, struct compare_info *s)
 
 #undef compare_elem
 
-	last_id = htons(m->ip->id);
+	last_id = ntohs(m->ip->id);
 
 	return SAME_PACKET;
 }
@@ -238,7 +238,7 @@ void ipv4_update_compare_info(void *info, struct iphdr *ip, struct sk_buff *skb)
 
 	protocol = ip->protocol;
 	data = (char *)ip + ip->ihl * 4;
-	len = htons(ip->tot_len) - ip->ihl * 4;
+	len = ntohs(ip->tot_len) - ip->ihl * 4;
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[protocol]);
@@ -332,10 +332,10 @@ uint32_t ipv4_compare_one_packet(struct compare_info *m, struct compare_info *s)
 	info->ip_data = (char *)info->ip + info->ip->ihl * 4;
 	if (fragment)
 		info->length = FRAG_CB(info->skb)->tot_len;
-	else if (info->length <= htons(info->ip->tot_len))
+	else if (info->length <= ntohs(info->ip->tot_len))
 		info->length -= info->ip->ihl * 4;
 	else
-		info->length = htons(info->ip->tot_len) - info->ip->ihl * 4;
+		info->length = ntohs(info->ip->tot_len) - info->ip->ihl * 4;
 
 	/* clear other_info to avoid unexpected errors */
 	other_info->ip_data = NULL;
