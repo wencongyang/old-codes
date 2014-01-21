@@ -7,8 +7,8 @@ static void debug_print_udp(const struct compare_info *info, const void *data)
 	const struct udphdr *udp = data;
 	unsigned short src_port, dst_port;
 
-	src_port = htons(udp->source);
-	dst_port = htons(udp->dest);
+	src_port = ntohs(udp->source);
+	dst_port = ntohs(udp->dest);
 	pr_warn("HA_compare:[UDP] src=%u, dst=%u\n", src_port, dst_port);
 }
 
