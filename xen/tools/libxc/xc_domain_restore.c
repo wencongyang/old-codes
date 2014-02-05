@@ -2026,7 +2026,8 @@ out_wait_checkpoint:
     if ( callbacks && callbacks->wait_checkpoint )
     {
         rc = callbacks->wait_checkpoint(&callbacks->comm_data, callbacks->data);
-        colo_output_log(fp, "wait_checkpoint returns %d\n", rc);
+        if (rc != 2)
+            colo_output_log(fp, "wait_checkpoint returns %d\n", rc);
         if ( rc < 0 )
         {
             PERROR("Error fwait_checkpoint");
@@ -2043,7 +2044,7 @@ out_wait_checkpoint:
                 rc = 0;
                 goto out;
             }
-            colo_output_log(fp, "2. receive %d pages\n", pagebuf.nr_pages);
+//            colo_output_log(fp, "2. receive %d pages\n", pagebuf.nr_pages);
             dirtypg = 1;
             goto loadpages;
         }
