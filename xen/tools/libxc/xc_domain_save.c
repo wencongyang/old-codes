@@ -1495,6 +1495,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     struct transmit_data tdata;
     struct transmit_thread_info tinfo;
 
+    memset(&tinfo, 0, sizeof(tinfo));
+
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
         ERROR("No switch_qemu_logdirty callback provided.");
@@ -1722,7 +1724,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     tdata.sent_last_iter = dinfo->p2m_size;
     tdata.ctx = ctx;
 
-    memset(&tinfo, 0, sizeof(tinfo));
     tinfo.tdata = &tdata;
 
   copypages:
@@ -2199,7 +2200,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     if ( !rc && callbacks->postcopy )
         callbacks->postcopy(callbacks->data);
 
-    if (tinfo.run) {
+    if (rc) {
+        /* we encounter some error and do nothing */
+    } else if (tinfo.run) {
         start_transmit_thread(&tinfo);
         colo_output_log(stderr, "transmit thread is started\n");
     } else if (callbacks->thread) {
@@ -2247,6 +2250,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         merge_bits(to_send, to_skip, dinfo->p2m_size);
 
         goto copypages;
+    }
+
+    if (tinfo.run) {
+        /* The thread is running, and we should stop it before cleanup */
+        frc = pthread_cancel(tinfo.transmit_thread);
+        if (!frc)
+            pthread_join(tinfo.transmit_thread, NULL);
     }
 
     if ( tmem_saved != 0 && live )
