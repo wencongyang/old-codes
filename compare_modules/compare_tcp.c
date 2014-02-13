@@ -63,6 +63,8 @@ MODULE_PARM_DESC(ignore_tcp_doff, "ignore tcp doff's difference");
 
 //#define DEBUG_COMPARE_MORE_TCP
 
+bool ignore_tcp_dlen = 0;
+
 struct tcp_compare_info {
 	union {
 		struct net_device *dev;
@@ -919,6 +921,15 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 
 	m_cinfo->tcp_data = m_cinfo->ip_data + m_cinfo->tcp->doff * 4;
 	s_cinfo->tcp_data = s_cinfo->ip_data + s_cinfo->tcp->doff * 4;
+	if (ignore_tcp_dlen) {
+		if (before(m_tcp_hinfo.seq, s_tcp_hinfo.seq)){
+			m_cinfo->tcp_data += s_tcp_hinfo.seq - m_tcp_hinfo.seq;
+			m_len -= s_tcp_hinfo.seq - m_tcp_hinfo.seq;
+		} else {
+			s_cinfo->tcp_data += m_tcp_hinfo.seq - s_tcp_hinfo.seq;
+			s_len -= m_tcp_hinfo.seq - s_tcp_hinfo.seq;
+		}
+	}
 	ret = default_compare_data(m_cinfo->tcp_data, s_cinfo->tcp_data, m_len);
 	if (ret & CHECKPOINT) {
 		pr_warn("HA_compare: tcp data is different\n");
@@ -962,7 +973,9 @@ static struct tcphdr *get_tcphdr(struct sk_buff *skb)
 
 static uint32_t
 tcp_compare_payload(struct compare_info *m_cinfo,
-		    struct compare_info *s_cinfo)
+		    struct compare_info *s_cinfo,
+		    struct tcp_hdr_info *m_tcp_hinfo,
+		    struct tcp_hdr_info *s_tcp_hinfo)
 {
 	struct sk_buff *m_head = m_cinfo->skb, *s_head = s_cinfo->skb;
 	int m_off, s_off;
@@ -970,7 +983,12 @@ tcp_compare_payload(struct compare_info *m_cinfo,
 	m_off = m_cinfo->tcp->doff * 4;
 	s_off = s_cinfo->tcp->doff * 4;
 
-	if (m_cinfo->length - m_off != s_cinfo->length - s_off)
+	if (ignore_tcp_dlen) {
+		if (before(m_tcp_hinfo->seq, s_tcp_hinfo->seq))
+			m_off += s_tcp_hinfo->seq - m_tcp_hinfo->seq;
+		else
+			s_off += m_tcp_hinfo->seq - s_tcp_hinfo->seq;
+	} else if (m_cinfo->length - m_off != s_cinfo->length - s_off)
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	return ipv4_transport_compare_fragment(m_head, s_head, m_off, s_off,
@@ -1017,7 +1035,7 @@ tcp_compare_fragment(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 
 	saved_ret = ret;
 
-	ret = tcp_compare_payload(m_cinfo, s_cinfo);
+	ret = tcp_compare_payload(m_cinfo, s_cinfo, &m_tcp_hinfo, &s_tcp_hinfo);
 	if (ret & CHECKPOINT)
 		goto out;
 
