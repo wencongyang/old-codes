@@ -291,8 +291,18 @@ get_tcp_hdr_info(struct tcphdr *tcp, int length,
 	if (!(tcp_cinfo->flags & VALID))
 		return;
 
-	if (tcp_hinfo->length > 0)
-		goto check_retransmitted_packet;
+	/* TCP only retransmits data/SIN/FYN */
+	if (tcp_hinfo->length > 0) {
+		/*
+		 * Retransmitted packet:
+		 *  1. end_seq is before snd_nxt
+		 *  2. end_seq is equal to snd_nxt, and seq is before snd_nxt
+		 */
+		if (before(tcp_hinfo->end_seq, tcp_cinfo->snd_nxt) ||
+		    (tcp_hinfo->end_seq == tcp_cinfo->snd_nxt &&
+		     before(tcp_hinfo->seq, tcp_cinfo->snd_nxt)))
+			tcp_hinfo->flags |= RETRANSMIT;
+	}
 
 	/* check window update */
 	if (tcp_hinfo->window > tcp_cinfo->window)
@@ -301,17 +311,6 @@ get_tcp_hdr_info(struct tcphdr *tcp, int length,
 	if ((tcp_hinfo->flags & ACK) &&
 	    after(tcp_hinfo->ack_seq, tcp_cinfo->rcv_nxt))
 		tcp_hinfo->flags |= ACK_UPDATE;
-
-check_retransmitted_packet:
-	/*
-	 * Retransmitted packet:
-	 *  1. end_seq is before snd_nxt
-	 *  2. end_seq is equal to snd_nxt, and seq is before snd_nxt
-	 */
-	if (before(tcp_hinfo->end_seq, tcp_cinfo->snd_nxt) ||
-	    (tcp_hinfo->end_seq == tcp_cinfo->snd_nxt &&
-	     before(tcp_hinfo->seq, tcp_cinfo->snd_nxt)))
-		tcp_hinfo->flags |= RETRANSMIT;
 
 	if ((tcp_hinfo->flags & ACK_UPDATE) || !(tcp_hinfo->flags & ACK))
 		return;
