@@ -730,9 +730,22 @@ void xen_netbk_queue_tx_skb(struct xenvif *vif, struct sk_buff *skb)
 {
 	struct xen_netbk *netbk = vif->netbk;
 
+	if (unlikely(netbk == NULL))
+		goto drop;
+
 	skb_queue_tail(&netbk->rx_queue, skb);
 
 	xen_netbk_kick_thread(netbk);
+
+	return;
+
+drop:
+	/*
+	 * xenvif_down() is called in xenvif_disconnect_suspend()
+	 * at the same time
+	 */
+	vif->dev->stats.tx_dropped++;
+	dev_kfree_skb(skb);
 }
 
 static void xen_netbk_alarm(unsigned long data)
