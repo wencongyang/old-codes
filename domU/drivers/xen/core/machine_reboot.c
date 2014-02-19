@@ -191,10 +191,7 @@ static int take_machine_down(void *_suspend)
 	struct suspend *suspend = _suspend;
 	int suspend_cancelled, err;
 	extern void time_resume(void);
-	gnttab_dump_gnttab_t dump;
 	int ret;
-
-	dump.dom = DOMID_SELF;
 
 	if (suspend->fast_suspend) {
 		BUG_ON(!irqs_disabled());
