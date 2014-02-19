@@ -158,7 +158,6 @@ struct netfront_info {
 	spinlock_t   rx_lock;
 
 	unsigned int irq;
-	unsigned int fast;
 	unsigned int copying_receiver;
 	unsigned int carrier;
 

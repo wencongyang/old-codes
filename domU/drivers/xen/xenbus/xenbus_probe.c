@@ -61,8 +61,6 @@
 
 #include "xenbus_comms.h"
 #include "xenbus_probe.h"
-#include "../netfront/netfront.h"
-#include "../blkfront/block.h"
 
 #ifdef HAVE_XEN_PLATFORM_COMPAT_H
 #include <xen/platform-compat.h>
@@ -129,7 +127,6 @@ static int frontend_bus_id(char bus_id[BUS_ID_SIZE], const char *nodename)
 static void free_otherend_details(struct xenbus_device *dev)
 {
 	kfree(dev->otherend);
-	printk("yewei:dev->otherend=%s\n", dev->otherend);
 	dev->otherend = NULL;
 }
 
@@ -139,7 +136,6 @@ static void free_otherend_watch(struct xenbus_device *dev)
 	if (dev->otherend_watch.node) {
 		unregister_xenbus_watch(&dev->otherend_watch);
 		kfree(dev->otherend_watch.node);
-		printk("yewei:otherend watch node=%s\n", dev->otherend_watch.node);
 		dev->otherend_watch.node = NULL;
 	}
 }
@@ -150,14 +146,13 @@ int read_otherend_details(struct xenbus_device *xendev,
 {
 	int err;
 
-	if (HA_dom_id > 0) return 0;
+	if (HA_dom_id > 0)
+		return 0;
 
 	err = xenbus_gather(XBT_NIL, xendev->nodename,
 				id_node, "%i", &xendev->otherend_id,
 				path_node, NULL, &xendev->otherend,
 				NULL);
-	printk("[%lu]yewei: nodename=%s, id_node=%s,otherend_id=%d, otherend=%s\n",
-		jiffies, xendev->nodename, id_node, xendev->otherend_id, xendev->otherend);
 	if (err) {
 		xenbus_dev_fatal(xendev, err,
 				 "reading other end details from %s",
@@ -238,7 +233,6 @@ static void otherend_changed(struct xenbus_watch *watch,
 	struct xenbus_driver *drv = to_xenbus_driver(dev->dev.driver);
 	enum xenbus_state state;
 
-	printk("[%lu]yewei: In otherend_changed\n", jiffies);
 	/* Protect us against watches firing on old details when the otherend
 	   details change, say immediately after a resume. */
 	if (!dev->otherend ||
@@ -248,7 +242,6 @@ static void otherend_changed(struct xenbus_watch *watch,
 		return;
 	}
 
-	printk("\nyewei: begin to read driver state...\n");
 	state = xenbus_read_driver_state(dev->otherend);
 
 	DPRINTK("state is %d (%s), %s, %s", state, xenbus_strstate(state),
@@ -282,14 +275,6 @@ static int talk_to_otherend(struct xenbus_device *dev)
 	free_otherend_watch(dev);
 	free_otherend_details(dev);
 
-	return drv->read_otherend_details(dev);
-}
-
-static int read_slaver_details(struct xenbus_device *dev)
-{
-	struct xenbus_driver *drv = to_xenbus_driver(dev->dev.driver);
-
-	free_otherend_details(dev);
 	return drv->read_otherend_details(dev);
 }
 
@@ -368,8 +353,6 @@ int xenbus_dev_remove(struct device *_dev)
 static void xenbus_dev_shutdown(struct device *_dev)
 {
 	struct xenbus_device *dev = to_xenbus_device(_dev);
-	struct netfront_info *net_np = dev->dev.driver_data;
-	struct blkfront_info *blk_np = dev->dev.driver_data;
 	unsigned long timeout = 5*HZ;
 
 	DPRINTK("%s", dev->nodename);
@@ -388,30 +371,23 @@ static void xenbus_dev_shutdown(struct device *_dev)
 		       dev->nodename, xenbus_strstate(dev->state));
 		goto out;
 	}
+
+	if (!strcmp(dev->devicetype, "vfb"))
+		goto out;
+
 	/*
 	 * we use another path to disconnect "vbd".
 	*/
-	if (!strcmp(dev->devicetype, "vbd")) {
-		printk("down vbd...\n");
-		if (HA_have_check) {
-			printk("yewei: notfy_remote_via_irq in dev shutdown.\n");
-			dev->state = XenbusStateSuspended;
-			notify_remote_via_irq(blk_np->fast);
-		} else
-			xenbus_switch_state(dev, XenbusStateSuspended);
-	} else {
-		printk("down vnif...\n");
-		if (HA_have_check) {
-			printk("yewei: notfy_remote_via_irq in dev shutdown.\n");
-			dev->state = XenbusStateSuspended;
-			notify_remote_via_irq(net_np->fast);
-		} else
-			xenbus_switch_state(dev, XenbusStateSuspended);
-	}
+	if (HA_have_check) {
+		pr_info("down %s...\n", dev->devicetype);
+		dev->state = XenbusStateSuspended;
+		notify_remote_via_irq(dev->fast_suspend_irq);
+	} else
+		xenbus_switch_state(dev, XenbusStateSuspended);
 
-	printk("[%lu]wait for completion\n", get_ms());
+	pr_info("[%lu]wait for completion\n", get_ms());
 	timeout = wait_for_completion_timeout(&dev->down, timeout);
-	printk("[%lu]completion\n", get_ms());
+	pr_info("[%lu]completed\n", get_ms());
 	if (!timeout)
 		printk("%s: %s timeout closing device\n", __FUNCTION__, dev->nodename);
  out:
@@ -826,19 +802,21 @@ static int resume_dev(struct device *dev, void *data)
 	}
 
 	if (HA_dom_id > 0) {
+		char *tmp;
 		// change other end
-		printk("old otherend is %s\n", xdev->otherend);
+		pr_info("old otherend is %s\n", xdev->otherend);
 		kfree(xdev->otherend);
-		xdev->otherend = kmalloc(50, GFP_NOIO | __GFP_HIGH);
+		tmp = kmalloc(50, GFP_NOIO | __GFP_HIGH);
 
 		if (!strcmp(xdev->devicetype, "vbd")) {
-			sprintf(xdev->otherend,
+			sprintf(tmp,
 				"/local/domain/0/backend/vbd/%d/51712", HA_dom_id);
 		} else {
-			sprintf(xdev->otherend,
+			sprintf(tmp,
 				"/local/domain/0/backend/vif/%d/0", HA_dom_id);
 		}
-		printk("new otherend is %s\n", xdev->otherend);
+		xdev->otherend = tmp;
+		pr_info("new otherend is %s\n", xdev->otherend);
 	}
 
 	xdev->state = XenbusStateInitialising;
@@ -851,7 +829,6 @@ static int resume_dev(struct device *dev, void *data)
 			       dev->bus_id, err);
 			return err;
 		}
-
 	}
 
 	err = watch_otherend(xdev);
@@ -894,10 +871,6 @@ static int early_resume_dev(struct device *dev, void *data)
 
 static int shutdown_dev(struct device *dev, void *data)
 {
-	struct xenbus_device *_dev = to_xenbus_device(dev);
-	struct xenbus_driver *drv = to_xenbus_driver(dev->driver);
-
-	printk("[%lu]yewei: shutdown %s now!\n", get_ms(), _dev->nodename);
 	xenbus_dev_shutdown(dev);
 	return 0;
 }
@@ -906,11 +879,9 @@ static int up_dev(struct device *dev, void *data)
 {
 	int err;
 	struct xenbus_device *xdev = to_xenbus_device(dev);
-	struct netfront_info *net_np = xdev->dev.driver_data;
-	struct blkfront_info *blk_np = xdev->dev.driver_data;
 	struct xenbus_driver *drv;
 
-	printk("[%lu]up %s now!\n", get_ms(), xdev->nodename);
+	pr_info("[%lu]up %s now!\n", get_ms(), xdev->nodename);
 
 	if (dev->driver == NULL)
 		return 0;
@@ -918,9 +889,10 @@ static int up_dev(struct device *dev, void *data)
 	drv = to_xenbus_driver(dev->driver);
 
 	if (HA_dom_id > 0) {
-		printk("[%lums]talk to otherend begin\n", get_ms());
+		char *tmp;
+		pr_info("[%lums]talk to otherend begin\n", get_ms());
 		err = talk_to_otherend(xdev);
-		printk("[%lums]talk to otherend end\n", get_ms());
+		pr_info("[%lums]talk to otherend end\n", get_ms());
 		if (err) {
 			printk(KERN_WARNING
 				"xenbus: resume (talk_to_otherend) %s failed: %i\n",
@@ -928,17 +900,18 @@ static int up_dev(struct device *dev, void *data)
 			return err;
 		}
 		// change other end
-		printk("old otherend is %s\n", xdev->otherend);
+		pr_info("old otherend is %s\n", xdev->otherend);
 		kfree(xdev->otherend);
-		xdev->otherend = kmalloc(50, GFP_NOIO | __GFP_HIGH);
+		tmp = kmalloc(50, GFP_NOIO | __GFP_HIGH);
 		if (!strcmp(xdev->devicetype, "vbd")) {
-			sprintf(xdev->otherend,
+			sprintf(tmp,
 				"/local/domain/0/backend/vbd/%d/51712", HA_dom_id);
 		} else {
-			sprintf(xdev->otherend,
+			sprintf(tmp,
 				"/local/domain/0/backend/vif/%d/0", HA_dom_id);
 		}
-		printk("new otherend is %s\n", xdev->otherend);
+		xdev->otherend = tmp;
+		pr_info("new otherend is %s\n", xdev->otherend);
 	}
 
 	if (!strcmp(xdev->devicetype, "vbd")) {
@@ -957,9 +930,9 @@ static int up_dev(struct device *dev, void *data)
 	}
 
 	if (HA_dom_id > 0) {
-		printk("[%lums]yewei: watch otherend begin\n", get_ms());
+		pr_info("[%lums]yewei: watch otherend begin\n", get_ms());
 		err = watch_otherend(xdev);
-		printk("[%lums]yewei: watch otherend end\n", get_ms());
+		pr_info("[%lums]yewei: watch otherend end\n", get_ms());
 		if (err) {
 			printk(KERN_WARNING
 				"xenbus_probe: resume (watch_otherend) %s failed: "
@@ -970,20 +943,20 @@ static int up_dev(struct device *dev, void *data)
 
 	if (!strcmp(xdev->devicetype, "vbd")) {
 		if (HA_have_check > 1) {
-			printk("vbd: notfy_remote_via_irq in dev up.\n");
+			pr_info("vbd: notfy_remote_via_irq in dev up.\n");
 			xdev->state = XenbusStateSuspendCanceled;
-			notify_remote_via_irq(blk_np->fast);
+			notify_remote_via_irq(xdev->fast_suspend_irq);
 		} else
 			xenbus_switch_state(xdev, XenbusStateSuspendCanceled);
 	} else {
 		if (HA_have_check > 1) {
-			printk("vnif: notfy_remote_via_irq in dev up.\n");
+			pr_info("vnif: notfy_remote_via_irq in dev up.\n");
 			xdev->state = XenbusStateInitialising;
-			notify_remote_via_irq(net_np->fast);
+			notify_remote_via_irq(xdev->fast_suspend_irq);
 		} else
 			xenbus_switch_state(xdev, XenbusStateInitialising);
 	}
-	printk("[%lu]up %s now end!\n", get_ms(), xdev->nodename);
+	pr_info("[%lu]up %s now end!\n", get_ms(), xdev->nodename);
 	return 0;
 }
 

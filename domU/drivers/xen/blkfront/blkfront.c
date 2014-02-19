@@ -197,7 +197,7 @@ again:
 	if (HA_have_check==1) {
 		err = xenbus_printf(XBT_NIL, dev->nodename,
 				    "fast-channel", "%u",
-				    irq_to_evtchn_port(info->fast));
+				    irq_to_evtchn_port(dev->fast_suspend_irq));
 		if (err) {
 			printk("yewei: error writing fast-channel.\n");
 			goto destroy_blkring;
@@ -272,7 +272,7 @@ static int talk_to_backend(struct xenbus_device *dev,
 	if (HA_have_check==1) {
 		err = xenbus_printf(XBT_NIL, dev->nodename,
 				    "fast-channel", "%u",
-				    irq_to_evtchn_port(info->fast));
+				    irq_to_evtchn_port(dev->fast_suspend_irq));
 		if (err) {
 			printk("yewei: error writing fast-channel.\n");
 			goto destroy_blkring;
@@ -374,8 +374,8 @@ static int setup_blkring(struct xenbus_device *dev,
 
 		if (err < 0)
 			goto fail;
-		HA_fast_vbd_irq = info->fast = err;
-		HA_fast_vbd_evtchn = irq_to_evtchn_port(info->fast);
+		HA_fast_vbd_irq = dev->fast_suspend_irq = err;
+		HA_fast_vbd_evtchn = irq_to_evtchn_port(dev->fast_suspend_irq);
 		printk("vbd: remote_id=%d, fast_irq=%u, fast_evtchn=%u.\n",
 			dev->otherend_id, HA_fast_vbd_irq, HA_fast_vbd_evtchn);
 	}
@@ -993,7 +993,7 @@ static void __otherend_changed_handler(void *unused)
 		printk("[%lums]blk recover end.\n", get_ms());
 		dev->state = XenbusStateConnected;
 		// notify backend vbd recovery.
-		notify_remote_via_irq(info->fast);
+		notify_remote_via_irq(dev->fast_suspend_irq);
 		break;
 	}
 }

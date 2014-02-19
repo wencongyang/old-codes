@@ -429,7 +429,7 @@ again:
 	if (HA_have_check==1) {
 		err = xenbus_printf(XBT_NIL, dev->nodename,
 				    "fast-channel", "%u",
-				    irq_to_evtchn_port(info->fast));
+				    irq_to_evtchn_port(dev->fast_suspend_irq));
 		if (err) {
 			printk("yewei: error writing fast-channel.\n");
 			goto destroy_ring;
@@ -585,8 +585,8 @@ static int setup_device(struct xenbus_device *dev, struct netfront_info *info)
 
 		if (err < 0)
 			goto fail;
-		HA_fast_irq = info->fast = err;
-		HA_fast_evtchn = irq_to_evtchn_port(info->fast);
+		HA_fast_irq = dev->fast_suspend_irq = err;
+		HA_fast_evtchn = irq_to_evtchn_port(dev->fast_suspend_irq);
 		printk("vnif: remote_id=%d, fast_irq=%u, fast_evtchn=%u.\n",
 			dev->otherend_id, HA_fast_irq, HA_fast_evtchn);
 	}
@@ -1175,7 +1175,7 @@ static void __otherend_changed_handler(void *unused)
 			break;
 		dev->state = XenbusStateConnected;
 		printk("[%lums]vnif: notify_remote_via_irq.\n", get_ms());
-		notify_remote_via_irq(np->fast);
+		notify_remote_via_irq(dev->fast_suspend_irq);
 		HA_block_xmit = 0;
 		break;
 	}

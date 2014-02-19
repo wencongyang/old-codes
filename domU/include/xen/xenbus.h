@@ -78,6 +78,8 @@ struct xenbus_device {
 	struct device dev;
 	enum xenbus_state state;
 	struct completion down;
+
+	unsigned int fast_suspend_irq;
 };
 
 static inline struct xenbus_device *to_xenbus_device(struct device *dev)
