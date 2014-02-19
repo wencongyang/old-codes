@@ -175,7 +175,6 @@ static void save_ringref_to_xen(int ref, int evtchn)
 	HYPERVISOR_rdwt_data_op(&arg);
 }
 
-int is_slaver(void);
 static int blkfront_suspend_cancel(struct xenbus_device *dev)
 {
 	struct blkfront_info *info = dev->dev.driver_data;

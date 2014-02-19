@@ -35,7 +35,6 @@ static int fast_suspend;
 
 extern int HA_suspend_evtchn;
 extern int HA_suspend_irq;
-extern int HA_first_time;
 extern int HA_dom_id;
 
 static void __shutdown_handler(void *unused);
@@ -96,7 +95,7 @@ static int xen_suspend(void *__unused)
 			printk(KERN_ERR "Xen suspend failed (%d)\n", err);
 			goto fail;
 		}
-		if (!suspend_cancelled && HA_first_time)
+		if (!suspend_cancelled)
 			setup_suspend_evtchn();
 		old_state = cmpxchg(
 			&shutting_down, SHUTDOWN_RESUMING, SHUTDOWN_INVALID);
