@@ -128,17 +128,14 @@ int xb_write(const void *data, unsigned len)
 			xb_waitq,
 			(intf->req_prod - intf->req_cons) !=
 			XENSTORE_RING_SIZE);
-		if (rc < 0) {
-			printk("yewei: wait event error!\n");
+		if (rc < 0)
 			return rc;
-		}
 
 		/* Read indexes, then verify. */
 		cons = intf->req_cons;
 		prod = intf->req_prod;
 		if (!check_indexes(cons, prod)) {
 			intf->req_cons = intf->req_prod = 0;
-			printk("yewei: check indexes error!\n");
 			return -EIO;
 		}
 

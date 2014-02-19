@@ -281,10 +281,8 @@ enum xenbus_state xenbus_read_driver_state(const char *path)
 {
 	int result;
 
-	if (xenbus_scanf(XBT_NIL, path, "state", "%d", &result) != 1) {
+	if (xenbus_scanf(XBT_NIL, path, "state", "%d", &result) != 1)
 		result = XenbusStateUnknown;
-		printk("yewei: xenbus read state %s error!\n", path);
-	}
 
 	return result;
 }
