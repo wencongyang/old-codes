@@ -291,9 +291,10 @@ static void compare_one_connection(struct connect_info *conn_info)
 			/*
 			 *  Put makster's skb to temporary queue, drop slaver's.
 			 */
-			release_skb(&ics->wait_for_release, skb_m);
-
-			release_skb(&ics->slaver_data->rel, skb_s);
+			if (skb_m)
+				release_skb(&ics->wait_for_release, skb_m);
+			if (skb_s)
+				release_skb(&ics->slaver_data->rel, skb_s);
 
 			state = state_incheckpoint;
 			wake_up_interruptible(&queue);
@@ -417,9 +418,10 @@ int write_proc(struct file *file, const char *buffer, unsigned long count, void 
 		state = state_failover;
 		wake_up_interruptible(&queue);
 		pr_info("failover.\n");
-	} else if (buf[0]=='r')
+	} else if (buf[0]=='r') {
 		state = state_comparing;
 		failover = 0;
+	}
 
 	return count;
 }
