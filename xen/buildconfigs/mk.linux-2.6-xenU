@@ -1,2 +1,3 @@
 EXTRAVERSION = -xenU
+XEN_LINUX_CONFIG = $(LINUX_SRCDIR)/config
 include buildconfigs/mk.linux-2.6-xen
