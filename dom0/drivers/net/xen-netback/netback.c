@@ -746,6 +746,7 @@ drop:
 	 */
 	vif->dev->stats.tx_dropped++;
 	dev_kfree_skb(skb);
+	xenvif_put(vif);
 }
 
 static void xen_netbk_alarm(unsigned long data)
