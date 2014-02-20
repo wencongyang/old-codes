@@ -62,6 +62,8 @@
     (BLKIF_MAX_SEGMENTS_PER_REQUEST * BLK_RING_SIZE)
 #define GRANT_INVALID_REF	0
 
+#define PREFIX "[%lu]COLO-vbd: "
+
 static void connect(struct blkfront_info *);
 static void blkfront_closing(struct blkfront_info *);
 static int blkfront_remove(struct xenbus_device *);
@@ -165,14 +167,16 @@ static int blkfront_resume(struct xenbus_device *dev)
 	return err;
 }
 
-static void save_ringref_to_xen(int ref, int evtchn)
+static int save_ringref_to_xen(int ref, int evtchn)
 {
 	struct rdwt_data arg;
+
 	arg.flag = 1;
 	arg.vbd_ref = ref;
 	arg.vnif_evtchn = 0;
 	arg.vbd_evtchn = evtchn;
-	HYPERVISOR_rdwt_data_op(&arg);
+
+	return HYPERVISOR_rdwt_data_op(&arg);
 }
 
 static int blkfront_suspend_cancel(struct xenbus_device *dev)
@@ -181,17 +185,15 @@ static int blkfront_suspend_cancel(struct xenbus_device *dev)
 	const char *message = NULL;
 	struct xenbus_transaction xbt;
 	int err;
-	unsigned long long sectors;
 
 	/* rebuild ring buffer and evtchn, and recover request.*/
-	printk("setup blkring begin.\n");
 	err = setup_blkring(dev, info);
 	if (err) {
-		printk("yewei: blkfront_suspend_cancel error when setup_blkring\n");
+		printk(KERN_ERR PREFIX "setup_blkring() fails\n", get_ms());
 		goto out;
 	}
-	printk("[%lums]setup done: blkfront allocate ring-ref=%u, event-channel=%u\n",
-				get_ms(), info->ring_ref, irq_to_evtchn_port(info->irq));
+	pr_info(PREFIX "setup done, ring-ref=%u, event-channel=%u\n",
+		get_ms(), info->ring_ref, irq_to_evtchn_port(info->irq));
 
 again:
 	if (HA_have_check==1) {
@@ -199,14 +201,21 @@ again:
 				    "fast-channel", "%u",
 				    irq_to_evtchn_port(dev->fast_suspend_irq));
 		if (err) {
-			printk("yewei: error writing fast-channel.\n");
+			printk(KERN_ERR PREFIX
+			       "writing fast-channel fails.\n", get_ms());
 			goto destroy_blkring;
 		}
 	}
 
-	save_ringref_to_xen(info->ring_ref, irq_to_evtchn_port(info->irq));
+	err = save_ringref_to_xen(info->ring_ref,
+				  irq_to_evtchn_port(info->irq));
+	if (err) {
+		printk(KERN_ERR PREFIX "save_ringref_to_xen() fails\n",
+		       get_ms());
+		goto destroy_blkring;
+	}
 
-	if (!HA_have_check || HA_dom_id > 0 && HA_first_time) {
+	if (!HA_have_check || (HA_dom_id > 0 && HA_first_time)) {
 		err = xenbus_transaction_start(&xbt);
 		if (err) {
 			xenbus_dev_fatal(dev, err, "starting transaction");
@@ -239,7 +248,6 @@ again:
 			xenbus_dev_fatal(dev, err, "completing transaction");
 			goto destroy_blkring;
 		}
-		printk("[%lums]write xenstore end.\n", get_ms());
 	}
 
 	return 0;
@@ -248,9 +256,8 @@ again:
 	xenbus_transaction_end(xbt, 1);
 	if (message)
 		xenbus_dev_fatal(dev, err, "%s", message);
-	printk("yewei: abort_transaction :%s", message);
+	printk(KERN_ERR PREFIX "abort_transaction :%s\n", get_ms(), message);
  destroy_blkring:
-	printk("yewei: destroy blkring\n");
 	blkif_free(info, 0);
  out:
 	return err;
@@ -269,17 +276,24 @@ static int talk_to_backend(struct xenbus_device *dev,
 	if (err)
 		goto out;
 
-	if (HA_have_check==1) {
+	if (HA_have_check == 1) {
 		err = xenbus_printf(XBT_NIL, dev->nodename,
 				    "fast-channel", "%u",
 				    irq_to_evtchn_port(dev->fast_suspend_irq));
 		if (err) {
-			printk("yewei: error writing fast-channel.\n");
+			printk(KERN_ERR PREFIX
+			       "writing fast-channel fails.\n", get_ms());
 			goto destroy_blkring;
 		}
 	}
 
-	save_ringref_to_xen(info->ring_ref, info->ring_ref);
+	err = save_ringref_to_xen(info->ring_ref,
+				  irq_to_evtchn_port(info->irq));
+	if (err) {
+		printk(KERN_ERR PREFIX "save_ringref_to_xen() fails\n",
+		       get_ms());
+		goto destroy_blkring;
+	}
 
 again:
 	err = xenbus_transaction_start(&xbt);
@@ -365,9 +379,9 @@ static int setup_blkring(struct xenbus_device *dev,
 	}
 	info->irq = err;
 
-	printk("normal vbd irq=%d, evtchn=%d.\n", err, irq_to_evtchn_port(err));
-
-	if (HA_have_check==1) {
+	pr_info(PREFIX "irq=%d, evtchn=%d.\n", get_ms(), err,
+		irq_to_evtchn_port(err));
+	if (HA_have_check == 1) {
 		err = bind_listening_port_to_irqhandler(
 			dev->otherend_id, blkif_otherend_changed, SA_SAMPLE_RANDOM,
 			dev->nodename, dev);
@@ -376,9 +390,11 @@ static int setup_blkring(struct xenbus_device *dev,
 			goto fail;
 		HA_fast_vbd_irq = dev->fast_suspend_irq = err;
 		HA_fast_vbd_evtchn = irq_to_evtchn_port(dev->fast_suspend_irq);
-		printk("vbd: remote_id=%d, fast_irq=%u, fast_evtchn=%u.\n",
-			dev->otherend_id, HA_fast_vbd_irq, HA_fast_vbd_evtchn);
+		pr_info(PREFIX "remote_id=%d, fast_irq=%u, fast_evtchn=%u.\n",
+			get_ms(), dev->otherend_id, HA_fast_vbd_irq,
+			HA_fast_vbd_evtchn);
 	}
+
 	return 0;
 fail:
 	blkif_free(info, 0);
@@ -395,8 +411,8 @@ static void backend_changed(struct xenbus_device *dev,
 	struct blkfront_info *info = dev->dev.driver_data;
 	struct block_device *bd;
 
-	DPRINTK("blkfront:backend_changed.\n");
-	printk("[%lums]blk backend changed to %s\n", get_ms(), xenbus_strstate(backend_state));
+	pr_info(PREFIX "blk backend changed to %s\n", get_ms(),
+		xenbus_strstate(backend_state));
 
 	switch (backend_state) {
 	case XenbusStateInitialising:
@@ -424,7 +440,9 @@ static void backend_changed(struct xenbus_device *dev,
 #else
 		mutex_lock(&bd->bd_mutex);
 #endif
-		printk("users count=%d\n", info->users);
+		if (info->users > 0)
+			printk(KERN_WARNING PREFIX "users count=%d\n",
+			       get_ms(), info->users);
 		blkfront_closing(info);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,17)
 		up(&bd->bd_sem);
@@ -435,7 +453,9 @@ static void backend_changed(struct xenbus_device *dev,
 		break;
 	case XenbusStateSuspended:
 		if (dev->state != XenbusStateSuspended) {
-			printk("yewei: skip blk backend changed to XenbusStateSuspend\n");
+			printk(KERN_WARNING PREFIX
+			       "skip blk backend changed to %s\n",
+			       get_ms(), xenbus_strstate(backend_state));
 			break;
 		}
 		blkif_free(info, 1);
@@ -444,10 +464,12 @@ static void backend_changed(struct xenbus_device *dev,
 		break;
 
 	case XenbusStateSuspendCanceled:
-		printk("[%lums]blk recover begin.\n", get_ms());
 		blkif_recover2(info);
-		printk("[%lums]blk recover end.\n", get_ms());
 		dev->state = XenbusStateConnected;
+	default:
+		printk(KERN_WARNING PREFIX "ignore unknown state=%d(%s)\n",
+		       get_ms(), dev->state, xenbus_strstate(dev->state));
+		break;
 	}
 }
 
@@ -542,7 +564,6 @@ static void blkfront_closing(struct blkfront_info *info)
 	unsigned long flags;
 
 	DPRINTK("blkfront_closing: %d removed\n", info->vdevice);
-	printk("yewei: blkfront_closing: %d removed\n", info->vdevice);
 
 	if (info->rq == NULL)
 		goto out;
@@ -554,22 +575,16 @@ static void blkfront_closing(struct blkfront_info *info)
 	gnttab_cancel_free_callback(&info->callback);
 	spin_unlock_irqrestore(&blkif_io_lock, flags);
 
-	printk("yewei: ck0\n");
 	/* Flush gnttab callback work. Must be done with no locks held. */
 	flush_scheduled_work();
 
-	printk("yewei: ck1\n");
 	xlvbd_sysfs_delif(info);
 
-	printk("yewei: ck2\n");
 	xlvbd_del(info);
 
  out:
-	printk("yewei: ck3\n");
-	if (info->xbdev) {
-		printk("yewei: ck4\n");
+	if (info->xbdev)
 		xenbus_frontend_closed(info->xbdev);
-	}
 }
 
 
@@ -964,9 +979,10 @@ static irqreturn_t blkif_int(int irq, void *dev_id, struct pt_regs *ptregs)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t blkif_otherend_changed(int irq, void *dev_id, struct pt_regs *ptregs)
+static irqreturn_t blkif_otherend_changed(int irq, void *dev_id,
+					  struct pt_regs *ptregs)
 {
-	printk("[%lums]yewei: vbd fast interrupt raised.\n", get_ms());
+	pr_info(PREFIX "fast interrupt raised.\n", get_ms());
 	schedule_work(&otherend_changed_work);
 	return IRQ_HANDLED;
 }
@@ -976,24 +992,25 @@ static void __otherend_changed_handler(void *unused)
 	struct xenbus_device *dev = unused;
 	struct blkfront_info *info = dev->dev.driver_data;
 
-	printk("[%lu]vbd: fast changed, state=%d.\n", get_ms(), dev->state);
+	pr_info(PREFIX "fast changed, state=%d(%s).\n", get_ms(), dev->state,
+		xenbus_strstate(dev->state));
 	switch(dev->state) {
 	case XenbusStateSuspended:
-		if (dev->state != XenbusStateSuspended) {
-			printk("yewei: skip blk backend changed to XenbusStateSuspend\n");
-			break;
-		}
 		blkif_free(info, 1);
 		dev->state = XenbusStateSuspendDone;
 		complete(&dev->down);
 		break;
 	case XenbusStateSuspendCanceled:
-		printk("[%lums]blk recover begin.\n", get_ms());
+		pr_info(PREFIX "blk recover begin.\n", get_ms());
 		blkif_recover2(info);
-		printk("[%lums]blk recover end.\n", get_ms());
+		pr_info(PREFIX "blk recover end.\n", get_ms());
 		dev->state = XenbusStateConnected;
 		// notify backend vbd recovery.
 		notify_remote_via_irq(dev->fast_suspend_irq);
+		break;
+	default:
+		printk(KERN_WARNING PREFIX "ignore unknown state=%d(%s)\n",
+		       get_ms(), dev->state, xenbus_strstate(dev->state));
 		break;
 	}
 }
@@ -1162,7 +1179,6 @@ static void blkif_recover2(struct blkfront_info *info)
 
 	spin_unlock_irq(&blkif_io_lock);
 }
-
 
 int blkfront_is_ready(struct xenbus_device *dev)
 {
