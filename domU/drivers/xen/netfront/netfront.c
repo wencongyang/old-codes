@@ -65,6 +65,8 @@
 #include <xen/gnttab.h>
 #include <asm/hypervisor.h>
 
+#define PREFIX "[%lums]COLO-vnif: "
+
 extern int HA_have_check;
 extern int HA_dom_id;
 extern int HA_first_time;
@@ -387,7 +389,7 @@ static int xen_net_read_mac(struct xenbus_device *dev, u8 mac[])
 	return 0;
 }
 
-static void save_ringref_to_xen(int rx, int tx, int evtchn)
+static int save_ringref_to_xen(int rx, int tx, int evtchn)
 {
 	struct rdwt_data arg;
 	arg.flag = 1;
@@ -395,7 +397,8 @@ static void save_ringref_to_xen(int rx, int tx, int evtchn)
 	arg.tx_ref = tx;
 	arg.vnif_evtchn = evtchn;
 	arg.vbd_evtchn = 0;
-	HYPERVISOR_rdwt_data_op(&arg);
+
+	return HYPERVISOR_rdwt_data_op(&arg);
 }
 
 /* Common code used when first setting up, and when resuming. */
@@ -436,11 +439,16 @@ again:
 		}
 	}
 
-	save_ringref_to_xen(info->rx_ring_ref, info->tx_ring_ref, irq_to_evtchn_port(info->irq));
+	err = save_ringref_to_xen(info->rx_ring_ref, info->tx_ring_ref, irq_to_evtchn_port(info->irq));
+	if (err < 0) {
+		printk(KERN_ERR PREFIX "save_ringref_to_xen() fails\n",
+		       get_ms());
+		goto destroy_ring;
+	}
 	printk("[%lums]Write ringref to xen: rx=%d, tx=%d, evtchn=%d.\n", get_ms(),
 			info->rx_ring_ref, info->tx_ring_ref, irq_to_evtchn_port(info->irq));
 
-	if (!HA_have_check || HA_dom_id > 0 && HA_first_time) {
+	if (!HA_have_check || (HA_dom_id > 0 && HA_first_time)) {
 
 		err = xenbus_transaction_start(&xbt);
 		if (err) {
@@ -576,7 +584,8 @@ static int setup_device(struct xenbus_device *dev, struct netfront_info *info)
 	if (err < 0)
 		goto fail;
 	info->irq = err;
-	printk("normal vnif irq=%d, evtchn=%d.\n", err, irq_to_evtchn_port(err));
+	pr_info(PREFIX "normal irq=%d, evtchn=%d.\n", get_ms(), err,
+		irq_to_evtchn_port(err));
 
 	if (HA_have_check==1) {
 		err = bind_listening_port_to_irqhandler(
@@ -587,8 +596,9 @@ static int setup_device(struct xenbus_device *dev, struct netfront_info *info)
 			goto fail;
 		HA_fast_irq = dev->fast_suspend_irq = err;
 		HA_fast_evtchn = irq_to_evtchn_port(dev->fast_suspend_irq);
-		printk("vnif: remote_id=%d, fast_irq=%u, fast_evtchn=%u.\n",
-			dev->otherend_id, HA_fast_irq, HA_fast_evtchn);
+		pr_info(PREFIX "remote_id=%d, fast_irq=%u, fast_evtchn=%u.\n",
+			get_ms(), dev->otherend_id, HA_fast_irq,
+			HA_fast_evtchn);
 	}
 
 	return 0;
@@ -607,8 +617,8 @@ static void backend_changed(struct xenbus_device *dev,
 	struct netfront_info *np = dev->dev.driver_data;
 	struct net_device *netdev = np->netdev;
 
-	DPRINTK("%s\n", xenbus_strstate(backend_state));
-	printk("[%lu, %lu]yewei: net backend state changed to %s\n", jiffies, get_ms(), xenbus_strstate(backend_state));
+	pr_info(PREFIX "net backend state changed to %s\n", get_ms(),
+		xenbus_strstate(backend_state));
 
 	switch (backend_state) {
 	case XenbusStateInitialising:
@@ -633,6 +643,9 @@ static void backend_changed(struct xenbus_device *dev,
 	case XenbusStateClosing:
 		xenbus_frontend_closed(dev);
 		break;
+	default:
+		printk(KERN_WARNING PREFIX "ignore unknow backend state: %s\n",
+		       get_ms(), xenbus_strstate(backend_state));
 	}
 }
 
@@ -1044,7 +1057,6 @@ static int network_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		     (frags > 1 && !xennet_can_sg(dev)) ||
 		     netif_needs_gso(dev, skb))) {
 		spin_unlock_irq(&np->tx_lock);
-		printk("\n^^^^^^^^^^^^^^drop^^^^^^^^^^^^^^^^\n");
 		goto drop;
 	}
 
@@ -1151,7 +1163,7 @@ static irqreturn_t netif_int(int irq, void *dev_id, struct pt_regs *ptregs)
 
 static irqreturn_t netif_otherend_changed(int irq, void *dev_id, struct pt_regs *ptregs)
 {
-	printk("[%lums]yewei: vnif fast interrupt raised.\n", get_ms());
+	pr_info(PREFIX "fast interrupt raised.\n", get_ms());
 	schedule_work(&otherend_changed_work);
 	return IRQ_HANDLED;
 }
@@ -1162,7 +1174,8 @@ static void __otherend_changed_handler(void *unused)
 	struct netfront_info *np = dev->dev.driver_data;
 	struct net_device *netdev = np->netdev;
 
-	printk("[%lu]vnif: fast changed, state=%d.\n", get_ms(), dev->state);
+	pr_info(PREFIX "fast changed, state=%d(%s).\n", get_ms(), dev->state,
+		xenbus_strstate(dev->state));
 
 	switch (dev->state) {
 	case XenbusStateSuspended:
@@ -1174,9 +1187,12 @@ static void __otherend_changed_handler(void *unused)
 		if (network_connect(netdev) != 0)
 			break;
 		dev->state = XenbusStateConnected;
-		printk("[%lums]vnif: notify_remote_via_irq.\n", get_ms());
 		notify_remote_via_irq(dev->fast_suspend_irq);
 		HA_block_xmit = 0;
+		break;
+	default:
+		printk(KERN_WARNING PREFIX "ignore unknown state %d(%s)\n",
+		       get_ms(), dev->state, xenbus_strstate(dev->state));
 		break;
 	}
 }
@@ -1661,7 +1677,6 @@ static void netif_release_tx_bufs(struct netfront_info *np)
 		np->grant_tx_ref[i] = GRANT_INVALID_REF;
 		add_id_to_freelist(np->tx_skbs, i);
 		dev_kfree_skb_irq(skb);
-		printk("\n^^^^^^^^^^^^^^skb^^^^^^^^^^^^^^^\n");
 	}
 }
 
@@ -2270,8 +2285,8 @@ static struct notifier_block notifier_inetdev = {
 
 static void netif_release_rings(struct netfront_info *info)
 {
-	end_access(info->rx_ring_ref, info->rx.sring);
 	end_access(info->tx_ring_ref, info->tx.sring);
+	end_access(info->rx_ring_ref, info->rx.sring);
 	info->tx_ring_ref = GRANT_INVALID_REF;
 	info->rx_ring_ref = GRANT_INVALID_REF;
 	info->tx.sring = NULL;
