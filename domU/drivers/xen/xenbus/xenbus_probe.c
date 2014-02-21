@@ -71,7 +71,6 @@
 int xen_store_evtchn;
 struct xenstore_domain_interface *xen_store_interface;
 static unsigned long xen_store_mfn;
-void abandon_one_evtchn();
 
 extern struct mutex xenwatch_mutex;
 extern int HA_dom_id;

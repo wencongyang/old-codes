@@ -246,10 +246,8 @@ static int take_machine_down(void *_suspend)
 	suspend->resume_notifier(suspend_cancelled);
 	post_suspend(HA_dom_id > 0 ? 0 : suspend_cancelled);
 	gnttab_resume();
-	if (!suspend_cancelled || HA_dom_id > 0) {
-		pr_info("[%lums]yewei: irq_resume...\n", get_ms());
+	if (!suspend_cancelled) {
 		irq_resume();
-		pr_info("[%lums]yewei: irq_resume done\n", get_ms());
 #ifdef __x86_64__
 		/*
 		 * Older versions of Xen do not save/restore the user %cr3.
@@ -260,6 +258,10 @@ static int take_machine_down(void *_suspend)
 			xen_new_user_pt(__pa(__user_pgd(
 				current->active_mm->pgd)));
 #endif
+	} else if (HA_dom_id > 0) {
+		pr_info("[%lums]yewei: irq_fast_resume...\n", get_ms());
+		irq_fast_resume();
+		pr_info("[%lums]yewei: irq_fast_resume done\n", get_ms());
 	}
 	time_resume();
 
