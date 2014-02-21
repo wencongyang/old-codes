@@ -122,7 +122,7 @@ static inline void dev_disable_gso_features(struct net_device *dev)
 }
 #elif defined(NETIF_F_TSO)
 #define HAVE_GSO		       0
-#define HAVE_TSO                       0
+#define HAVE_TSO                       1
 
 /* Some older kernels cannot cope with incorrect checksums,
  * particularly in netfilter. I'm not sure there is 100% correlation
