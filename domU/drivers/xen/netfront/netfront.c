@@ -108,12 +108,9 @@ static const int MODPARM_rx_flip = 0;
 
 /* If we don't have GSO, fake things up so that we never try to use it. */
 #if defined(NETIF_F_GSO)
-//#define HAVE_GSO			1
-//#define HAVE_TSO			1 /* TSO is a subset of GSO */
-//#define HAVE_CSUM_OFFLOAD		1
-#define HAVE_GSO			0
-#define HAVE_TSO			0 /* TSO is a subset of GSO */
-#define HAVE_CSUM_OFFLOAD		0
+#define HAVE_GSO			1
+#define HAVE_TSO			1 /* TSO is a subset of GSO */
+#define HAVE_CSUM_OFFLOAD		1
 static inline void dev_disable_gso_features(struct net_device *dev)
 {
 	/* Turn off all GSO bits except ROBUST. */
@@ -498,7 +495,7 @@ again:
 			goto abort_transaction;
 		}
 
-		err = xenbus_printf(xbt, dev->nodename, "feature-sg", "%d", 0);
+		err = xenbus_printf(xbt, dev->nodename, "feature-sg", "%d", 1);
 		if (err) {
 			message = "writing feature-sg";
 			goto abort_transaction;
@@ -1887,14 +1884,14 @@ static void xennet_set_features(struct net_device *dev)
 	if (!(dev->features & NETIF_F_IP_CSUM))
 		return;
 
-	if (xennet_set_sg(dev, 1))
+	if (xennet_set_sg(dev, 0))
 		return;
 
 	/* Before 2.6.9 TSO seems to be unreliable so do not enable it
 	 * on older kernels.
 	 */
 	if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,9))
-		xennet_set_tso(dev, 1);
+		xennet_set_tso(dev, 0);
 }
 
 static void netfront_get_drvinfo(struct net_device *dev,
