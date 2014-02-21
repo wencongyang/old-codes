@@ -163,8 +163,8 @@ void unregister_xenstore_notifier(struct notifier_block *nb);
 int register_xenbus_watch(struct xenbus_watch *watch);
 void unregister_xenbus_watch(struct xenbus_watch *watch);
 void xs_suspend(void);
-void xs_suspend_slaver(void);
 void xs_resume(void);
+void xs_fast_resume(void);
 void xs_suspend_cancel(void);
 
 /* Used by xenbus_dev to borrow kernel's store connection. */

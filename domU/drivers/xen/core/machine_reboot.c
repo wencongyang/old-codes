@@ -324,7 +324,7 @@ int __xen_suspend(int fast_suspend, void (*resume_notifier)(int))
 		pr_info("[%lu]fb_connect end\n", get_ms());
 	} else {
 		/* second and later checkpoint on slave */
-		xs_resume();
+		xs_fast_resume();
 		pr_info("[%lums]yewei: fb connect begin.\n", get_ms());
 		fb_connect();
 		pr_info("[%lums]yewei: fb connect end.\n", get_ms());

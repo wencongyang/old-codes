@@ -254,7 +254,7 @@ static void *xs_talkv(struct xenbus_transaction t,
 	err = xb_write(&msg, sizeof(msg));
 	if (err) {
 		mutex_unlock(&xs_state.request_mutex);
-		printk("yewei: xb write msg error!\n");
+		printk(KERN_ERR "yewei: xb write msg error!\n");
 		return ERR_PTR(err);
 	}
 
@@ -262,7 +262,7 @@ static void *xs_talkv(struct xenbus_transaction t,
 		err = xb_write(iovec[i].iov_base, iovec[i].iov_len);;
 		if (err) {
 			mutex_unlock(&xs_state.request_mutex);
-			printk("yewei: xb write iov error!\n");
+			printk(KERN_ERR "yewei: xb write iov error!\n");
 			return ERR_PTR(err);
 		}
 	}
@@ -272,14 +272,14 @@ static void *xs_talkv(struct xenbus_transaction t,
 	mutex_unlock(&xs_state.request_mutex);
 
 	if (IS_ERR(ret)) {
-		printk("yewei: read reply error!\n");
+		printk(KERN_ERR "yewei: read reply error!\n");
 		return ret;
 	}
 
 	if (msg.type == XS_ERROR) {
 		err = get_error(ret);
 		kfree(ret);
-		printk("yewei: msg type error\n");
+		printk(KERN_ERR "yewei: msg type error\n");
 		return ERR_PTR(-err);
 	}
 
@@ -289,7 +289,7 @@ static void *xs_talkv(struct xenbus_transaction t,
 			       "XENBUS unexpected type [%d], expected [%d]\n",
 			       msg.type, type);
 		kfree(ret);
-		printk("yewei: msg.type!=type\n");
+		printk(KERN_ERR "yewei: msg.type!=type\n");
 		return ERR_PTR(-EINVAL);
 	}
 	return ret;
@@ -412,7 +412,7 @@ void *xenbus_read(struct xenbus_transaction t,
 	if (IS_ERR(path))
 		return (void *)path;
 
-	printk("yewei: xenbus read path=%s\n", path);
+	pr_info("yewei: xenbus read path=%s\n", path);
 	ret = xs_single(t, XS_READ, path, len);
 	kfree(path);
 	return ret;
@@ -529,7 +529,7 @@ int xenbus_scanf(struct xenbus_transaction t,
 
 	val = xenbus_read(t, dir, node, NULL);
 	if (IS_ERR(val)) {
-		printk("yewei: xenbus read error!\n");
+		printk(KERN_ERR "yewei: xenbus read error!\n");
 		return PTR_ERR(val);
 	}
 
@@ -539,7 +539,7 @@ int xenbus_scanf(struct xenbus_transaction t,
 	kfree(val);
 	/* Distinctive errno. */
 	if (ret == 0) {
-		printk("distinctive errno!\n");
+		printk(KERN_ERR "distinctive errno!\n");
 		return -ERANGE;
 	}
 
@@ -727,24 +727,6 @@ void xs_suspend(void)
 	mutex_lock(&xs_state.response_mutex);
 }
 
-void xs_suspend_slaver(void)
-{
-	struct xenbus_watch *watch;
-	char token[sizeof(watch) * 2 + 1];
-
-	transaction_suspend();
-	down_write(&xs_state.watch_mutex);
-
-	list_for_each_entry(watch, &watches, list) {
-		sprintf(token, "%lX", (long)watch);
-		xs_unwatch(watch->node, token);
-	}
-
-	mutex_lock(&xs_state.request_mutex);
-	mutex_lock(&xs_state.response_mutex);
-
-}
-
 void xs_resume(void)
 {
 	struct xenbus_watch *watch;
@@ -754,13 +736,22 @@ void xs_resume(void)
 	mutex_unlock(&xs_state.request_mutex);
 	transaction_resume();
 
+#if 0
 	/* No need for watches_lock: the watch_mutex is sufficient. */
-	/*list_for_each_entry(watch, &watches, list) {
+	list_for_each_entry(watch, &watches, list) {
 		sprintf(token, "%lX", (long)watch);
 		xs_watch(watch->node, token);
-		printk("[%lu]yewei: xs watch node:%s.\n", jiffies, watch->node);
-	}*/
+	}
+#endif
 
+	up_write(&xs_state.watch_mutex);
+}
+
+void xs_fast_resume(void)
+{
+	mutex_unlock(&xs_state.response_mutex);
+	mutex_unlock(&xs_state.request_mutex);
+	transaction_resume();
 	up_write(&xs_state.watch_mutex);
 }
 
