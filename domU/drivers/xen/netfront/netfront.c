@@ -291,7 +291,6 @@ static int __devinit netfront_probe(struct xenbus_device *dev,
 		goto fail;
 	}
 
-	printk("yewei: INIT_WORK.\n");
 	INIT_WORK(&otherend_changed_work, __otherend_changed_handler, dev);
 
 	return 0;
@@ -434,7 +433,8 @@ again:
 				    "fast-channel", "%u",
 				    irq_to_evtchn_port(dev->fast_suspend_irq));
 		if (err) {
-			printk("yewei: error writing fast-channel.\n");
+			printk(KERN_ERR PREFIX "error writing fast-channel.\n",
+			       get_ms());
 			goto destroy_ring;
 		}
 	}
@@ -445,8 +445,9 @@ again:
 		       get_ms());
 		goto destroy_ring;
 	}
-	printk("[%lums]Write ringref to xen: rx=%d, tx=%d, evtchn=%d.\n", get_ms(),
-			info->rx_ring_ref, info->tx_ring_ref, irq_to_evtchn_port(info->irq));
+	pr_info(PREFIX "Write ringref to xen: rx=%d, tx=%d, evtchn=%d.\n",
+		get_ms(), info->rx_ring_ref, info->tx_ring_ref,
+		irq_to_evtchn_port(info->irq));
 
 	if (!HA_have_check || (HA_dom_id > 0 && HA_first_time)) {
 
