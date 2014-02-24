@@ -40,3 +40,7 @@ On master&slaver side, you should do the following things:
 12. modify xend-config.sxp on slaver to allow migration a vm from master to
     slaver
 13. modify xend-config.sxp on both master and slaver to create a bridge.
+14. install script:
+    cd script/
+    make install
+15. the command remus only can be runned by root
