@@ -44,3 +44,8 @@ On master&slaver side, you should do the following things:
     cd script/
     make install
 15. the command remus only can be runned by root
+16. update /etc/xen/scripts/HA_fw_runtime.sh
+    modify eth0 to the network interface to which you use to forward
+    packets
+17. redo step 7 if you rebuild and install xen tools
+18. redo step 16 if you redo step 14
