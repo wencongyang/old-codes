@@ -1001,6 +1001,9 @@ resume:
             rc = update_hvm_type(comm_data, colo_data);
             if (rc < 0)
                 return -1;
+        } else if (colo_data->domtype == dt_pv) {
+            /* wait for suspend evtchn */
+            sleep(10);
         }
         if (colo_data->domtype != dt_hvm)
             rc = setup_suspend_evtchn(comm_data, colo_data);
