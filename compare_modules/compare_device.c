@@ -62,6 +62,11 @@ static void move_master_queue(struct if_connections *ics)
 	struct sk_buff *skb;
 	struct connect_info *conn_info;
 
+	if (unlikely(ics == NULL)) {
+		pr_warn("ics is NULL when move_master_queue\n");
+		return;
+	}
+
 	for (i = 0; i < HASH_NR; i++) {
 		list_for_each_entry(conn_info, &ics->entry[i], list) {
 			skb = skb_dequeue(&conn_info->master_queue);
@@ -88,6 +93,11 @@ static void release_queue(struct if_connections *ics)
 {
 	struct sk_buff *skb;
 	int flag = 0;
+
+	if (unlikely(ics == NULL)) {
+		pr_warn("ics is NULL when release queue\n");
+		return;
+	}
 
 	skb = skb_dequeue(&ics->wait_for_release);
 	while (skb != NULL) {
