@@ -378,7 +378,8 @@ static int update_memory(struct restore_data *comm_data,
         pagetype = pfn_type[pfn] & XEN_DOMCTL_PFINFO_LTAB_MASK;
         if (pagetype == XEN_DOMCTL_PFINFO_XTAB) {
             if (hvm && colo_data->pfn_err[pfn] == 0) {
-                colo_output_log(colo_data->fp, "unmapped page: %lu, pfn_err: %d\n", pfn, colo_data->pfn_err[pfn]);
+                colo_output_log(colo_data->fp, "unmapped page: %lu is mapped\n",
+                                pfn);
             }
             /* a bogus/unmapped page: skip it */
             continue;
