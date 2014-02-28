@@ -893,6 +893,7 @@ struct xen_domctl {
 #define XEN_DOMCTL_setvcpuextstate               62
 #define XEN_DOMCTL_getvcpuextstate               63
 #define XEN_DOMCTL_set_access_required           64
+#define XEN_DOMCTL_hvm_sync_mmu                  65
 #define XEN_DOMCTL_gdbsx_guestmemio            1000
 #define XEN_DOMCTL_gdbsx_pausevcpu             1001
 #define XEN_DOMCTL_gdbsx_unpausevcpu           1002
