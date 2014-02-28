@@ -940,6 +940,14 @@ int finish_colo(struct restore_data *comm_data, void *data)
     bool failover = false;
 
     colo_output_log(colo_data->fp, "call finish_colo()\n");
+
+    if (!colo_data->first_time) {
+        if (xc_domain_hvm_sync_mmu(xch, dom)) {
+            ERROR("sync mmu fails\n");
+            return -1;
+        }
+    }
+
     /* output the store-mfn & console-mfn */
     printf("store-mfn %li\n", comm_data->store_mfn);
     printf("console-mfn %li\n", comm_data->console_mfn);
