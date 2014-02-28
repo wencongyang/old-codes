@@ -1391,6 +1391,7 @@ static struct hvm_function_table __read_mostly vmx_function_table = {
     .do_pmu_interrupt     = vmx_do_pmu_interrupt,
     .cpu_up               = vmx_cpu_up,
     .cpu_down             = vmx_cpu_down,
+    .sync_mmu             = vmx_sync_mmu,
     .cpuid_intercept      = vmx_cpuid_intercept,
     .wbinvd_intercept     = vmx_wbinvd_intercept,
     .fpu_dirty_intercept  = vmx_fpu_dirty_intercept,
