@@ -724,6 +724,8 @@ int xc_domain_set_access_required(xc_interface *xch,
 				  uint32_t domid,
 				  unsigned int required);
 
+int xc_domain_hvm_sync_mmu(xc_interface *xch, uint32_t domid);
+
 /*
  * CPUPOOL MANAGEMENT FUNCTIONS
  */
