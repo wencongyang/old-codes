@@ -12,6 +12,8 @@ building steps for pvm:
    ln -sf ../domU/ linux-2.6.18-xen.hg
    edit config/Linux.mk to update the value of KERNELS:
        KERNELS ?= linux-2.6-xenU
+   make kernels
+   cp dist/install/boot/vmlinuz-2.6.18.8-xenU /boot/
 3. xen
    Run the following commands:
    cd xen
