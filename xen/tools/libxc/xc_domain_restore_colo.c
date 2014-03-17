@@ -916,6 +916,59 @@ static int update_hvm_type(struct restore_data *comm_data,
     return 0;
 }
 
+static int switch_qemu_logdirty(struct xs_handle *xsh, xc_interface *xch,
+                                domid_t domid, int enable)
+{
+    char path[128];
+    char *tail, *cmd, *response;
+    char **vec;
+    unsigned int len;
+    struct timeval tv;
+    fd_set fdset;
+
+    sprintf(path, "/local/domain/0/device-model/%u/logdirty/", domid);
+    tail = path + strlen(path);
+
+    strcpy(tail, "ret");
+    if (!xs_watch(xsh, path, "qemu-logdirty-ret")) {
+        ERROR("can't set watch in store (%s)", path);
+        return 1;
+    }
+
+    strcpy(tail, "cmd");
+    cmd = enable ? "enable" : "disable";
+    if (!xs_write(xsh, XBT_NULL, path, cmd, strlen(cmd))) {
+        ERROR("can't write to store path (%s)\n", path);
+        return 1;
+    }
+
+    /* Wait a while for qemu to signal that it has service logdirty command */
+read_again:
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+    FD_ZERO(&fdset);
+    FD_SET(xs_fileno(xsh), &fdset);
+
+    if ((select(xs_fileno(xsh) + 1, &fdset, NULL, NULL, &tv)) != 1)
+        ERROR("timed out waiting for qemu logdirty response.");
+
+    vec = xs_read_watch(xsh, &len);
+    free(vec);
+
+    strcpy(tail, "ret");
+    response = xs_read(xsh, XBT_NULL, path, &len);
+    if (response == NULL || strcmp(response, cmd))
+        /* Watch fired but value is not yet right */
+        goto read_again;
+
+    strcpy(tail, "ret");
+    xs_unwatch(xsh, path, "qemu-logdirty-ret");
+
+    free(response);
+
+    return 0;
+}
+
 /* we are ready to start the guest when this functions is called. We
  * will return until we need to do a new checkpoint or some error occurs.
  *
@@ -964,6 +1017,13 @@ int finish_colo(struct restore_data *comm_data, void *data)
         {
             ERROR("enabling logdirty fails");
             return -1;
+        }
+
+        if (comm_data->hvm) {
+            if (switch_qemu_logdirty(colo_data->xsh, xch, dom, 1)) {
+                ERROR("enabling qemu logdirty fails");
+                return -1;
+            }
         }
     } else {
         if (xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_CLEAN,
