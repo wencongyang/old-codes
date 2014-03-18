@@ -51,7 +51,7 @@ struct tcp_compare_info {
 
 #define TCP_CMP_INFO(compare_info) ((struct tcp_compare_info *)compare_info->private_data)
 
-struct tcphdr_info {
+struct tcp_hdr_info {
 	uint32_t seq;
 	uint32_t end_seq;
 	uint32_t ack_seq;
@@ -61,7 +61,7 @@ struct tcphdr_info {
 	uint16_t window;
 };
 
-/* tcp_compare_info & tcphdr_info's flags */
+/* tcp_compare_info & tcp_hdr_info's flags */
 #define		SYN		0x01
 #define		FIN		0x02
 #define		ACK		0x04
@@ -72,7 +72,7 @@ struct tcphdr_info {
 
 #define		TCP_CMP_INFO_MASK	0xFFFF
 
-/* tcphdr_info's flags */
+/* tcp_hdr_info's flags */
 #define		ERR_SKB		0x010000
 #define		RETRANSMIT	0x020000
 #define		WIN_UPDATE	0x040000
@@ -122,7 +122,7 @@ static void debug_print_tcp(const struct compare_info *info, const void *data)
 	unsigned int doff;
 	unsigned short src_port, dst_port;
 	const struct tcphdr *tcp = data;
-	struct tcp_compare_info *tcp_info;
+	struct tcp_compare_info *tcp_cinfo;
 
 	src_port = ntohs(tcp->source);
 	dst_port = ntohs(tcp->dest);
@@ -132,10 +132,10 @@ static void debug_print_tcp(const struct compare_info *info, const void *data)
 		" ack=%u\n", src_port, dst_port, seq,
 		ack);
 
-	tcp_info = TCP_CMP_INFO(info);
-	if (tcp_info->flags & VALID)
+	tcp_cinfo = TCP_CMP_INFO(info);
+	if (tcp_cinfo->flags & VALID)
 		pr_warn("HA_compare: snd_nxt: %u, rcv_nxt: %u\n",
-			tcp_info->snd_nxt, tcp_info->rcv_nxt);
+			tcp_cinfo->snd_nxt, tcp_cinfo->rcv_nxt);
 
 	doff = tcp->doff * 4;
 	debug_print_tcp_header(data, doff);
@@ -226,59 +226,59 @@ update_tcp_timestamp(struct tcphdr *tcp, struct sk_buff *skb,
 }
 
 static void
-get_tcphdr_info(struct tcphdr *tcp, int length,
-		struct tcp_compare_info *tcp_info,
-		struct tcphdr_info *tcphdr_info)
+get_tcp_hdr_info(struct tcphdr *tcp, int length,
+		 struct tcp_compare_info *tcp_cinfo,
+		 struct tcp_hdr_info *tcp_hinfo)
 {
 	length -= tcp->doff * 4;
 
-	tcphdr_info->seq = ntohl(tcp->seq);
-	tcphdr_info->end_seq = tcphdr_info->seq;
-	tcphdr_info->length = length;
-	tcphdr_info->window = ntohs(tcp->window);
+	tcp_hinfo->seq = ntohl(tcp->seq);
+	tcp_hinfo->end_seq = tcp_hinfo->seq;
+	tcp_hinfo->length = length;
+	tcp_hinfo->window = ntohs(tcp->window);
 
 	if (unlikely(length < 0)) {
-		tcphdr_info->flags |= ERR_SKB;
+		tcp_hinfo->flags |= ERR_SKB;
 		return;
 	}
 
 	if (unlikely(tcp->fin && tcp->syn)) {
-		tcphdr_info->flags |= ERR_SKB;
+		tcp_hinfo->flags |= ERR_SKB;
 		return;
 	}
 
-	tcphdr_info->flags = 0;
+	tcp_hinfo->flags = 0;
 	if (tcp->fin) {
-		tcphdr_info->flags |= FIN;
-		tcphdr_info->length++;
+		tcp_hinfo->flags |= FIN;
+		tcp_hinfo->length++;
 	}
 
 	if (tcp->syn) {
-		tcphdr_info->flags |= SYN;
-		tcphdr_info->length++;
+		tcp_hinfo->flags |= SYN;
+		tcp_hinfo->length++;
 	}
 
 	if (tcp->ack) {
-		tcphdr_info->flags |= ACK;
-		tcphdr_info->ack_seq = ntohl(tcp->ack_seq);
+		tcp_hinfo->flags |= ACK;
+		tcp_hinfo->ack_seq = ntohl(tcp->ack_seq);
 	}
 
-	tcphdr_info->end_seq += tcphdr_info->length;
+	tcp_hinfo->end_seq += tcp_hinfo->length;
 
 	/* timestamp */
-	tcphdr_info->timestamp =
+	tcp_hinfo->timestamp =
 		get_next_opt_by_kind(tcp + 1, (char *)tcp + tcp->doff * 4,
 				     TCPOPT_TIMESTAMP);
 
-	if (tcphdr_info->timestamp)
-		tcphdr_info->timestamp =
-			(uint32_t *)((char *)tcphdr_info->timestamp + 2);
+	if (tcp_hinfo->timestamp)
+		tcp_hinfo->timestamp =
+			(uint32_t *)((char *)tcp_hinfo->timestamp + 2);
 
-	if (!(tcp_info->flags & VALID))
+	if (!(tcp_cinfo->flags & VALID))
 		return;
 
 	if (length > 0)
-		tcphdr_info->flags |= HAVE_PAYLOAD;
+		tcp_hinfo->flags |= HAVE_PAYLOAD;
 
 	if (tcp->rst)
 		/*
@@ -287,16 +287,16 @@ get_tcphdr_info(struct tcphdr *tcp, int length,
 		 */
 		return;
 
-	if (tcphdr_info->length > 0)
+	if (tcp_hinfo->length > 0)
 		goto check_retransmitted_packet;
 
 	/* check window update */
-	if (tcphdr_info->window > tcp_info->window)
-		tcphdr_info->flags |= WIN_UPDATE;
+	if (tcp_hinfo->window > tcp_cinfo->window)
+		tcp_hinfo->flags |= WIN_UPDATE;
 
-	if ((tcphdr_info->flags & ACK) &&
-	    after(tcphdr_info->ack_seq, tcp_info->rcv_nxt))
-		tcphdr_info->flags |= ACK_UPDATE;
+	if ((tcp_hinfo->flags & ACK) &&
+	    after(tcp_hinfo->ack_seq, tcp_cinfo->rcv_nxt))
+		tcp_hinfo->flags |= ACK_UPDATE;
 
 check_retransmitted_packet:
 	/*
@@ -304,70 +304,70 @@ check_retransmitted_packet:
 	 *  1. end_seq is before snd_nxt
 	 *  2. end_seq is equal to snd_nxt, and seq is before snd_nxt
 	 */
-	if (before(tcphdr_info->end_seq, tcp_info->snd_nxt) ||
-	    (tcphdr_info->end_seq == tcp_info->snd_nxt &&
-	     before(tcphdr_info->seq, tcp_info->snd_nxt)))
-		tcphdr_info->flags |= RETRANSMIT;
+	if (before(tcp_hinfo->end_seq, tcp_cinfo->snd_nxt) ||
+	    (tcp_hinfo->end_seq == tcp_cinfo->snd_nxt &&
+	     before(tcp_hinfo->seq, tcp_cinfo->snd_nxt)))
+		tcp_hinfo->flags |= RETRANSMIT;
 
-	if ((tcphdr_info->flags & ACK_UPDATE) || !(tcphdr_info->flags & ACK))
+	if ((tcp_hinfo->flags & ACK_UPDATE) || !(tcp_hinfo->flags & ACK))
 		return;
 
-	if (tcphdr_info->length > 0)
+	if (tcp_hinfo->length > 0)
 		return;
 
 	/* check dup ack */
-	if (tcphdr_info->ack_seq == tcp_info->rcv_nxt) {
-		tcphdr_info->flags |= DUP_ACK;
+	if (tcp_hinfo->ack_seq == tcp_cinfo->rcv_nxt) {
+		tcp_hinfo->flags |= DUP_ACK;
 	} else {
-		tcphdr_info->flags |= OLD_ACK;
+		tcp_hinfo->flags |= OLD_ACK;
 
 		/* old ack's window is older, ignore it */
-		tcphdr_info->flags &= ~WIN_UPDATE;
+		tcp_hinfo->flags &= ~WIN_UPDATE;
 	}
 }
 
 static void
-update_tcp_compare_info(struct tcp_compare_info *tcp_info,
-			struct tcphdr_info *tcphdr_info,
+update_tcp_compare_info(struct tcp_compare_info *tcp_cinfo,
+			struct tcp_hdr_info *tcp_hinfo,
 			struct sk_buff *skb)
 {
-	if (tcphdr_info->flags & ACK_UPDATE || !(tcp_info->flags & VALID))
-		tcp_info->rcv_nxt = tcphdr_info->ack_seq;
+	if (tcp_hinfo->flags & ACK_UPDATE || !(tcp_cinfo->flags & VALID))
+		tcp_cinfo->rcv_nxt = tcp_hinfo->ack_seq;
 
-	if (!(tcphdr_info->flags & OLD_ACK))
-		tcp_info->window = tcphdr_info->window;
+	if (!(tcp_hinfo->flags & OLD_ACK))
+		tcp_cinfo->window = tcp_hinfo->window;
 
-	if (tcphdr_info->timestamp) {
-		uint32_t timestamp = ntohl(*tcphdr_info->timestamp);
-		if (tcp_info->flags & VALID_TIMESTAMP) {
-			if (after(timestamp, tcp_info->timestamp))
-				tcp_info->timestamp = timestamp;
+	if (tcp_hinfo->timestamp) {
+		uint32_t timestamp = ntohl(*tcp_hinfo->timestamp);
+		if (tcp_cinfo->flags & VALID_TIMESTAMP) {
+			if (after(timestamp, tcp_cinfo->timestamp))
+				tcp_cinfo->timestamp = timestamp;
 		} else {
-			tcp_info->timestamp = timestamp;
-			tcp_info->flags |= VALID_TIMESTAMP;
+			tcp_cinfo->timestamp = timestamp;
+			tcp_cinfo->flags |= VALID_TIMESTAMP;
 		}
 	}
 
-	if (!(tcphdr_info->flags & RETRANSMIT)) {
-		uint16_t old_flags = tcp_info->flags;
-		tcp_info->flags = (tcphdr_info->flags & TCP_CMP_INFO_MASK) | VALID;
+	if (!(tcp_hinfo->flags & RETRANSMIT)) {
+		uint16_t old_flags = tcp_cinfo->flags;
+		tcp_cinfo->flags = (tcp_hinfo->flags & TCP_CMP_INFO_MASK) | VALID;
 
 		/*
 		 * FIN means we don't send any data more, but we can receive
 		 * data. So we should not overwrite this FIN flags.
 		 */
-		if (old_flags & FIN && tcphdr_info->length == 0)
-			tcp_info->flags |= FIN;
+		if (old_flags & FIN && tcp_hinfo->length == 0)
+			tcp_cinfo->flags |= FIN;
 
 		if (old_flags & VALID_TIMESTAMP)
-			tcp_info->flags |= VALID_TIMESTAMP;
+			tcp_cinfo->flags |= VALID_TIMESTAMP;
 	}
 
-	if (!(tcphdr_info->flags & RETRANSMIT) && tcphdr_info->length > 0)
-		tcp_info->snd_nxt = tcphdr_info->end_seq;
+	if (!(tcp_hinfo->flags & RETRANSMIT) && tcp_hinfo->length > 0)
+		tcp_cinfo->snd_nxt = tcp_hinfo->end_seq;
 
-	tcp_info->dev = skb->dev;
-	tcp_info->skb_iif = skb->skb_iif;
+	tcp_cinfo->dev = skb->dev;
+	tcp_cinfo->skb_iif = skb->skb_iif;
 }
 
 static uint32_t check_ack_only_packet(uint32_t m_flags, uint32_t s_flags,
@@ -550,15 +550,15 @@ compare_tcp_options(void *m_opts, void *m_opts_end, void *s_opts, void *s_opts_e
 }
 
 static int
-tcp_compare_header(struct compare_info *m, struct compare_info *s)
+tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 {
-	struct tcphdr_info m_info, s_info;
+	struct tcp_hdr_info m_tcp_hinfo, s_tcp_hinfo;
 	uint8_t m_flags, s_flags;
 	uint32_t ret = 0;
 
 #define compare(elem)								\
 	do {									\
-		if (unlikely(m->tcp->elem != s->tcp->elem)) {			\
+		if (unlikely(m_cinfo->tcp->elem != s_cinfo->tcp->elem)) {	\
 			pr_warn("HA_compare: tcp header's %s is different\n",	\
 				#elem);						\
 			return CHECKPOINT | UPDATE_COMPARE_INFO;		\
@@ -569,32 +569,35 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 	compare(source);
 	compare(dest);
 
-	get_tcphdr_info(m->tcp, m->length, TCP_CMP_INFO(m), &m_info);
-	get_tcphdr_info(s->tcp, s->length, TCP_CMP_INFO(s), &s_info);
-	if (m_info.flags & ERR_SKB)
+	get_tcp_hdr_info(m_cinfo->tcp, m_cinfo->length, TCP_CMP_INFO(m_cinfo),
+			&m_tcp_hinfo);
+	get_tcp_hdr_info(s_cinfo->tcp, s_cinfo->length, TCP_CMP_INFO(s_cinfo),
+			&s_tcp_hinfo);
+	if (m_tcp_hinfo.flags & ERR_SKB)
 		ret |= BYPASS_MASTER;
-	if (m_info.flags & ERR_SKB)
+	if (m_tcp_hinfo.flags & ERR_SKB)
 		ret |= DROP_SLAVER;
 	if (ret)
 		return ret;
 
 	if (ignore_retransmitted_packet) {
-		if (m_info.flags & RETRANSMIT)
+		if (m_tcp_hinfo.flags & RETRANSMIT)
 			ret |= BYPASS_MASTER;
-		if (s_info.flags & RETRANSMIT)
+		if (s_tcp_hinfo.flags & RETRANSMIT)
 			ret |= DROP_SLAVER;
 		if (ret)
 			goto out;
 	}
 
 	/* seq */
-	if ((TCP_CMP_INFO(m)->flags & FIN) != (TCP_CMP_INFO(s)->flags & FIN)) {
-		uint32_t m_seq = ntohl(m->tcp->seq);
-		uint32_t s_seq = ntohl(s->tcp->seq);
+	if ((TCP_CMP_INFO(m_cinfo)->flags & FIN) !=
+	    (TCP_CMP_INFO(s_cinfo)->flags & FIN)) {
+		uint32_t m_seq = ntohl(m_cinfo->tcp->seq);
+		uint32_t s_seq = ntohl(s_cinfo->tcp->seq);
 
-		if (TCP_CMP_INFO(m)->flags & FIN)
+		if (TCP_CMP_INFO(m_cinfo)->flags & FIN)
 			m_seq -= 1;
-		if (TCP_CMP_INFO(s)->flags & FIN)
+		if (TCP_CMP_INFO(s_cinfo)->flags & FIN)
 			s_seq -= 1;
 		if (unlikely(m_seq != s_seq)) {
 			pr_warn("HA_compare: tcp header's seq is different\n");
@@ -604,31 +607,32 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 		compare(seq);
 
 	/* flags */
-	m_flags = *(uint8_t *)((char *)m->tcp + 13);
-	s_flags = *(uint8_t *)((char *)s->tcp + 13);
+	m_flags = *(uint8_t *)((char *)m_cinfo->tcp + 13);
+	s_flags = *(uint8_t *)((char *)s_cinfo->tcp + 13);
 	if ((m_flags & TCP_CMP_FLAGS_MASK) != (s_flags & TCP_CMP_FLAGS_MASK)) {
 		pr_warn("HA_compare: tcp header's flags is different\n");
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
 
 	if (!ignore_tcp_psh) {
-		if (m->tcp->psh != s->tcp->psh) {
+		if (m_cinfo->tcp->psh != s_cinfo->tcp->psh) {
 			pr_warn("HA_compare: tcp header's flags is different\n");
 			return CHECKPOINT | UPDATE_COMPARE_INFO;
 		}
 	}
 
 	if (!ignore_tcp_fin) {
-		if (m->tcp->fin != s->tcp->fin) {
+		if (m_cinfo->tcp->fin != s_cinfo->tcp->fin) {
 			pr_warn("HA_compare: tcp header's flags is different\n");
 			return CHECKPOINT | UPDATE_COMPARE_INFO;
 		}
 	}
 
 	if (ignore_ack_packet) {
-		ret = check_ack_only_packet(m_info.flags, s_info.flags,
-					    TCP_CMP_INFO(m)->flags & FIN,
-					    TCP_CMP_INFO(s)->flags & FIN);
+		ret = check_ack_only_packet(m_tcp_hinfo.flags,
+					    s_tcp_hinfo.flags,
+					    TCP_CMP_INFO(m_cinfo)->flags & FIN,
+					    TCP_CMP_INFO(s_cinfo)->flags & FIN);
 		if (ret)
 			goto out;
 	}
@@ -636,10 +640,10 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 	/* data offset */
 	compare(doff);
 
-	ret = compare_tcp_options(m->ip_data + sizeof(struct tcphdr),
-				  m->ip_data + m->tcp->doff * 4,
-				  s->ip_data + sizeof(struct tcphdr),
-				  s->ip_data + s->tcp->doff * 4);
+	ret = compare_tcp_options(m_cinfo->ip_data + sizeof(struct tcphdr),
+				  m_cinfo->ip_data + m_cinfo->tcp->doff * 4,
+				  s_cinfo->ip_data + sizeof(struct tcphdr),
+				  s_cinfo->ip_data + s_cinfo->tcp->doff * 4);
 	if (ret) {
 		pr_warn("HA_compare: tcp header's options are different\n");
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
@@ -650,32 +654,39 @@ tcp_compare_header(struct compare_info *m, struct compare_info *s)
 		compare(window);
 
 	/* Acknowledgment Number */
-	if (m->tcp->ack && !ignore_ack_difference) {
+	if (m_cinfo->tcp->ack && !ignore_ack_difference) {
 		compare(ack_seq);
 	}
 
 #undef compare
 	/* update flags */
 	/* PSH */
-	if (m->tcp->psh != s->tcp->psh && !m->tcp->psh)
-		update_tcp_psh(m->tcp, m->skb);
+	if (m_cinfo->tcp->psh != s_cinfo->tcp->psh && !m_cinfo->tcp->psh)
+		update_tcp_psh(m_cinfo->tcp, m_cinfo->skb);
 
 	/* FIN */
-	if (TCP_CMP_INFO(m)->flags & FIN && !m->tcp->fin && s->tcp->fin) {
+	if (TCP_CMP_INFO(m_cinfo)->flags & FIN && !m_cinfo->tcp->fin &&
+	    s_cinfo->tcp->fin) {
 		/* add the flags FIN again */
-		update_tcp_fin(m->tcp, m->skb, false);
-	} else if (m->tcp->fin && !(TCP_CMP_INFO(s)->flags & FIN) && !s->tcp->fin) {
+		update_tcp_fin(m_cinfo->tcp, m_cinfo->skb, false);
+	} else if (m_cinfo->tcp->fin &&
+		   !(TCP_CMP_INFO(s_cinfo)->flags & FIN) &&
+		   !s_cinfo->tcp->fin) {
 		/* clear the flags FIN */
-		update_tcp_fin(m->tcp, m->skb, true);
+		update_tcp_fin(m_cinfo->tcp, m_cinfo->skb, true);
 	}
 
-	update_tcp_compare_info(TCP_CMP_INFO(m), &m_info, m->skb);
-	update_tcp_compare_info(TCP_CMP_INFO(s), &s_info, s->skb);
+	update_tcp_compare_info(TCP_CMP_INFO(m_cinfo), &m_tcp_hinfo,
+				m_cinfo->skb);
+	update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), &s_tcp_hinfo,
+				s_cinfo->skb);
 
 	if (ignore_ack_difference)
-		update_tcp_ackseq(m->tcp, m->skb, s_info.ack_seq);
+		update_tcp_ackseq(m_cinfo->tcp, m_cinfo->skb,
+				  s_tcp_hinfo.ack_seq);
 	if (ignore_tcp_window)
-		update_tcp_window(m->tcp, m->skb, s_info.window);
+		update_tcp_window(m_cinfo->tcp, m_cinfo->skb,
+				  s_tcp_hinfo.window);
 
 	return SAME_PACKET;
 
@@ -683,35 +694,42 @@ out:
 	/* Retransmitted packet or ack only packet */
 	if (ret & BYPASS_MASTER) {
 		/* clear FIN flags first before bypass master packet */
-		if (m_info.flags & RETRANSMIT && m->tcp->fin &&
-		    !(TCP_CMP_INFO(s)->flags & FIN))
-			update_tcp_fin(m->tcp, m->skb, true);
-		update_tcp_compare_info(TCP_CMP_INFO(m), &m_info, m->skb);
-		update_tcp_ackseq(m->tcp, m->skb, s_info.ack_seq);
-		update_tcp_window(m->tcp, m->skb, s_info.window);
+		if (m_tcp_hinfo.flags & RETRANSMIT && m_cinfo->tcp->fin &&
+		    !(TCP_CMP_INFO(s_cinfo)->flags & FIN))
+			update_tcp_fin(m_cinfo->tcp, m_cinfo->skb, true);
+		update_tcp_compare_info(TCP_CMP_INFO(m_cinfo), &m_tcp_hinfo,
+					m_cinfo->skb);
+		update_tcp_ackseq(m_cinfo->tcp, m_cinfo->skb,
+				  s_tcp_hinfo.ack_seq);
+		update_tcp_window(m_cinfo->tcp, m_cinfo->skb,
+				  s_tcp_hinfo.window);
 	}
 	if (ret & DROP_SLAVER) {
-		update_tcp_compare_info(TCP_CMP_INFO(s), &s_info, s->skb);
+		update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), &s_tcp_hinfo,
+					s_cinfo->skb);
 	}
 	return ret;
 }
 
-static uint32_t tcp_compare_packet(struct compare_info *m, struct compare_info *s)
+static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
+				   struct compare_info *s_cinfo)
 {
 	int m_len, s_len;
 	uint32_t ret;
 
-	ret = tcp_compare_header(m, s);
+	ret = tcp_compare_header(m_cinfo, s_cinfo);
 	if (ret != SAME_PACKET)
 		return ret;
 
-	m_len = m->length - m->tcp->doff * 4;
-	s_len = s->length - s->tcp->doff * 4;
+	m_len = m_cinfo->length - m_cinfo->tcp->doff * 4;
+	s_len = s_cinfo->length - s_cinfo->tcp->doff * 4;
 
 	if (compare_tcp_data && m_len != 0 && s_len != 0) {
-		m->tcp_data = m->ip_data + m->tcp->doff * 4;
-		s->tcp_data = s->ip_data + s->tcp->doff * 4;
-		ret = compare_other_packet(m->tcp_data, s->tcp_data, min(m_len, s_len));
+		m_cinfo->tcp_data = m_cinfo->ip_data + m_cinfo->tcp->doff * 4;
+		s_cinfo->tcp_data = s_cinfo->ip_data + s_cinfo->tcp->doff * 4;
+		ret = compare_other_packet(m_cinfo->tcp_data,
+					   s_cinfo->tcp_data,
+					   min(m_len, s_len));
 		if (ret & CHECKPOINT) {
 			pr_warn("HA_compare: tcp data is different\n");
 			return CHECKPOINT | UPDATE_COMPARE_INFO;
@@ -753,47 +771,49 @@ static struct tcphdr *get_tcphdr(struct sk_buff *skb)
 	return tcph;
 }
 
-static uint32_t tcp_compare_payload(struct compare_info *m, struct compare_info *s)
+static uint32_t
+tcp_compare_payload(struct compare_info *m_cinfo,
+		    struct compare_info *s_cinfo)
 {
-	struct sk_buff *m_head = m->skb, *s_head = s->skb;
+	struct sk_buff *m_head = m_cinfo->skb, *s_head = s_cinfo->skb;
 	int m_off, s_off;
 
-	m_off = m->tcp->doff * 4;
-	s_off = s->tcp->doff * 4;
+	m_off = m_cinfo->tcp->doff * 4;
+	s_off = s_cinfo->tcp->doff * 4;
 
-	if (m->length - m_off != s->length - s_off)
+	if (m_cinfo->length - m_off != s_cinfo->length - s_off)
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	return ipv4_transport_compare_fragment(m_head, s_head, m_off, s_off,
-					       m->length - m_off);
+					       m_cinfo->length - m_off);
 }
 
 static uint32_t
-tcp_compare_fragment(struct compare_info *m, struct compare_info *s)
+tcp_compare_fragment(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 {
-	struct sk_buff *m_skb = m->skb;
-	struct sk_buff *s_skb = s->skb;
+	struct sk_buff *m_skb = m_cinfo->skb;
+	struct sk_buff *s_skb = s_cinfo->skb;
 	struct tcphdr *m_tcp = NULL, *old_m_tcp = NULL;
 	struct tcphdr *s_tcp = NULL, *old_s_tcp = NULL;
 	int ret = CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	if (FRAG_CB(m_skb)->len < sizeof(struct tcphdr) ||
-	    FRAG_CB(m_skb)->len < m->tcp->doff * 4) {
-		old_m_tcp = m->tcp;
-		m->tcp = m_tcp = get_tcphdr(m_skb);
+	    FRAG_CB(m_skb)->len < m_cinfo->tcp->doff * 4) {
+		old_m_tcp = m_cinfo->tcp;
+		m_cinfo->tcp = m_tcp = get_tcphdr(m_skb);
 		if (!m_tcp)
 			goto out;
 	}
 
 	if (FRAG_CB(s_skb)->len < sizeof(struct tcphdr) ||
-	    FRAG_CB(s_skb)->len < s->tcp->doff * 4) {
-		old_s_tcp = s->tcp;
-		s->tcp = s_tcp = get_tcphdr(s_skb);
+	    FRAG_CB(s_skb)->len < s_cinfo->tcp->doff * 4) {
+		old_s_tcp = s_cinfo->tcp;
+		s_cinfo->tcp = s_tcp = get_tcphdr(s_skb);
 		if (!s_tcp)
 			goto out;
 	}
 
-	ret = tcp_compare_header(m, s);
+	ret = tcp_compare_header(m_cinfo, s_cinfo);
 	if (ret != SAME_PACKET)
 		goto out;
 
@@ -802,7 +822,7 @@ tcp_compare_fragment(struct compare_info *m, struct compare_info *s)
 		goto out;
 	}
 
-	ret = tcp_compare_payload(m, s);
+	ret = tcp_compare_payload(m_cinfo, s_cinfo);
 
 out:
 	if (m_tcp)
@@ -810,15 +830,15 @@ out:
 	if (s_tcp)
 		kfree(s_tcp);
 	if (old_m_tcp)
-		m->tcp = old_m_tcp;
+		m_cinfo->tcp = old_m_tcp;
 	if (old_s_tcp)
-		s->tcp = old_s_tcp;
+		s_cinfo->tcp = old_s_tcp;
 
 	return ret;
 }
 
 static struct sk_buff *create_new_skb(struct sk_buff *skb,
-				      struct compare_info *info)
+				      struct compare_info *cinfo)
 {
 	struct sk_buff *new_skb;
 	struct ethhdr *eth;
@@ -829,9 +849,9 @@ static struct sk_buff *create_new_skb(struct sk_buff *skb,
 	if (!new_skb)
 		return NULL;
 
-	new_skb->dev = TCP_CMP_INFO(info)->dev;
-	new_skb->skb_iif = TCP_CMP_INFO(info)->skb_iif;
-	info->skb = new_skb;
+	new_skb->dev = TCP_CMP_INFO(cinfo)->dev;
+	new_skb->skb_iif = TCP_CMP_INFO(cinfo)->skb_iif;
+	cinfo->skb = new_skb;
 
 	eth = (struct ethhdr *)new_skb->data;
 	if (unlikely(ntohs(eth->h_proto) != ETH_P_IP))
@@ -843,9 +863,9 @@ static struct sk_buff *create_new_skb(struct sk_buff *skb,
 
 	tcp = (struct tcphdr *)((char *)ip + ip->ihl * 4);
 
-	info->eth = eth;
-	info->ip = ip;
-	info->tcp = tcp;
+	cinfo->eth = eth;
+	cinfo->ip = ip;
+	cinfo->tcp = tcp;
 
 	return new_skb;
 
@@ -856,30 +876,31 @@ err:
 }
 
 static void
-update_tcphdr_flags(struct compare_info *info,
-		    struct compare_info *other_info,
-		    struct tcphdr_info *tcphdr_info)
+update_tcp_hdr_flags(struct compare_info *cinfo,
+		     struct compare_info *other_cinfo,
+		     struct tcp_hdr_info *tcp_hinfo)
 {
-	struct tcp_compare_info *tcp_info = TCP_CMP_INFO(info);
-	struct tcp_compare_info *other_tcp_info = TCP_CMP_INFO(other_info);
+	struct tcp_compare_info *tcp_cinfo = TCP_CMP_INFO(cinfo);
+	struct tcp_compare_info *other_tcp_cinfo = TCP_CMP_INFO(other_cinfo);
 
 	/* more check for window update */
-	if (tcphdr_info->flags & WIN_UPDATE)
-		if (tcp_info->window >= other_tcp_info->window)
-			tcphdr_info->flags &= ~WIN_UPDATE;
+	if (tcp_hinfo->flags & WIN_UPDATE)
+		if (tcp_cinfo->window >= other_tcp_cinfo->window)
+			tcp_hinfo->flags &= ~WIN_UPDATE;
 
 	/* more check for ack_seq update */
-	if (tcphdr_info->flags & ACK_UPDATE)
-		if (!after(other_tcp_info->rcv_nxt, tcp_info->rcv_nxt))
-			tcphdr_info->flags &= ~ACK_UPDATE;
+	if (tcp_hinfo->flags & ACK_UPDATE)
+		if (!after(other_tcp_cinfo->rcv_nxt, tcp_cinfo->rcv_nxt))
+			tcp_hinfo->flags &= ~ACK_UPDATE;
 }
 
 static uint32_t
-tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
+tcp_compare_one_packet(struct compare_info *m_cinfo,
+		       struct compare_info *s_cinfo)
 {
 	struct sk_buff *skb, *new_skb = NULL;
-	struct compare_info *info, *other_info;
-	struct tcphdr_info tcphdr_info;
+	struct compare_info *cinfo, *other_cinfo;
+	struct tcp_hdr_info tcp_hinfo;
 	struct tcphdr *tcp;
 	int ret = 0;
 
@@ -888,105 +909,110 @@ tcp_compare_one_packet(struct compare_info *m, struct compare_info *s)
 	    !ignore_tcp_window && !ignore_tcp_fin)
 		return 0;
 
-	if (m->skb) {
-		info = m;
-		other_info = s;
+	if (m_cinfo->skb) {
+		cinfo = m_cinfo;
+		other_cinfo = s_cinfo;
 		ret |= BYPASS_MASTER;
-	} else if (s->skb) {
-		info = s;
-		other_info = m;
+	} else if (s_cinfo->skb) {
+		cinfo = s_cinfo;
+		other_cinfo = m_cinfo;
 		ret |= DROP_SLAVER;
 	} else
 		BUG();
 
-	skb = info->skb;
-	get_tcphdr_info(info->tcp, info->length, TCP_CMP_INFO(info),
-			&tcphdr_info);
+	skb = cinfo->skb;
+	get_tcp_hdr_info(cinfo->tcp, cinfo->length, TCP_CMP_INFO(cinfo),
+			 &tcp_hinfo);
 
-	if (unlikely(tcphdr_info.flags & ERR_SKB))
+	if (unlikely(tcp_hinfo.flags & ERR_SKB))
 		return ret;
 
-	if (!ignore_ack_difference && tcphdr_info.flags & ACK_UPDATE)
+	if (!ignore_ack_difference && tcp_hinfo.flags & ACK_UPDATE)
 		return 0;
 
-	if (!ignore_tcp_window && tcphdr_info.flags & WIN_UPDATE)
+	if (!ignore_tcp_window && tcp_hinfo.flags & WIN_UPDATE)
 		return 0;
 
 	/* more check for window and ack_seq update */
-	update_tcphdr_flags(info, other_info, &tcphdr_info);
+	update_tcp_hdr_flags(cinfo, other_cinfo, &tcp_hinfo);
 
-	if (tcphdr_info.flags & RETRANSMIT) {
+	if (tcp_hinfo.flags & RETRANSMIT) {
 		/* clear FIN */
-		if (info->tcp->fin && !(TCP_CMP_INFO(other_info)->flags & FIN))
-			update_tcp_fin(info->tcp, info->skb, true);
+		if (cinfo->tcp->fin && !(TCP_CMP_INFO(other_cinfo)->flags & FIN))
+			update_tcp_fin(cinfo->tcp, cinfo->skb, true);
 
 		/* Retransmitted packet may conatin WIN_UPDATE or ACK_UPDATE */
-		if (tcphdr_info.flags & ACK_UPDATE ||
-		    tcphdr_info.flags & WIN_UPDATE)
+		if (tcp_hinfo.flags & ACK_UPDATE ||
+		    tcp_hinfo.flags & WIN_UPDATE)
 			/* TODO: How to avoid retransmiting twice? */
 			goto send_packet;
 
-		update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info, info->skb);
+		update_tcp_compare_info(TCP_CMP_INFO(cinfo), &tcp_hinfo,
+					cinfo->skb);
 
-		tcp = info->tcp;
-		update_tcp_ackseq(tcp, skb, TCP_CMP_INFO(other_info)->rcv_nxt);
-		update_tcp_window(tcp, skb, TCP_CMP_INFO(other_info)->window);
+		tcp = cinfo->tcp;
+		update_tcp_ackseq(tcp, skb, TCP_CMP_INFO(other_cinfo)->rcv_nxt);
+		update_tcp_window(tcp, skb, TCP_CMP_INFO(other_cinfo)->window);
 		return ret;
 	}
 
-	if ((tcphdr_info.flags & HAVE_PAYLOAD) &&
-	    (TCP_CMP_INFO(other_info)->flags & FIN))
+	if ((tcp_hinfo.flags & HAVE_PAYLOAD) &&
+	    (TCP_CMP_INFO(other_cinfo)->flags & FIN))
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 
-	if (tcphdr_info.flags & (HAVE_PAYLOAD | SYN))
+	if (tcp_hinfo.flags & (HAVE_PAYLOAD | SYN))
 		/*
 		 * This packet is not a retransmitted packet,
 		 * and has data or SYN.
 		 */
 		return 0;
 
-	if ((tcphdr_info.flags & FIN) &&
-	    (TCP_CMP_INFO(other_info)->flags & FIN))
+	if ((tcp_hinfo.flags & FIN) &&
+	    (TCP_CMP_INFO(other_cinfo)->flags & FIN))
 		goto send_packet;
 
-	if (tcphdr_info.flags & OLD_ACK)
+	if (tcp_hinfo.flags & OLD_ACK)
 		/* It is a packet with old ack seq */
 		return ret;
 
-	if (!(tcphdr_info.flags & (WIN_UPDATE | ACK_UPDATE | DUP_ACK)))
+	if (!(tcp_hinfo.flags & (WIN_UPDATE | ACK_UPDATE | DUP_ACK)))
 		return 0;
 
 send_packet:
-	if (s->skb) {
-		new_skb = create_new_skb(skb, m);
+	if (s_cinfo->skb) {
+		new_skb = create_new_skb(skb, m_cinfo);
 		if (!new_skb)
 			return 0;
 	} else
 		new_skb = skb;
-	update_tcp_compare_info(TCP_CMP_INFO(info), &tcphdr_info, info->skb);
+	update_tcp_compare_info(TCP_CMP_INFO(cinfo), &tcp_hinfo,
+				cinfo->skb);
 
-	if (info == s) {
-		tcp = m->tcp;
-		update_tcp_ackseq(tcp, new_skb, TCP_CMP_INFO(other_info)->rcv_nxt);
-		update_tcp_window(tcp, new_skb, TCP_CMP_INFO(other_info)->window);
-		update_tcp_timestamp(tcp, new_skb,TCP_CMP_INFO(other_info)->timestamp);
+	if (cinfo == s_cinfo) {
+		tcp = m_cinfo->tcp;
+		update_tcp_ackseq(tcp, new_skb,
+				  TCP_CMP_INFO(other_cinfo)->rcv_nxt);
+		update_tcp_window(tcp, new_skb,
+				  TCP_CMP_INFO(other_cinfo)->window);
+		update_tcp_timestamp(tcp, new_skb,
+				     TCP_CMP_INFO(other_cinfo)->timestamp);
 	}
 
-	return info == m ? BYPASS_MASTER : SAME_PACKET;
+	return cinfo == m_cinfo ? BYPASS_MASTER : SAME_PACKET;
 }
 
 static void tcp_update_info(void *info, void *data, uint32_t length, struct sk_buff *skb)
 {
 	struct tcphdr *tcp = data;
-	struct tcp_compare_info *tcp_info = info;
-	struct tcphdr_info tcphdr_info;
+	struct tcp_compare_info *tcp_cinfo = info;
+	struct tcp_hdr_info tcp_hinfo;
 
-	get_tcphdr_info(tcp, length, tcp_info, &tcphdr_info);
+	get_tcp_hdr_info(tcp, length, tcp_cinfo, &tcp_hinfo);
 
-	if (unlikely(tcphdr_info.flags & ERR_SKB))
+	if (unlikely(tcp_hinfo.flags & ERR_SKB))
 		return;
 
-	update_tcp_compare_info(tcp_info, &tcphdr_info, skb);
+	update_tcp_compare_info(tcp_cinfo, &tcp_hinfo, skb);
 }
 
 static compare_ops_t tcp_ops = {
