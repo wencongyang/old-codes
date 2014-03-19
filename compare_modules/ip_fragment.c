@@ -5,7 +5,7 @@
 
 #include "ip_fragment.h"
 
-void kill_frag_queue(struct frag_queue *q)
+void kill_frag_queue(struct ip_frag_queue *q)
 {
 	if (del_timer(&q->timer))
 		atomic_dec(&q->refcnt);
@@ -17,7 +17,7 @@ void kill_frag_queue(struct frag_queue *q)
 	}
 }
 
-void destroy_frag_queue(struct frag_queue *q)
+void destroy_frag_queue(struct ip_frag_queue *q)
 {
 	struct sk_buff *skb;
 
@@ -39,7 +39,7 @@ void destroy_frag_queue(struct frag_queue *q)
  * under the lock ip_frags.lock. src_q is in the list ip_frags.lru_list,
  * so it cannot be destroyed.
  */
-int copy_frag_queue(struct frag_queue *src_q, struct frag_queue *dst_q)
+int copy_frag_queue(struct ip_frag_queue *src_q, struct ip_frag_queue *dst_q)
 {
 	struct sk_buff *src_skb, *dst_skb;
 	unsigned int expire_time;
@@ -73,7 +73,7 @@ int copy_frag_queue(struct frag_queue *src_q, struct frag_queue *dst_q)
 
 	atomic_set(&dst_q->refcnt, 1);
 
-	/* We remove frag_queue from ip_frags before removing it from hb */
+	/* We remove ip_frag_queue from ip_frags before removing it from hb */
 	spin_lock_bh(&src_q->hb->chain_lock);
 	hlist_add_after(&src_q->list, &dst_q->list);
 	spin_unlock_bh(&src_q->hb->chain_lock);

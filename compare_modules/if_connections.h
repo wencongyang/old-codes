@@ -14,7 +14,7 @@ struct colo_idx {
 	uint32_t slaver_idx;
 };
 
-struct flow_keys {
+struct connection_keys {
 	/* (src,dst) must be grouped, in the same way than in IP header */
 	__be32 src;
 	__be32 dst;
@@ -34,7 +34,7 @@ struct connect_info {
 	struct sk_buff_head slaver_queue;
 	struct if_connections *ics;
 
-	struct flow_keys key;
+	struct connection_keys key;
 	struct list_head list;
 	struct list_head compare_list;
 	uint32_t state;

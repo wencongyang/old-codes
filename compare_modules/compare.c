@@ -27,16 +27,18 @@
 #include "ip_fragment.h"
 #include "ipv4_fragment.h"
 
-static int failover = 0;
-
 struct task_struct *compare_task;
 
+#ifdef DEBUG_COMPARE_MODULE
 struct proc_dir_entry* proc_entry;
 struct statistic_data {
 	unsigned int compare_count;
 	unsigned long long total_time;
 	unsigned long long max_time;
 } statis;
+
+static int failover = 0;
+#endif
 
 wait_queue_head_t queue;
 
@@ -226,13 +228,15 @@ static void compare_one_connection(struct connect_info *conn_info)
 	struct sk_buff *skb_s;
 	int ret;
 	struct compare_info info_m, info_s;
-	struct timespec start, end, delta;
 	struct if_connections *ics = conn_info->ics;
 	bool skip_compare_one = false;
+#ifdef DEBUG_COMPARE_MODULE
 	uint64_t last_time;
+	struct timespec start, end, delta;
 
 	getnstimeofday(&start);
 	statis.compare_count++;
+#endif
 
 	while (1) {
 		if (state != state_comparing)
@@ -300,15 +304,16 @@ static void compare_one_connection(struct connect_info *conn_info)
 			wake_up_interruptible(&queue);
 			break;
 		}
-
 	}
 
+#ifdef DEBUG_COMPARE_MODULE
 	getnstimeofday(&end);
 	delta = timespec_sub(end, start);
 	last_time = delta.tv_sec * 1000000000 + delta.tv_nsec;
 	if (last_time > statis.max_time)
 		statis.max_time = last_time;
 	statis.total_time += last_time;
+#endif
 }
 
 static struct connect_info *get_connect_info(void)
@@ -361,6 +366,7 @@ static int compare_kthread(void *data)
 	return 0;
 }
 
+#ifdef DEBUG_COMPARE_MODULE
 int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *data)
 {
 	struct sk_buff *skb;
@@ -425,6 +431,7 @@ int write_proc(struct file *file, const char *buffer, unsigned long count, void 
 
 	return count;
 }
+#endif
 
 static int __init compare_module_init(void)
 {
@@ -452,10 +459,12 @@ static int __init compare_module_init(void)
 	compare_tcp_init();
 	compare_udp_init();
 
+#ifdef DEBUG_COMPARE_MODULE
 	memset(&statis, 0, sizeof(struct statistic_data));
 	proc_entry = create_proc_entry("HA_compare", 0, NULL);
 	proc_entry->read_proc = read_proc;
 	proc_entry->write_proc = write_proc;
+#endif
 
 	wake_up_process(compare_task);
 

@@ -10,7 +10,7 @@
 #define IPVR_FRAGS_TIMEOUT	500
 
 struct ipv4_queue {
-	struct frag_queue q;
+	struct ip_frag_queue q;
 
 	u32		user;
 	__be32		saddr;
@@ -19,6 +19,16 @@ struct ipv4_queue {
 	u8		protocol;
 //	u8		ecn; /* RFC3168 support */
 };
+
+//#define NEW_KERNEL
+#ifdef NEW_KERNEL
+#define __hlist_for_each_entry(pos, head, member)	\
+	hlist_for_each_entry(pos, head, member)
+#else
+#define __hlist_for_each_entry(pos, head, member)	\
+	struct hlist_node *tmp;				\
+	hlist_for_each_entry(pos, tmp, head, member)
+#endif
 
 static unsigned int ipqhashfn(__be16 id, __be32 saddr, __be32 daddr, u8 prot)
 {
@@ -30,7 +40,7 @@ static unsigned int ipqhashfn(__be16 id, __be32 saddr, __be32 daddr, u8 prot)
 static struct ip_frag_bucket ipv4_frags[IPV4_FRAGS_HASHSZ];
 static void ipv4_frag_expire(unsigned long data);
 
-static inline void put_frag_queue(struct frag_queue *q)
+static inline void put_frag_queue(struct ip_frag_queue *q)
 {
 	if (atomic_dec_and_test(&q->refcnt)) {
 		destroy_frag_queue(q);
@@ -38,7 +48,7 @@ static inline void put_frag_queue(struct frag_queue *q)
 	}
 }
 
-static int ipv4_match_queue(struct frag_queue *q, struct ipv4_queue *ipq_in)
+static int ipv4_match_queue(struct ip_frag_queue *q, struct ipv4_queue *ipq_in)
 {
 	struct ipv4_queue *ipq = container_of(q, struct ipv4_queue, q);
 
@@ -48,7 +58,7 @@ static int ipv4_match_queue(struct frag_queue *q, struct ipv4_queue *ipq_in)
 		ipq->protocol == ipq_in->protocol;
 }
 
-static int ipv4_match(struct frag_queue *q, struct iphdr *iph)
+static int ipv4_match(struct ip_frag_queue *q, struct iphdr *iph)
 {
 	struct ipv4_queue *ipq = container_of(q, struct ipv4_queue, q);
 
@@ -60,7 +70,7 @@ static int ipv4_match(struct frag_queue *q, struct iphdr *iph)
 
 static void ipv4_frag_expire(unsigned long data)
 {
-	struct frag_queue *q = (struct frag_queue *)data;
+	struct ip_frag_queue *q = (struct ip_frag_queue *)data;
 
 	spin_lock(&q->lock);
 
@@ -81,8 +91,7 @@ static struct ipv4_queue *ipv4_frag_intern(struct ipv4_queue *ipq_in,
 					   unsigned int hash)
 {
 	struct ip_frag_bucket *hb;
-	struct frag_queue *q, *q_in;
-	struct hlist_node *tmp;
+	struct ip_frag_queue *q, *q_in;
 
 	hb = &ipv4_frags[hash];
 	q_in = &ipq_in->q;
@@ -93,7 +102,7 @@ static struct ipv4_queue *ipv4_frag_intern(struct ipv4_queue *ipq_in,
 	 * such entry could be created on other cpu, while we
 	 * released the hash bucket lock.
 	 */
-	hlist_for_each_entry(q, tmp, &hb->chain, list) {
+	__hlist_for_each_entry(q, &hb->chain, list) {
 		if (q->ip_frags == ip_frags && ipv4_match_queue(q, ipq_in)) {
 			atomic_inc(&q->refcnt);
 			spin_unlock(&hb->chain_lock);
@@ -118,7 +127,7 @@ static struct ipv4_queue *ipv4_frag_intern(struct ipv4_queue *ipq_in,
 static struct ipv4_queue *ipv4_frag_alloc(struct iphdr *ip, struct ip_frags *ip_frags)
 {
 	struct ipv4_queue *ipq;
-	struct frag_queue *q;
+	struct ip_frag_queue *q;
 
 	ipq = kzalloc(sizeof(*ipq), GFP_ATOMIC);
 	if (!ipq)
@@ -155,16 +164,15 @@ static struct ipv4_queue *ipv4_frag_create(struct iphdr *ip,
 
 static struct ipv4_queue *ipv4_find(struct iphdr *ip, struct ip_frags *ip_frags)
 {
-	struct frag_queue *q;
+	struct ip_frag_queue *q;
 	unsigned int hash;
 	struct ip_frag_bucket *hb;
-	struct hlist_node *tmp;
 
 	hash = ipqhashfn(ip->id, ip->saddr, ip->daddr, ip->protocol);
 	hb = &ipv4_frags[hash];
 
 	spin_lock(&hb->chain_lock);
-	hlist_for_each_entry(q, tmp, &hb->chain, list) {
+	__hlist_for_each_entry(q, &hb->chain, list) {
 		if (q->ip_frags == ip_frags && ipv4_match(q, ip)) {
 			atomic_inc(&q->refcnt);
 			spin_unlock(&hb->chain_lock);
@@ -355,7 +363,7 @@ struct sk_buff *ipv4_defrag(struct sk_buff *skb, struct ip_frags *data)
 	return ERR_PTR(-ENOMEM);
 }
 
-static struct frag_queue *copy_ipv4_queue(struct ipv4_queue *src_ipq)
+static struct ip_frag_queue *copy_ipv4_queue(struct ipv4_queue *src_ipq)
 {
 	struct ipv4_queue *dst_ipq;
 	int ret;
@@ -402,7 +410,7 @@ void copy_ipv4_frags(struct ip_frags *src_ip_frags,
 		     struct ip_frags *dst_ip_frags)
 {
 	struct ipv4_queue *ipq;
-	struct frag_queue *q, *new_q;
+	struct ip_frag_queue *q, *new_q;
 
 	lock_two_locks(&src_ip_frags->lru_lock, &dst_ip_frags->lru_lock);
 	list_for_each_entry(q, &src_ip_frags->lru_list, lru_list) {
@@ -419,7 +427,7 @@ void copy_ipv4_frags(struct ip_frags *src_ip_frags,
 
 void clear_ipv4_frags(struct ip_frags *ip_frags)
 {
-	struct frag_queue *q, *tmp;
+	struct ip_frag_queue *q, *tmp;
 	struct list_head tmp_list;
 
 	INIT_LIST_HEAD(&tmp_list);

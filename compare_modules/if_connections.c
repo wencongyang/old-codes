@@ -23,7 +23,8 @@ void init_if_connections(struct if_connections *ics)
  * Equivalent to :	flow->src = iph->saddr;
  *			flow->dst = iph->daddr;
  */
-static void iph_to_flow_copy_addrs(struct flow_keys *flow, const struct iphdr *iph)
+static void iph_to_flow_copy_addrs(struct connection_keys *flow,
+				   const struct iphdr *iph)
 {
 	BUILD_BUG_ON(offsetof(typeof(*flow), dst) !=
 		     offsetof(typeof(*flow), src) + sizeof(flow->src));
@@ -55,9 +56,9 @@ static inline int __proto_ports_offset(int proto)
  *    0: normal
  *    1: ip fragment
  */
-static int skb_flow_dissect(const struct sk_buff *skb,
-			    struct flow_keys *flow,
-			    bool check_fragment)
+static int __skb_flow_dissect(const struct sk_buff *skb,
+			      struct connection_keys *flow,
+			      bool check_fragment)
 {
 	int poff, nhoff = skb_network_offset(skb);
 	u8 ip_proto;
@@ -107,7 +108,7 @@ static int skb_flow_dissect(const struct sk_buff *skb,
 	return 0;
 }
 
-static struct connect_info *alloc_connect_info(struct flow_keys *key)
+static struct connect_info *alloc_connect_info(struct connection_keys *key)
 {
 	struct connect_info *conn_info;
 
@@ -127,7 +128,8 @@ static struct connect_info *alloc_connect_info(struct flow_keys *key)
 	return conn_info;
 }
 
-static struct connect_info *get_connect_info(struct list_head *head, struct flow_keys *key)
+static struct connect_info *get_connect_info(struct list_head *head,
+					     struct connection_keys *key)
 {
 	struct connect_info *conn_info;
 
@@ -167,7 +169,7 @@ static void free_fragments(struct sk_buff *head, struct sk_buff *except)
 struct connect_info *insert(struct if_connections *ics, struct sk_buff *skb,
 			    uint32_t flags)
 {
-	struct flow_keys key;
+	struct connection_keys key;
 	struct connect_info *conn_info;
 	struct sk_buff *head = NULL;
 	uint32_t hash;
@@ -175,7 +177,7 @@ struct connect_info *insert(struct if_connections *ics, struct sk_buff *skb,
 	int ret;
 
 	FRAG_CB(skb)->flags = 0;
-	ret = skb_flow_dissect(skb, &key, true);
+	ret = __skb_flow_dissect(skb, &key, true);
 	if (ret < 0)
 		return NULL;
 	else if (ret > 0) {
@@ -193,7 +195,7 @@ struct connect_info *insert(struct if_connections *ics, struct sk_buff *skb,
 			return ERR_PTR(-EINPROGRESS);
 		}
 
-		ret = skb_flow_dissect(head, &key, false);
+		ret = __skb_flow_dissect(head, &key, false);
 		if (ret < 0) {
 			free_fragments(head, skb);
 			return NULL;

@@ -3,10 +3,10 @@
 
 /*
  * lock order:
- *    1. frag_queue.lock
+ *    1. ip_frag_queue.lock
  *    2. ip_frags.lru_lock
  *    3. ip_frag_bucket.chain_lock
- *    4. frag_queue.wlock
+ *    4. ip_frag_queue.wlock
  */
 
 struct ip_frag_bucket {
@@ -20,15 +20,15 @@ struct ip_frags {
 	spinlock_t lru_lock;
 };
 
-struct frag_queue {
+struct ip_frag_queue {
 	spinlock_t		lock;
 
 	/*
 	 * use wlock to avoid deadlock, handle ip fragments in this order:
-	 *   1. lock frag_queue.lock
-	 *   2. lock frag_queue.wlock
-	 *   3. update frag_queue
-	 *   4. unlock frag_queue.wlock
+	 *   1. lock ip_frag_queue.lock
+	 *   2. lock ip_frag_queue.wlock
+	 *   3. update ip_frag_queue
+	 *   4. unlock ip_frag_queue.wlock
 	 *   5. do other things
 	 *   6. unlock frag_queu.lock
 	 */
@@ -69,7 +69,7 @@ static inline void init_ip_frags(struct ip_frags *ip_frags)
 	spin_lock_init(&ip_frags->lru_lock);
 }
 
-static inline void ip_frag_lru_del(struct frag_queue *q)
+static inline void ip_frag_lru_del(struct ip_frag_queue *q)
 {
 	spin_lock(&q->ip_frags->lru_lock);
 	if (!list_empty(&q->lru_list)) {
@@ -80,7 +80,7 @@ static inline void ip_frag_lru_del(struct frag_queue *q)
 }
 
 static inline void ip_frag_lru_add(struct ip_frags *ip_frags,
-				   struct frag_queue *q)
+				   struct ip_frag_queue *q)
 {
 	spin_lock(&ip_frags->lru_lock);
 	list_add_tail(&q->lru_list, &ip_frags->lru_list);
@@ -88,7 +88,7 @@ static inline void ip_frag_lru_add(struct ip_frags *ip_frags,
 	spin_unlock(&ip_frags->lru_lock);
 }
 
-static inline void ip_frag_lru_move(struct frag_queue *q)
+static inline void ip_frag_lru_move(struct ip_frag_queue *q)
 {
 	spin_lock(&q->ip_frags->lru_lock);
 	if (!list_empty(&q->lru_list))
@@ -96,9 +96,9 @@ static inline void ip_frag_lru_move(struct frag_queue *q)
 	spin_unlock(&q->ip_frags->lru_lock);
 }
 
-static inline void fq_unlink(struct frag_queue *q, struct ip_frag_bucket *hb)
+static inline void fq_unlink(struct ip_frag_queue *q, struct ip_frag_bucket *hb)
 {
-	/* remove frag_queue from ip_frags first, so it can be copied safely */
+	/* remove ip_frag_queue from ip_frags first, so it can be copied safely */
 	ip_frag_lru_del(q);
 
 	spin_lock(&hb->chain_lock);
@@ -115,11 +115,11 @@ static inline struct sk_buff *next_skb(struct sk_buff *skb, struct sk_buff *head
 }
 
 /* q.lock should be hold and q.wlock should not be hold */
-extern void kill_frag_queue(struct frag_queue *q);
+extern void kill_frag_queue(struct ip_frag_queue *q);
 
-/* free all skb in frag_queue */
-extern void destroy_frag_queue(struct frag_queue *q);
+/* free all skb in ip_frag_queue */
+extern void destroy_frag_queue(struct ip_frag_queue *q);
 
 /* src and dst ip_frags.lock should be hold, dst_q->timer should be setup */
-extern int copy_frag_queue(struct frag_queue *src_q, struct frag_queue *dst_q);
+extern int copy_frag_queue(struct ip_frag_queue *src_q, struct ip_frag_queue *dst_q);
 #endif
