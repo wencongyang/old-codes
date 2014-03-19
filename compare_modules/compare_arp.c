@@ -3,6 +3,10 @@
 
 #include "compare.h"
 
+bool ignore_arp_packet = 1;
+module_param(ignore_arp_packet, bool, 0644);
+MODULE_PARM_DESC(ignore_arp_packet, "ignore arp packet");
+
 struct arp_reply {
 	unsigned char		ar_sha[ETH_ALEN];
 	unsigned char		ar_sip[4];
@@ -10,15 +14,85 @@ struct arp_reply {
 	unsigned char		ar_tip[4];
 };
 
+struct arp_compare_info {
+	struct net_device *dev;
+	uint32_t skb_iif;
+	uint32_t reserved[29];
+};
+
+#define ARP_CMP_INFO(compare_info) ((struct arp_compare_info *)compare_info->private_data)
+
+static void update_arp_compare_info(struct arp_compare_info *arp_cinfo,
+				    struct sk_buff *skb)
+{
+	arp_cinfo->dev = skb->dev;
+	arp_cinfo->skb_iif = skb->skb_iif;
+}
+
+static uint32_t
+compare_arp_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
+{
+	uint32_t ret = BYPASS_MASTER;
+
+	if (s_cinfo->arp->ar_op != ARPOP_REQUEST)
+		ret |= DROP_SLAVER;
+
+	return ret;
+}
+
 uint32_t
 arp_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 {
+	update_arp_compare_info(ARP_CMP_INFO(m_cinfo), m_cinfo->skb);
+
+	if (ignore_arp_packet)
+		return compare_arp_packet(m_cinfo, s_cinfo);
+
 	if (m_cinfo->length != s_cinfo->length)
 		return CHECKPOINT;
 
-	/* TODO */
 	return compare_other_packet(m_cinfo->packet, s_cinfo->packet,
 				    m_cinfo->length);
+}
+
+static struct sk_buff *create_new_skb(struct sk_buff *skb,
+				      struct compare_info *cinfo)
+{
+	struct sk_buff *new_skb;
+
+	new_skb = skb_copy(skb, GFP_ATOMIC);
+	if (!new_skb)
+		return NULL;
+
+	new_skb->dev = ARP_CMP_INFO(cinfo)->dev;
+	new_skb->skb_iif = ARP_CMP_INFO(cinfo)->skb_iif;
+	cinfo->skb = new_skb;
+
+	return new_skb;
+}
+
+uint32_t
+arp_compare_one_packet(struct compare_info *m_cinfo,
+		       struct compare_info *s_cinfo)
+{
+	if (!ARP_CMP_INFO(m_cinfo)->dev || !ignore_arp_packet)
+		return 0;
+
+	if (m_cinfo->skb) {
+		update_arp_compare_info(ARP_CMP_INFO(m_cinfo), m_cinfo->skb);
+		return BYPASS_MASTER;
+	}
+
+	if (unlikely(!s_cinfo->skb))
+		return 0;
+
+	if (s_cinfo->arp->ar_op != ARPOP_REQUEST)
+		return DROP_SLAVER;
+
+	if (create_new_skb(s_cinfo->skb, m_cinfo) == NULL)
+		return 0;
+
+	return BYPASS_MASTER | DROP_SLAVER;
 }
 
 void debug_print_arp(const struct arphdr *arp)

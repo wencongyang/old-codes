@@ -179,21 +179,22 @@ static uint32_t compare_one_skb(struct compare_info *m, struct compare_info *s)
 	info->packet = (char *)info->eth + sizeof(struct ethhdr);
 	info->length -= sizeof(struct ethhdr);
 
-	if (ntohs(info->eth->h_proto) != ETH_P_IP)
-		goto unsupported;
-
 	/* clear other_info to avoid unexpected error */
 	other_info->eth = NULL;
 	other_info->packet = NULL;
 	other_info->length = 0;
 
-	return ipv4_compare_one_packet(m, s);
+	if (ntohs(info->eth->h_proto) != ETH_P_IP)
+		return ipv4_compare_one_packet(m, s);
+
+	if (ntohs(info->eth->h_proto) != ETH_P_ARP)
+		return arp_compare_one_packet(m, s);
+
+	/* unsupported */
+	return 0;
 
 err:
 	return ret;
-
-unsupported:
-	return 0;
 }
 
 static void compare_one_connection(struct connect_info *conn_info)

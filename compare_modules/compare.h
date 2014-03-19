@@ -21,6 +21,7 @@ struct compare_info {
 	union {
 		void *packet;
 		struct iphdr *ip;
+		struct arphdr *arp;
 	};
 	union {
 		void *ip_data;
@@ -34,7 +35,7 @@ struct compare_info {
 	};
 	unsigned int length;
 
-	/* length: 32bytes */
+	/* length: 32*4 bytes */
 	void *private_data;
 };
 
@@ -66,6 +67,8 @@ extern void colo_dev_fini(void);
 /* arp */
 extern uint32_t arp_compare_packet(struct compare_info *m_cinfo,
 				   struct compare_info *s_cinfo);
+extern uint32_t arp_compare_one_packet(struct compare_info *m_cinfo,
+				       struct compare_info *s_cinfo);
 extern void debug_print_arp(const struct arphdr *arp);
 
 /* ipv4 */
