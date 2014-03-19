@@ -121,6 +121,12 @@ int cmp_open(struct inode *inode, struct file *filp)
 		return -1;
 	}
 
+	if (!try_module_get(THIS_MODULE)) {
+		pr_notice("HA_compare: try get module failed.\n");
+		up(&dev->sem);
+		return -1;
+	}
+
 	pr_notice("HA_compare: open successfully.\n");
 	filp->private_data = dev;
 	return 0;
@@ -132,6 +138,7 @@ int cmp_release(struct inode *inode, struct file *filp)
 
 	dev = container_of(inode->i_cdev, struct colo_device, cdev);
 	up(&dev->sem);
+	module_put(THIS_MODULE);
 	pr_notice("HA_compare: close.\n");
 
 	return 0;
