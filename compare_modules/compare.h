@@ -6,6 +6,7 @@
 #include <linux/ip.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
+#include <linux/if_arp.h>
 
 enum {
 	state_comparing,
@@ -61,6 +62,11 @@ extern wait_queue_head_t queue;
 /* compare device */
 extern int colo_dev_init(void);
 extern void colo_dev_fini(void);
+
+/* arp */
+extern uint32_t arp_compare_packet(struct compare_info *m_cinfo,
+				   struct compare_info *s_cinfo);
+extern void debug_print_arp(const struct arphdr *arp);
 
 /* ipv4 */
 extern uint32_t ipv4_compare_packet(struct compare_info *m,

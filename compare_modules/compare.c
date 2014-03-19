@@ -19,7 +19,6 @@
 #include <linux/sched.h>
 #include <net/pkt_sched.h>
 #include <asm/ioctl.h>
-#include <linux/if_arp.h>
 #include <linux/kthread.h>
 
 #include "comm.h"
@@ -51,21 +50,6 @@ struct arp_reply {
 	unsigned char		ar_tip[4];
 };
 
-static void debug_print_arp(const struct arphdr *arp)
-{
-	struct arp_reply *temp;
-
-	pr_warn("HA_compare:[ARP] ar_hrd=%u, ar_pro=%u\n",
-		ntohs(arp->ar_hrd), ntohs(arp->ar_pro));
-	pr_warn("HA_compare:[ARP] ar_hln=%u, ar_pln=%u, ar_op=%u\n",
-		arp->ar_hln, arp->ar_pln, ntohs(arp->ar_op));
-	if (ntohs(arp->ar_op) == ARPOP_REPLY || ntohs(arp->ar_op) == ARPOP_REQUEST) {
-		temp = (struct arp_reply *)((char*)arp + sizeof(struct arphdr));
-		pr_warn("HA_compare:[ARP] ar_sha: %pM, ar_sip: %pI4\n", temp->ar_sha, temp->ar_sip);
-		pr_warn("HA_compare:[ARP] ar_tha: %pM, ar_tip: %pI4\n", temp->ar_tha, temp->ar_tip);
-	}
-}
-
 /* compare_xxx_packet() returns:
  *   0: do a new checkpoint
  *   1: bypass the packet from master,
@@ -76,16 +60,6 @@ static void debug_print_arp(const struct arphdr *arp)
 uint32_t compare_other_packet(void *m, void *s, int length)
 {
 	return memcmp(m, s, length) ? CHECKPOINT | UPDATE_COMPARE_INFO : SAME_PACKET;
-}
-
-static uint32_t
-arp_compare_packet(struct compare_info *m, struct compare_info *s)
-{
-	if (m->length != s->length)
-		return CHECKPOINT;
-
-	/* TODO */
-	return compare_other_packet(m->packet, s->packet, m->length);
 }
 
 static uint32_t
