@@ -900,10 +900,10 @@ update_tcp_hdr_flags(struct compare_info *cinfo,
 		if (tcp_cinfo->window >= other_tcp_cinfo->window)
 			tcp_hinfo->flags &= ~WIN_UPDATE;
 
-	/* more check for ack_seq update */
-	if (tcp_hinfo->flags & ACK_UPDATE)
+	/* more check for ack_seq update and dup_ack */
+	if (tcp_hinfo->flags & (ACK_UPDATE | DUP_ACK))
 		if (!after(other_tcp_cinfo->rcv_nxt, tcp_cinfo->rcv_nxt))
-			tcp_hinfo->flags &= ~ACK_UPDATE;
+			tcp_hinfo->flags &= ~(ACK_UPDATE | DUP_ACK);
 }
 
 static uint32_t
