@@ -184,10 +184,10 @@ static uint32_t compare_one_skb(struct compare_info *m, struct compare_info *s)
 	other_info->packet = NULL;
 	other_info->length = 0;
 
-	if (ntohs(info->eth->h_proto) != ETH_P_IP)
+	if (ntohs(info->eth->h_proto) == ETH_P_IP)
 		return ipv4_compare_one_packet(m, s);
 
-	if (ntohs(info->eth->h_proto) != ETH_P_ARP)
+	if (ntohs(info->eth->h_proto) == ETH_P_ARP)
 		return arp_compare_one_packet(m, s);
 
 	/* unsupported */
