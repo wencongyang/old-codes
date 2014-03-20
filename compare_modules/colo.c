@@ -126,7 +126,7 @@ static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 	sch->qstats.backlog += qdisc_pkt_len(skb);
 	sch->bstats.bytes += qdisc_pkt_len(skb);
 	sch->bstats.packets++;
-
+	sch->q.qlen++;
 	if (PTR_ERR(conn_info) == -EINPROGRESS)
 		goto out;
 
@@ -151,22 +151,22 @@ error:
 static struct sk_buff *colo_dequeue(struct Qdisc* sch)
 {
 	struct colo_sched_data *q = qdisc_priv(sch);
-	struct sk_buff *skb;
+	struct sk_buff *skb = skb_dequeue(&q->rel);
 
-
-	skb = skb_dequeue(&q->rel);
 	if (!(q->flags & IS_MASTER)) {
 		while (likely(skb)) {
 			/* Slaver: Free all packets. */
 			sch->qstats.backlog -= qdisc_pkt_len(skb);
 			kfree_skb(skb);
+			sch->q.qlen--;
 			skb = skb_dequeue(&q->rel);
 		}
 	}
 
-	if (skb)
+	if (skb) {
+		sch->q.qlen--;
 		sch->qstats.backlog -= qdisc_pkt_len(skb);
-
+	}
 	return skb;
 }
 
