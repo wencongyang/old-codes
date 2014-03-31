@@ -8,10 +8,10 @@
 #include "ip_fragment.h"
 #include "ipv4_fragment.h"
 
-#define COMP_IOC_MAGIC 		'k'
-#define COMP_IOCTWAIT 		_IO(COMP_IOC_MAGIC, 0)
-#define COMP_IOCTSUSPEND 	_IO(COMP_IOC_MAGIC, 1)
-#define COMP_IOCTRESUME 	_IO(COMP_IOC_MAGIC, 2)
+#define COMP_IOC_MAGIC          'k'
+#define COMP_IOCTWAIT           _IO(COMP_IOC_MAGIC, 0)
+#define COMP_IOCTFLUSH          _IO(COMP_IOC_MAGIC, 1)
+#define COMP_IOCTRESUME         _IO(COMP_IOC_MAGIC, 2)
 
 struct colo_device {
 	struct cdev cdev;
@@ -169,14 +169,14 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		pr_notice("HA_compare: --------start a new checkpoint.\n");
 
 		break;
-	case COMP_IOCTSUSPEND:
+	case COMP_IOCTFLUSH:
 		/*  Both side suspend the VM, at this point, no packets will
 		 *  send out from VM, so block skb queues(master&slaver) are
 		 *  stable. Move master block queue to a temporary queue, then
 		 *  they will be released when checkpoint ends. For slaver
 		 *  block queue, just drop them.
 		 */
-		pr_notice("HA_compare: --------both side suspended.\n");
+		pr_notice("HA_compare: --------flush packets.\n");
 
 		move_master_queue(colo_ics);
 		clear_slaver_queue(colo_ics);
