@@ -21,7 +21,7 @@
 
 enum {
 	TCA_COLO_UNSPEC,
-	TCA_COLO_IDX,
+	TCA_COLO_DEV_IDX,
 	TCA_COLO_FLAGS,
 	__TCA_COLO_MAX,
 };
@@ -197,13 +197,13 @@ static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 	if (err)
 		return err;
 
-	if (!tb[TCA_COLO_IDX] || !tb[TCA_COLO_FLAGS]) {
+	if (!tb[TCA_COLO_DEV_IDX] || !tb[TCA_COLO_FLAGS]) {
 		pr_err("missing parameter\n");
 		return -EINVAL;
 	}
 
 	flags = nla_data(tb[TCA_COLO_FLAGS]);
-	idx = nla_data(tb[TCA_COLO_IDX]);
+	idx = nla_data(tb[TCA_COLO_DEV_IDX]);
 	if (!(*flags & IS_MASTER)) {
 		idx->master_idx = idx->master_idx ^ idx->slave_idx;
 		idx->slave_idx = idx->master_idx ^ idx->slave_idx;
