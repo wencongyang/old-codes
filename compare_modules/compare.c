@@ -453,7 +453,9 @@ static void __exit compare_module_exit(void)
 
 	colo_dev_fini();
 
+#ifdef DEBUG_COMPARE_MODULE
 	remove_proc_entry("HA_compare", NULL);
+#endif
 }
 module_init(compare_module_init);
 module_exit(compare_module_exit);
