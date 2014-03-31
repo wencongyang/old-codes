@@ -576,6 +576,11 @@ static int switch_qemu_logdirty(checkpoint_state *s, int enable)
     strcpy(tail, "ret");
     xs_unwatch(s->xsh, path, "qemu-logdirty-ret");
 
+    /*
+     * If xs_read() fails, len is not changed, and it may be not 0.
+     * In this case, response is NULL, and we should not call strcmp.
+     */
+    len = 0;
     response = xs_read(s->xsh, XBT_NULL, path, &len);
     if (!len || strcmp(response, cmd)) {
        if (len)
