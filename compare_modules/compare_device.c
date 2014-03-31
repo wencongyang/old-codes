@@ -147,21 +147,18 @@ int cmp_release(struct inode *inode, struct file *filp)
 long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int ret;
+	unsigned long jiffies;
 
 	switch(cmd) {
 	case COMP_IOCTWAIT:
 		/* wait for a new checkpoint */
-#if 1
-		ret = wait_event_interruptible_timeout(queue, state != state_comparing, arg);
+		jiffies = msecs_to_jiffies(arg);
+		ret = wait_event_interruptible_timeout(queue, state != state_comparing, jiffies);
 		if (ret == 0)
 			return -ETIME;
 
 		if (ret < 0)
 			return -ERESTART;
-#else
-		if (wait_event_interruptible(queue, state != state_comparing))
-			return -ERESTART;
-#endif
 
 		if (state == state_failover)
 			return -2;
