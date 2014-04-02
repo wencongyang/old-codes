@@ -19,7 +19,7 @@
 #include <linux/wait.h>
 #include <net/pkt_sched.h>
 
-#include "if_connections.h"
+#include "connections.h"
 #include "ip_fragment.h"
 
 struct colo_sched_data {

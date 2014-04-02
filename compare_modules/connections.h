@@ -12,8 +12,8 @@
  *
  */
 
-#ifndef COLO_HASH_H
-#define COLO_HASH_H
+#ifndef COLO_CONNECTIONS_H
+#define COLO_CONNECTIONS_H
 
 #include <linux/skbuff.h>
 #include <linux/types.h>

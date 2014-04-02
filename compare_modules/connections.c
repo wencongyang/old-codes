@@ -15,7 +15,7 @@
 #include <linux/ip.h>
 #include <net/ip.h>
 
-#include "if_connections.h"
+#include "connections.h"
 #include "comm.h"
 #include "ipv4_fragment.h"
 
