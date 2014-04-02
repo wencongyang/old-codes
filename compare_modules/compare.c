@@ -43,13 +43,6 @@ wait_queue_head_t queue;
 
 uint32_t state = state_comparing;
 
-struct arp_reply {
-	unsigned char		ar_sha[ETH_ALEN];
-	unsigned char		ar_sip[4];
-	unsigned char		ar_tha[ETH_ALEN];
-	unsigned char		ar_tip[4];
-};
-
 /* compare_xxx_packet() returns:
  *   0: do a new checkpoint
  *   1: bypass the packet from master,
