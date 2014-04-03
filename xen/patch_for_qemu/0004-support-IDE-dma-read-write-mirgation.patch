@@ -1,0 +1,93 @@
+From 3eb375b612d85841a064d783cb622f9aa38d820a Mon Sep 17 00:00:00 2001
+From: Wen Congyang <wency@cn.fujitsu.com>
+Date: Fri, 28 Mar 2014 21:43:38 +0800
+Subject: [PATCH 4/4] support IDE dma read/write mirgation
+
+---
+ hw/ide.c |   35 ++++++++++++++++++++++++++++++-----
+ 1 files changed, 30 insertions(+), 5 deletions(-)
+
+diff --git a/hw/ide.c b/hw/ide.c
+index ca6dbc5..83300e8 100644
+--- a/hw/ide.c
++++ b/hw/ide.c
+@@ -3245,7 +3245,11 @@ static void ide_save(QEMUFile* f, IDEState *s)
+ 
+     qemu_put_8s(f, &s->sense_key);
+     qemu_put_8s(f, &s->asc);
+-    if (s->status & DRQ_STAT) {
++    if ((s->status & (DRQ_STAT | BUSY_STAT)) == (DRQ_STAT | BUSY_STAT)) {
++        qemu_put_be32s(f, &s->io_buffer_index);
++        qemu_put_be32s(f, &s->io_buffer_size);
++        qemu_put_be32s(f, &s->is_read);
++    } else if (s->status & DRQ_STAT) {
+         idx = transfer_end_table_idx(s->end_transfer_func);
+         cur_io_buffer_offset = s->data_ptr - s->io_buffer;
+         cur_io_buffer_len = s->data_end - s->io_buffer;
+@@ -3292,7 +3296,11 @@ static void ide_load(QEMUFile* f, IDEState *s, int version_id)
+ 
+     qemu_get_8s(f, &s->sense_key);
+     qemu_get_8s(f, &s->asc);
+-    if (s->status & DRQ_STAT) {
++    if ((s->status & (DRQ_STAT | BUSY_STAT)) == (DRQ_STAT | BUSY_STAT)) {
++        qemu_get_be32s(f, &s->io_buffer_index);
++        qemu_get_be32s(f, &s->io_buffer_size);
++        qemu_get_be32s(f, &s->is_read);
++    } else if (s->status & DRQ_STAT) {
+ 
+         qemu_get_be32s(f, &s->req_nb_sectors);
+         qemu_get_buffer(f, s->io_buffer, IDE_DMA_BUF_SECTORS * 512 + 4);
+@@ -3611,6 +3619,7 @@ static void pci_ide_save(QEMUFile* f, void *opaque)
+ {
+     PCIIDEState *d = opaque;
+     int i;
++    uint8_t idx;
+ 
+     pci_device_save(&d->dev, f);
+ 
+@@ -3624,8 +3633,15 @@ static void pci_ide_save(QEMUFile* f, void *opaque)
+         qemu_put_be32s(f, &bm->nsector);
+         ifidx = bm->ide_if ? bm->ide_if - d->ide_if : 0;
+         qemu_put_8s(f, &ifidx);
+-        /* XXX: if a transfer is pending, we do not save it yet */
+-        dma_cb_table_idx(bm->dma_cb);
++        /* check if bm->status & BM_STATUS_DMAING? */
++        qemu_put_be32s(f, &bm->cur_addr);
++        qemu_put_be32s(f, &bm->cur_prd_last);
++        qemu_put_be32s(f, &bm->cur_prd_len);
++        qemu_put_be32s(f, &bm->cur_prd_addr);
++
++        /* should we migrate this? */
++        idx = dma_cb_table_idx(bm->dma_cb);
++        qemu_put_8s(f, &idx);
+     }
+ 
+     /* per IDE interface data */
+@@ -3647,6 +3663,7 @@ static int pci_ide_load(QEMUFile* f, void *opaque, int version_id)
+ {
+     PCIIDEState *d = opaque;
+     int ret, i;
++    uint8_t idx;
+ 
+     if (version_id != 3)
+         return -EINVAL;
+@@ -3664,7 +3681,15 @@ static int pci_ide_load(QEMUFile* f, void *opaque, int version_id)
+         qemu_get_be32s(f, &bm->nsector);
+         qemu_get_8s(f, &ifidx);
+         bm->ide_if = &d->ide_if[ifidx];
+-        /* XXX: if a transfer is pending, we do not save it yet */
++        /* check if bm->status & BM_STATUS_DMAING? */
++        qemu_get_be32s(f, &bm->cur_addr);
++        qemu_get_be32s(f, &bm->cur_prd_last);
++        qemu_get_be32s(f, &bm->cur_prd_len);
++        qemu_get_be32s(f, &bm->cur_prd_addr);
++
++        /* should we migrate this? */
++        qemu_get_8s(f, &idx);
++        bm->dma_cb = dma_cb_table[idx];
+     }
+ 
+     /* per IDE interface data */
+-- 
+1.7.1
+

@@ -1,0 +1,84 @@
+From d83338a5f0e39932f6ffe730c3cfaa66a1ca1b88 Mon Sep 17 00:00:00 2001
+From: Wen Congyang <wency@cn.fujitsu.com>
+Date: Fri, 28 Mar 2014 20:46:30 +0800
+Subject: [PATCH 2/4] introduce an array to migrate callback function
+
+---
+ hw/ide.c |   40 ++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 40 insertions(+), 0 deletions(-)
+
+diff --git a/hw/ide.c b/hw/ide.c
+index 791666b..33a0e08 100644
+--- a/hw/ide.c
++++ b/hw/ide.c
+@@ -3195,6 +3195,26 @@ static void ide_init_ioport(IDEState *ide_state, int iobase, int iobase2)
+     register_ioport_read(iobase, 4, 4, ide_data_readl, ide_state);
+ }
+ 
++static EndTransferFunc* transfer_end_table[] = {
++        ide_sector_read,
++        ide_sector_write,
++        ide_transfer_stop,
++        ide_atapi_cmd_reply_end,
++        ide_atapi_cmd,
++        ide_dummy_transfer_stop,
++};
++
++static int transfer_end_table_idx(EndTransferFunc *fn)
++{
++    int i;
++
++    for (i = 0; i < ARRAY_SIZE(transfer_end_table); i++)
++        if (transfer_end_table[i] == fn)
++            return i;
++
++    return -1;
++}
++
+ /* save per IDE drive data */
+ static void ide_save(QEMUFile* f, IDEState *s)
+ {
+@@ -3222,6 +3242,7 @@ static void ide_save(QEMUFile* f, IDEState *s)
+     qemu_put_8s(f, &s->sense_key);
+     qemu_put_8s(f, &s->asc);
+     /* XXX: if a transfer is pending, we do not save it yet */
++    transfer_end_table_idx(s->end_transfer_func);
+ }
+ 
+ /* load per IDE drive data */
+@@ -3532,6 +3553,24 @@ static void bmdma_map(PCIDevice *pci_dev, int region_num,
+     }
+ }
+ 
++static BlockDriverCompletionFunc * dma_cb_table[] = {
++    ide_write_dma_cb,
++    ide_read_dma_cb,
++    ide_atapi_cmd_read_dma_cb,
++    NULL,
++};
++
++static int dma_cb_table_idx(BlockDriverCompletionFunc *fn)
++{
++    int i;
++
++    for (i = 0; i < ARRAY_SIZE(dma_cb_table); i++)
++        if (dma_cb_table[i] == fn)
++            return i;
++
++    return -1;
++}
++
+ static void pci_ide_save(QEMUFile* f, void *opaque)
+ {
+     PCIIDEState *d = opaque;
+@@ -3550,6 +3589,7 @@ static void pci_ide_save(QEMUFile* f, void *opaque)
+         ifidx = bm->ide_if ? bm->ide_if - d->ide_if : 0;
+         qemu_put_8s(f, &ifidx);
+         /* XXX: if a transfer is pending, we do not save it yet */
++        dma_cb_table_idx(bm->dma_cb);
+     }
+ 
+     /* per IDE interface data */
+-- 
+1.7.1
+

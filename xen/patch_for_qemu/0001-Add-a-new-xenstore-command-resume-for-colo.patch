@@ -1,0 +1,72 @@
+From d954ce56c7ba6fe29c675af45fc51b801061a986 Mon Sep 17 00:00:00 2001
+From: Wen Congyang <wency@cn.fujitsu.com>
+Date: Mon, 6 Jan 2014 09:57:30 +0800
+Subject: [PATCH 1/4] Add a new xenstore command resume for colo
+
+---
+ i386-dm/helper2.c |    8 ++++++++
+ xen-config-host.h |    1 +
+ xenstore.c        |    5 +++++
+ 3 files changed, 14 insertions(+), 0 deletions(-)
+
+diff --git a/i386-dm/helper2.c b/i386-dm/helper2.c
+index 481c620..04727c8 100644
+--- a/i386-dm/helper2.c
++++ b/i386-dm/helper2.c
+@@ -549,6 +549,7 @@ static void cpu_handle_ioreq(void *opaque)
+ }
+ 
+ int xen_pause_requested;
++int xen_resume_requested;
+ 
+ int main_loop(void)
+ {
+@@ -602,6 +603,13 @@ int main_loop(void)
+                 xenstore_process_event(NULL);
+         }
+ 
++        if (xen_resume_requested) {
++            asprintf(&qemu_file, "/var/lib/xen/qemu-resume.%d", domid);
++            fprintf(logfile, "resume vm from file %s\n", qemu_file);
++            do_loadvm(qemu_file);
++            free(qemu_file);
++        }
++
+         xenstore_record_dm_state("running");
+     }
+ 
+diff --git a/xen-config-host.h b/xen-config-host.h
+index f50c3aa..d4fb6cf 100644
+--- a/xen-config-host.h
++++ b/xen-config-host.h
+@@ -30,6 +30,7 @@ void main_loop_prepare(void);
+ 
+ extern xc_interface *xc_handle;
+ extern int xen_pause_requested;
++extern int xen_resume_requested;
+ extern int vcpus;
+ extern uint32_t vcpu_avail[];
+ 
+diff --git a/xenstore.c b/xenstore.c
+index 4c483e2..798b45f 100644
+--- a/xenstore.c
++++ b/xenstore.c
+@@ -865,10 +865,15 @@ static void xenstore_process_dm_command_event(void)
+ 
+     if (!strncmp(command, "save", len)) {
+         fprintf(logfile, "dm-command: pause and save state\n");
++        xen_resume_requested = 0;
+         xen_pause_requested = 1;
+     } else if (!strncmp(command, "continue", len)) {
+         fprintf(logfile, "dm-command: continue after state save\n");
+         xen_pause_requested = 0;
++    } else if (!strncmp(command, "resume", len)) {
++        fprintf(logfile, "dm-command: continue after state save\n");
++        xen_resume_requested = 1;
++        xen_pause_requested = 0;
+     } else if (!strncmp(command, "usb-add", len)) {
+         fprintf(logfile, "dm-command: usb-add a usb device\n");
+         if (pasprintf(&path,
+-- 
+1.7.1
+

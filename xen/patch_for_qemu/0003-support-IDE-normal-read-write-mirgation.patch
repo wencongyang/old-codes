@@ -1,0 +1,91 @@
+From 692d8a44e74dd945158bf305bb87d471ac755b5c Mon Sep 17 00:00:00 2001
+From: Wen Congyang <wency@cn.fujitsu.com>
+Date: Fri, 28 Mar 2014 21:17:24 +0800
+Subject: [PATCH 3/4] support IDE normal read/write mirgation
+
+---
+ hw/ide.c |   42 +++++++++++++++++++++++++++++++++++++++---
+ 1 files changed, 39 insertions(+), 3 deletions(-)
+
+diff --git a/hw/ide.c b/hw/ide.c
+index 33a0e08..ca6dbc5 100644
+--- a/hw/ide.c
++++ b/hw/ide.c
+@@ -36,6 +36,7 @@
+ #include "sh.h"
+ #include "dma.h"
+ #include "qemu-xen.h"
++#include <assert.h>
+ 
+ /* debug IDE devices */
+ //#define DEBUG_IDE
+@@ -3218,6 +3219,9 @@ static int transfer_end_table_idx(EndTransferFunc *fn)
+ /* save per IDE drive data */
+ static void ide_save(QEMUFile* f, IDEState *s)
+ {
++    uint8_t idx;
++    int cur_io_buffer_offset, cur_io_buffer_len;
++
+     qemu_put_be32(f, s->mult_sectors);
+     qemu_put_be32(f, s->identify_set);
+     if (s->identify_set) {
+@@ -3241,13 +3245,29 @@ static void ide_save(QEMUFile* f, IDEState *s)
+ 
+     qemu_put_8s(f, &s->sense_key);
+     qemu_put_8s(f, &s->asc);
+-    /* XXX: if a transfer is pending, we do not save it yet */
+-    transfer_end_table_idx(s->end_transfer_func);
++    if (s->status & DRQ_STAT) {
++        idx = transfer_end_table_idx(s->end_transfer_func);
++        cur_io_buffer_offset = s->data_ptr - s->io_buffer;
++        cur_io_buffer_len = s->data_end - s->io_buffer;
++
++        qemu_put_be32s(f, &s->req_nb_sectors);
++        qemu_put_buffer(f, s->io_buffer, IDE_DMA_BUF_SECTORS * 512 + 4);
++        qemu_put_be32s(f, &cur_io_buffer_offset);
++        qemu_put_be32s(f, &cur_io_buffer_len);
++        qemu_put_8s(f, &idx);
++
++        /* Newest qemu migrate this, I don't know if it's OK */
++        qemu_put_be32s(f, &s->packet_transfer_size);
++        qemu_put_be32s(f, &s->elementary_transfer_size);
++    }
+ }
+ 
+ /* load per IDE drive data */
+ static void ide_load(QEMUFile* f, IDEState *s, int version_id)
+ {
++    uint8_t idx;
++    int cur_io_buffer_offset, cur_io_buffer_len;
++
+     s->mult_sectors=qemu_get_be32(f);
+     s->identify_set=qemu_get_be32(f);
+     if (s->identify_set) {
+@@ -3272,7 +3292,23 @@ static void ide_load(QEMUFile* f, IDEState *s, int version_id)
+ 
+     qemu_get_8s(f, &s->sense_key);
+     qemu_get_8s(f, &s->asc);
+-    /* XXX: if a transfer is pending, we do not save it yet */
++    if (s->status & DRQ_STAT) {
++
++        qemu_get_be32s(f, &s->req_nb_sectors);
++        qemu_get_buffer(f, s->io_buffer, IDE_DMA_BUF_SECTORS * 512 + 4);
++        qemu_get_be32s(f, &cur_io_buffer_offset);
++        qemu_get_be32s(f, &cur_io_buffer_len);
++        qemu_get_8s(f, &idx);
++
++        /* Newest qemu migrate this, I don't know if it's OK */
++        qemu_get_be32s(f, &s->packet_transfer_size);
++        qemu_get_be32s(f, &s->elementary_transfer_size);
++
++        assert(idx < ARRAY_SIZE(transfer_end_table));
++        s->end_transfer_func = transfer_end_table[idx];
++        s->data_ptr = s->io_buffer + cur_io_buffer_offset;
++        s->data_end = s->io_buffer + cur_io_buffer_len;
++    }
+ }
+ 
+ /***********************************************************/
+-- 
+1.7.1
+
