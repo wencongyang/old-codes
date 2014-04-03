@@ -1000,15 +1000,18 @@ send_packet:
 	update_tcp_compare_info(TCP_CMP_INFO(cinfo), &tcp_hinfo,
 				cinfo->skb);
 
-	if (cinfo == s_cinfo) {
-		tcp = m_cinfo->tcp;
-		update_tcp_ackseq(tcp, new_skb,
-				  TCP_CMP_INFO(other_cinfo)->rcv_nxt);
-		update_tcp_window(tcp, new_skb,
-				  TCP_CMP_INFO(other_cinfo)->window);
+	tcp = m_cinfo->tcp;
+	update_tcp_ackseq(tcp, new_skb,
+			  TCP_CMP_INFO(other_cinfo)->rcv_nxt);
+	update_tcp_window(tcp, new_skb,
+			  TCP_CMP_INFO(other_cinfo)->window);
+	if (cinfo == s_cinfo)
+		/*
+		 * no need to update the timestamp if the packet is not auto
+		 * generated.
+		 */
 		update_tcp_timestamp(tcp, new_skb,
 				     TCP_CMP_INFO(other_cinfo)->timestamp);
-	}
 
 	return cinfo == m_cinfo ? BYPASS_MASTER : SAME_PACKET;
 }
