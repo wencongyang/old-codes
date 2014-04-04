@@ -247,6 +247,17 @@ void ipv4_update_compare_info(void *info, struct iphdr *ip, struct sk_buff *skb)
 	rcu_read_unlock();
 }
 
+void ipv4_flush_packets(void *info, uint8_t protocol)
+{
+	const compare_ops_t *ops;
+
+	rcu_read_lock();
+	ops = rcu_dereference(compare_inet_ops[protocol]);
+	if (ops && ops->flush_packets)
+		ops->flush_packets(info);
+	rcu_read_unlock();
+}
+
 uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
 				    struct sk_buff *s_head,
 				    int m_off, int s_off, int len)

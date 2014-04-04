@@ -46,6 +46,7 @@ struct compare_ops {
 	uint32_t (*compare_fragment)(struct compare_info *m, struct compare_info *s);
 	uint32_t (*compare_one_fragment)(struct compare_info *m, struct compare_info *s);
 	void (*update_info)(void *info, void *data, uint32_t len, struct sk_buff *skb);
+	void (*flush_packets)(void *info);
 	void (*debug_print)(const struct compare_info *info, const void *data);
 };
 
@@ -76,6 +77,7 @@ extern uint32_t ipv4_compare_packet(struct compare_info *m,
 				    struct compare_info *s);
 extern void ipv4_update_compare_info(void *info, struct iphdr *ip,
 				   struct sk_buff *skb);
+extern void ipv4_flush_packets(void *info, uint8_t protocol);
 
 extern int register_compare_ops(compare_ops_t *ops, unsigned short protocol);
 extern int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol);

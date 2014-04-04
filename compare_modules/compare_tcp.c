@@ -1063,11 +1063,27 @@ static void tcp_update_info(void *info, void *data, uint32_t length, struct sk_b
 	update_tcp_sent_info(tcp_cinfo, tcp);
 }
 
+static void tcp_flush_packet(void *info)
+{
+	struct tcp_compare_info *tcp_cinfo = info;
+
+	/* TODO: auto generate a new skb to update ack/window_size */
+
+	if (tcp_cinfo->rcv_nxt != tcp_cinfo->sent_rcv_nxt)
+		pr_warn("OOPS, rcv_nxt: 0x%x, sent_rcv_nxt: 0x%x\n",
+			tcp_cinfo->rcv_nxt, tcp_cinfo->sent_rcv_nxt);
+
+	if (tcp_cinfo->window != tcp_cinfo->sent_window)
+		pr_warn("window: 0x%x, sent_window: 0x%x\n",
+			tcp_cinfo->window, tcp_cinfo->sent_window);
+}
+
 static compare_ops_t tcp_ops = {
 	.compare = tcp_compare_packet,
 	.compare_one_packet = tcp_compare_one_packet,
 	.compare_fragment = tcp_compare_fragment,
 	.update_info = tcp_update_info,
+	.flush_packets = tcp_flush_packet,
 	.debug_print = debug_print_tcp,
 };
 

@@ -56,6 +56,14 @@ static void update_compare_info(struct connect_info *conn_info, struct sk_buff *
 	ipv4_update_compare_info(&conn_info->m_info, ip, skb);
 }
 
+static void flush_packets(struct connect_info *conn_info)
+{
+	if (conn_info->key.ip_proto == 0)
+		return;
+
+	ipv4_flush_packets(&conn_info->m_info, conn_info->key.ip_proto);
+}
+
 static void move_master_queue(struct if_connections *ics)
 {
 	int i;
@@ -85,6 +93,7 @@ static void move_master_queue(struct if_connections *ics)
 			 */
 			memcpy(&conn_info->s_info, &conn_info->m_info,
 				sizeof(conn_info->s_info));
+			flush_packets(conn_info);
 		}
 	}
 }
