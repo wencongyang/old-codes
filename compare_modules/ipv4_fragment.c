@@ -102,13 +102,16 @@ static struct ipv4_queue *ipv4_frag_intern(struct ipv4_queue *ipq_in,
 	 * such entry could be created on other cpu, while we
 	 * released the hash bucket lock.
 	 */
-	__hlist_for_each_entry(q, &hb->chain, list) {
-		if (q->ip_frags == ip_frags && ipv4_match_queue(q, ipq_in)) {
-			atomic_inc(&q->refcnt);
-			spin_unlock(&hb->chain_lock);
-			q_in->last_in |= INET_FRAG_COMPLETE;
-			put_frag_queue(q_in);
-			return container_of(q, struct ipv4_queue, q);
+	{
+		__hlist_for_each_entry(q, &hb->chain, list) {
+			if (q->ip_frags == ip_frags &&
+			    ipv4_match_queue(q, ipq_in)) {
+				atomic_inc(&q->refcnt);
+				spin_unlock(&hb->chain_lock);
+				q_in->last_in |= INET_FRAG_COMPLETE;
+				put_frag_queue(q_in);
+				return container_of(q, struct ipv4_queue, q);
+			}
 		}
 	}
 #endif
@@ -172,11 +175,13 @@ static struct ipv4_queue *ipv4_find(struct iphdr *ip, struct ip_frags *ip_frags)
 	hb = &ipv4_frags[hash];
 
 	spin_lock(&hb->chain_lock);
-	__hlist_for_each_entry(q, &hb->chain, list) {
-		if (q->ip_frags == ip_frags && ipv4_match(q, ip)) {
-			atomic_inc(&q->refcnt);
-			spin_unlock(&hb->chain_lock);
-			return container_of(q, struct ipv4_queue, q);
+	{
+		__hlist_for_each_entry(q, &hb->chain, list) {
+			if (q->ip_frags == ip_frags && ipv4_match(q, ip)) {
+				atomic_inc(&q->refcnt);
+				spin_unlock(&hb->chain_lock);
+				return container_of(q, struct ipv4_queue, q);
+			}
 		}
 	}
 	spin_unlock(&hb->chain_lock);
