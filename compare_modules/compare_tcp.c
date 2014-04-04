@@ -46,7 +46,12 @@ struct tcp_compare_info {
 	uint16_t flags;
 	uint16_t window;
 	uint32_t timestamp;
-	uint32_t reserved[25];
+
+	/* only for master */
+	uint16_t sent_flags;
+	uint16_t sent_window;
+	uint32_t sent_rcv_nxt;
+	uint32_t reserved[23];
 };
 
 #define TCP_CMP_INFO(compare_info) ((struct tcp_compare_info *)compare_info->private_data)
@@ -327,6 +332,18 @@ get_tcp_hdr_info(struct tcphdr *tcp, int length,
 		/* old ack's window is older, ignore it */
 		tcp_hinfo->flags &= ~WIN_UPDATE;
 	}
+}
+
+static void
+update_tcp_sent_info(struct tcp_compare_info *tcp_cinfo, struct tcphdr *tcp)
+{
+	if (tcp->fin)
+		tcp_cinfo->sent_flags |= FIN;
+	else if (tcp->syn)
+		tcp_cinfo->sent_flags |= ~FIN;
+
+	tcp_cinfo->sent_window = ntohs(tcp->window);
+	tcp_cinfo->sent_rcv_nxt = ntohl(tcp->ack);
 }
 
 static void
@@ -688,6 +705,12 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 		update_tcp_window(m_cinfo->tcp, m_cinfo->skb,
 				  s_tcp_hinfo->window);
 
+	/*
+	 * we don't touch the packet from slave, so no need to save
+	 * sent info for slave
+	 */
+	update_tcp_sent_info(TCP_CMP_INFO(m_cinfo), m_cinfo->tcp);
+
 	return SAME_PACKET;
 
 out:
@@ -703,6 +726,7 @@ out:
 				  s_tcp_hinfo->ack_seq);
 		update_tcp_window(m_cinfo->tcp, m_cinfo->skb,
 				  s_tcp_hinfo->window);
+		update_tcp_sent_info(TCP_CMP_INFO(m_cinfo), m_cinfo->tcp);
 	}
 	if (ret & DROP_SLAVER) {
 		update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), s_tcp_hinfo,
@@ -962,9 +986,14 @@ tcp_compare_one_packet(struct compare_info *m_cinfo,
 		update_tcp_compare_info(TCP_CMP_INFO(cinfo), &tcp_hinfo,
 					cinfo->skb);
 
-		tcp = cinfo->tcp;
-		update_tcp_ackseq(tcp, skb, TCP_CMP_INFO(other_cinfo)->rcv_nxt);
-		update_tcp_window(tcp, skb, TCP_CMP_INFO(other_cinfo)->window);
+		if (cinfo == m_cinfo) {
+			tcp = cinfo->tcp;
+			update_tcp_ackseq(tcp, skb,
+					  TCP_CMP_INFO(other_cinfo)->rcv_nxt);
+			update_tcp_window(tcp, skb,
+					  TCP_CMP_INFO(other_cinfo)->window);
+			update_tcp_sent_info(TCP_CMP_INFO(cinfo), tcp);
+		}
 		return ret;
 	}
 
@@ -1013,6 +1042,9 @@ send_packet:
 		update_tcp_timestamp(tcp, new_skb,
 				     TCP_CMP_INFO(other_cinfo)->timestamp);
 
+	/* update sent info */
+	update_tcp_sent_info(TCP_CMP_INFO(other_cinfo), tcp);
+
 	return cinfo == m_cinfo ? BYPASS_MASTER : SAME_PACKET;
 }
 
@@ -1028,6 +1060,7 @@ static void tcp_update_info(void *info, void *data, uint32_t length, struct sk_b
 		return;
 
 	update_tcp_compare_info(tcp_cinfo, &tcp_hinfo, skb);
+	update_tcp_sent_info(tcp_cinfo, tcp);
 }
 
 static compare_ops_t tcp_ops = {
