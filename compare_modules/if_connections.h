@@ -40,6 +40,7 @@ struct connect_info {
 	uint32_t state;
 	wait_queue_head_t wait;
 	uint64_t touch_time;
+	int flushed :1;
 
 	/* transport layer defines it */
 	uint32_t m_info[32];

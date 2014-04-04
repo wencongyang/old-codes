@@ -124,6 +124,7 @@ static struct connect_info *alloc_connect_info(struct connection_keys *key)
 	conn_info->state = 0;
 	init_waitqueue_head(&conn_info->wait);
 	conn_info->ics = NULL;
+	conn_info->flushed = 0;
 
 	return conn_info;
 }
@@ -224,6 +225,9 @@ struct connect_info *insert(struct if_connections *ics, struct sk_buff *skb,
 		skb_queue_tail(&conn_info->master_queue, head ? head : skb);
 	else
 		skb_queue_tail(&conn_info->slaver_queue, head ? head : skb);
+
+	if (flags & IS_MASTER)
+		conn_info->flushed = 0;
 
 	return conn_info;
 }

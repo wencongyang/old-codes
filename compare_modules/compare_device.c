@@ -73,10 +73,14 @@ static void update_compare_info(struct connect_info *conn_info, struct sk_buff *
 
 static void flush_packets(struct connect_info *conn_info)
 {
+	if (conn_info->flushed)
+		return;
+
 	if (conn_info->key.ip_proto == 0)
 		return;
 
 	ipv4_flush_packets(&conn_info->m_info, conn_info->key.ip_proto);
+	conn_info->flushed = 1;
 }
 
 static void move_master_queue(struct if_connections *ics)
