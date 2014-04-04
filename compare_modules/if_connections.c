@@ -219,6 +219,7 @@ struct connect_info *insert(struct if_connections *ics, struct sk_buff *skb,
 		list_add_tail(&conn_info->list, &ics->entry[i]);
 	}
 
+	conn_info->touch_time = jiffies_64;
 	if (flags & IS_MASTER)
 		skb_queue_tail(&conn_info->master_queue, head ? head : skb);
 	else

@@ -13,6 +13,9 @@
 #define COMP_IOCTFLUSH          _IO(COMP_IOC_MAGIC, 1)
 #define COMP_IOCTRESUME         _IO(COMP_IOC_MAGIC, 2)
 
+#define EXPIRT_TIME             60
+static int expire_time;
+
 struct colo_device {
 	struct cdev cdev;
 	struct semaphore sem;
@@ -24,14 +27,26 @@ static void clear_slaver_queue(struct if_connections *ics)
 {
 	int i;
 	struct sk_buff *skb;
-	struct connect_info *conn_info;
+	struct connect_info *conn_info, *temp;
 
 	for (i = 0; i < HASH_NR; i++) {
-		list_for_each_entry(conn_info, &ics->entry[i], list) {
+		list_for_each_entry_safe(conn_info, temp, &ics->entry[i], list) {
 			skb = skb_dequeue(&conn_info->slaver_queue);
 			while (skb != NULL) {
 				skb_queue_tail(&conn_info->ics->slaver_data->rel, skb);
 				skb = skb_dequeue(&conn_info->slaver_queue);
+			}
+
+			if (jiffies_64 - conn_info->touch_time >= expire_time) {
+				skb = skb_peek(&conn_info->master_queue);
+				BUG_ON(skb);
+
+				list_del_init(&conn_info->list);
+				spin_lock_bh(&compare_lock);
+				BUG_ON(conn_info->state & IN_COMPARE);
+				list_del_init(&conn_info->compare_list);
+				spin_unlock_bh(&compare_lock);
+				kfree(conn_info);
 			}
 		}
 	}
@@ -245,6 +260,8 @@ int colo_dev_init(void)
 	}
 
 	sema_init(&colo_dev.sem, 1);
+
+	expire_time = msecs_to_jiffies(EXPIRT_TIME * 1000);
 
 	return 0;
 }

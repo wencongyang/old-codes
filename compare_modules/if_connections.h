@@ -39,6 +39,7 @@ struct connect_info {
 	struct list_head compare_list;
 	uint32_t state;
 	wait_queue_head_t wait;
+	uint64_t touch_time;
 
 	/* transport layer defines it */
 	uint32_t m_info[32];
