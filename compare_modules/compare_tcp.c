@@ -343,7 +343,7 @@ update_tcp_sent_info(struct tcp_compare_info *tcp_cinfo, struct tcphdr *tcp)
 		tcp_cinfo->sent_flags |= ~FIN;
 
 	tcp_cinfo->sent_window = ntohs(tcp->window);
-	tcp_cinfo->sent_rcv_nxt = ntohl(tcp->ack);
+	tcp_cinfo->sent_rcv_nxt = ntohl(tcp->ack_seq);
 }
 
 static void
