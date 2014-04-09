@@ -784,6 +784,10 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 
 	m_len = m_cinfo->length - m_cinfo->tcp->doff * 4;
 	s_len = s_cinfo->length - s_cinfo->tcp->doff * 4;
+	if (m_len != s_len) {
+		pr_warn("HA_compare: tcp data's len is different\n");
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
+	}
 
 	if (compare_tcp_data && m_len != 0 && s_len != 0) {
 		m_cinfo->tcp_data = m_cinfo->ip_data + m_cinfo->tcp->doff * 4;
