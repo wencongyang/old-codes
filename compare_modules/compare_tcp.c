@@ -38,6 +38,10 @@ bool ignore_tcp_timestamp = 1;
 module_param(ignore_tcp_timestamp, bool, 0644);
 MODULE_PARM_DESC(ignore_tcp_timestamp, "ignore tcp timestamp");
 
+bool ignore_tcp_sack = 1;
+module_param(ignore_tcp_sack, bool, 0644);
+MODULE_PARM_DESC(ignore_tcp_sack, "ignored tcp sack option's difference");
+
 struct tcp_compare_info {
 	struct net_device *dev;
 	uint32_t skb_iif;
@@ -228,6 +232,23 @@ update_tcp_timestamp(struct tcphdr *tcp, struct sk_buff *skb,
 	inet_proto_csum_replace4(&tcp->check, skb, *old_timestamp,
 				 htonl(new_timestamp), 0);
 	*old_timestamp = htonl(new_timestamp);
+}
+
+static void
+clear_tcp_sack(struct tcphdr *tcp, struct sk_buff *skb)
+{
+	uint8_t *sack =
+		get_next_opt_by_kind(tcp + 1, (char *)tcp + tcp->doff * 4,
+				     TCPOPT_SACK);
+	uint16_t old_value, new_value;
+
+	if (!sack)
+		return;
+
+	old_value = *(uint16_t*)sack;
+	*sack = TCPOPT_EOL;
+	new_value = *(uint16_t*)sack;
+	inet_proto_csum_replace2(&tcp->check, skb, old_value, new_value, 0);
 }
 
 static void
@@ -539,6 +560,9 @@ compare_tcp_options(void *m_opts, void *m_opts_end, void *s_opts, void *s_opts_e
 		opcode = *m_optr;
 		opsize = *(m_optr + 1);
 
+		if (ignore_tcp_sack && opcode == TCPOPT_SACK)
+			goto skip;
+
 		s_optr = get_next_opt_by_kind(s_opt, s_opts_end, opcode);
 		if (!s_optr)
 			/* TODO: SACK */
@@ -548,6 +572,7 @@ compare_tcp_options(void *m_opts, void *m_opts_end, void *s_opts, void *s_opts_e
 		if (ret)
 			return ret;
 
+skip:
 		m_optr += opsize;
 		m_optr = get_next_opt(m_optr, m_opts_end);
 	}
@@ -557,11 +582,15 @@ compare_tcp_options(void *m_opts, void *m_opts_end, void *s_opts, void *s_opts_e
 		opcode = *s_optr;
 		opsize = *(s_optr + 1);
 
+		if (ignore_tcp_sack && opcode == TCPOPT_SACK)
+			goto skip2;
+
 		m_optr = get_next_opt_by_kind(m_opt, m_opts_end, opcode);
 		if (!m_optr)
 			/* TODO: SACK */
 			return CHECKPOINT | UPDATE_COMPARE_INFO;
 
+skip2:
 		s_optr += opsize;
 		s_optr = get_next_opt(s_optr, s_opts_end);
 	}
@@ -704,6 +733,8 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 	if (ignore_tcp_window)
 		update_tcp_window(m_cinfo->tcp, m_cinfo->skb,
 				  s_tcp_hinfo->window);
+	if (ignore_tcp_sack)
+		clear_tcp_sack(m_cinfo->tcp, m_cinfo->skb);
 
 	/*
 	 * we don't touch the packet from slave, so no need to save
@@ -993,6 +1024,7 @@ tcp_compare_one_packet(struct compare_info *m_cinfo,
 			update_tcp_window(tcp, skb,
 					  TCP_CMP_INFO(other_cinfo)->window);
 			update_tcp_sent_info(TCP_CMP_INFO(cinfo), tcp);
+			clear_tcp_sack(tcp, skb);
 		}
 		return ret;
 	}
@@ -1034,6 +1066,7 @@ send_packet:
 			  TCP_CMP_INFO(other_cinfo)->rcv_nxt);
 	update_tcp_window(tcp, new_skb,
 			  TCP_CMP_INFO(other_cinfo)->window);
+	clear_tcp_sack(tcp, new_skb);
 	if (cinfo == s_cinfo)
 		/*
 		 * no need to update the timestamp if the packet is not auto
