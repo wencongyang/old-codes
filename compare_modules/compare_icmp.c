@@ -1,3 +1,17 @@
+/*
+ *  COarse-grain LOck-stepping Virtual Machines for Non-stop Service (COLO)
+ *  (a.k.a. Fault Tolerance or Continuous Replication)
+ *  Compare icmp packets from master and slave.
+ *
+ * Copyright (C) 2014 FUJITSU LIMITED
+ *
+ * Author: Wen Congyang <wency@cn.fujitsu.com>
+ *
+ * This work is licensed under the terms of the GNU GPL, version 2 or
+ * later.  See the COPYING file in the top-level directory.
+ *
+ */
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/icmp.h>

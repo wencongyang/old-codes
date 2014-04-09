@@ -1,10 +1,15 @@
-/*  When a packet received by sch_master module or sch_slaver module,
- *  the function update() will be involved. This function will peek a
- *  packet from two block queues respectively, then compare these two
- *  packets. If they are identical, they will be moved to two release
- *  queue respectively, otherwise, all packets on block queues will be
- *  freed.
- *  Yewei - 2011/9/1
+/*
+ *  COarse-grain LOck-stepping Virtual Machines for Non-stop Service (COLO)
+ *  (a.k.a. Fault Tolerance or Continuous Replication)
+ *  Compare packets from master and slave.
+ *
+ * Copyright (C) 2014 FUJITSU LIMITED
+ *
+ * Author: Wen Congyang <wency@cn.fujitsu.com>
+ *
+ * This work is licensed under the terms of the GNU GPL, version 2 or
+ * later.  See the COPYING file in the top-level directory.
+ *
  */
 
 

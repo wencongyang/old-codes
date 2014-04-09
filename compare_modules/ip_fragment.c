@@ -1,3 +1,17 @@
+/*
+ *  COarse-grain LOck-stepping Virtual Machines for Non-stop Service (COLO)
+ *  (a.k.a. Fault Tolerance or Continuous Replication)
+ *  Hanlde the ip fragment for ipv4 and ipv6(not implemented)
+ *
+ * Copyright (C) 2014 FUJITSU LIMITED
+ *
+ * Author: Wen Congyang <wency@cn.fujitsu.com>
+ *
+ * This work is licensed under the terms of the GNU GPL, version 2 or
+ * later.  See the COPYING file in the top-level directory.
+ *
+ */
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/skbuff.h>
