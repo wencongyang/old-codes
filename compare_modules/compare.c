@@ -50,69 +50,77 @@ uint32_t state = state_comparing;
  *   3: bypass the packet from master, and drop the packet from slaver
  */
 
-uint32_t compare_other_packet(void *m, void *s, int length)
+uint32_t compare_other_packet(void *m_data, void *s_data, int length)
 {
-	return memcmp(m, s, length) ? CHECKPOINT | UPDATE_COMPARE_INFO : SAME_PACKET;
+	int ret = memcmp(m_data, s_data, length);
+
+	return ret ? CHECKPOINT | UPDATE_COMPARE_INFO : SAME_PACKET;
 }
 
 static uint32_t
-compare_skb(struct compare_info *m, struct compare_info *s)
+compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 {
 	uint32_t ret;
 
-	m->eth = (struct ethhdr *)m->skb->data;
-	s->eth = (struct ethhdr *)s->skb->data;
-	m->length = m->skb->len;
-	s->length = s->skb->len;
+	m_cinfo->eth = (struct ethhdr *)m_cinfo->skb->data;
+	s_cinfo->eth = (struct ethhdr *)s_cinfo->skb->data;
+	m_cinfo->length = m_cinfo->skb->len;
+	s_cinfo->length = s_cinfo->skb->len;
 
-	if (unlikely(m->length < sizeof(struct ethhdr))) {
+	if (unlikely(m_cinfo->length < sizeof(struct ethhdr))) {
 		pr_warn("HA_compare: master packet is corrupted\n");
 		goto different;
 	}
 
-	if (unlikely(s->length < sizeof(struct ethhdr))) {
+	if (unlikely(s_cinfo->length < sizeof(struct ethhdr))) {
 		pr_warn("HA_compare: slaver packet is corrupted\n");
 		goto different;
 	}
 
-	if (m->length < 60 && s->length == 60)
-		s->length = m->length;
+	if (m_cinfo->length < 60 && s_cinfo->length == 60)
+		s_cinfo->length = m_cinfo->length;
 
-	if (unlikely(m->eth->h_proto != s->eth->h_proto)) {
+	if (unlikely(m_cinfo->eth->h_proto != s_cinfo->eth->h_proto)) {
 		pr_warn("HA_compare: protocol in eth header is different\n");
-		pr_warn("HA_compare: master's protocol: %d\n", ntohs(m->eth->h_proto));
-		pr_warn("HA_compare: slaver's protocol: %d\n", ntohs(s->eth->h_proto));
+		pr_warn("HA_compare: master's protocol: %d\n",
+			ntohs(m_cinfo->eth->h_proto));
+		pr_warn("HA_compare: slaver's protocol: %d\n",
+			ntohs(s_cinfo->eth->h_proto));
 		goto different;
 	}
 
-	m->packet = (char *)m->eth + sizeof(struct ethhdr);
-	s->packet = (char *)s->eth + sizeof(struct ethhdr);
-	m->length -= sizeof(struct ethhdr);
-	s->length -= sizeof(struct ethhdr);
+	m_cinfo->packet = (char *)m_cinfo->eth + sizeof(struct ethhdr);
+	s_cinfo->packet = (char *)s_cinfo->eth + sizeof(struct ethhdr);
+	m_cinfo->length -= sizeof(struct ethhdr);
+	s_cinfo->length -= sizeof(struct ethhdr);
 
-	switch(ntohs(m->eth->h_proto)) {
+	switch(ntohs(m_cinfo->eth->h_proto)) {
 	case ETH_P_IP:
-		ret = ipv4_compare_packet(m, s);
+		ret = ipv4_compare_packet(m_cinfo, s_cinfo);
 		break;
 	case ETH_P_ARP:
-		ret = arp_compare_packet(m, s);
+		ret = arp_compare_packet(m_cinfo, s_cinfo);
 		if (ret & CHECKPOINT) {
-			pr_warn("HA_compare: master packet, len=%d\n", m->length);
-			debug_print_arp(m->packet);
-			pr_warn("HA_compare: slaver packet, len=%d\n", s->length);
-			debug_print_arp(s->packet);
+			pr_warn("HA_compare: master packet, len=%d\n",
+				m_cinfo->length);
+			debug_print_arp(m_cinfo->packet);
+			pr_warn("HA_compare: slaver packet, len=%d\n",
+				s_cinfo->length);
+			debug_print_arp(s_cinfo->packet);
 		}
 		break;
 	default:
 //		pr_debug("HA_compare: unexpected protocol: %d\n", eth_master->h_proto);
-		if (m->length != s->length) {
+		if (m_cinfo->length != s_cinfo->length) {
 			pr_warn("HA_compare: the length of packet is different\n");
 			goto different;
 		}
-		ret = compare_other_packet(m->packet, s->packet, m->length);
+		ret = compare_other_packet(m_cinfo->packet, s_cinfo->packet,
+					   m_cinfo->length);
 	}
 	if (ret & CHECKPOINT) {
-		pr_warn("HA_compare: compare_xxx_packet() fails %04x\n", ntohs(m->eth->h_proto));
+		pr_warn("HA_compare: compare_xxx_packet() fails %04x\n",
+			ntohs(m_cinfo->eth->h_proto));
 		goto different;
 	}
 	return ret;
@@ -140,48 +148,48 @@ static void release_skb(struct sk_buff_head *head, struct sk_buff *skb)
 	} while (skb != NULL);
 }
 
-static uint32_t compare_one_skb(struct compare_info *m, struct compare_info *s)
+static uint32_t compare_one_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 {
 	struct sk_buff *skb;
-	struct compare_info *info = NULL;
-	struct compare_info *other_info = NULL;
+	struct compare_info *cinfo = NULL;
+	struct compare_info *other_cinfo = NULL;
 	uint32_t ret = 0;
 
-	if (m->skb) {
-		info = m;
-		other_info = s;
+	if (m_cinfo->skb) {
+		cinfo = m_cinfo;
+		other_cinfo = s_cinfo;
 		ret = BYPASS_MASTER;
-	} else if (s->skb) {
-		info = s;
-		other_info = m;
+	} else if (s_cinfo->skb) {
+		cinfo = s_cinfo;
+		other_cinfo = m_cinfo;
 		ret = DROP_SLAVER;
 	} else
 		BUG();
 
-	skb = info->skb;
+	skb = cinfo->skb;
 
-	info->eth = (struct ethhdr *)info->skb->data;
-	info->length = info->skb->len;
+	cinfo->eth = (struct ethhdr *)cinfo->skb->data;
+	cinfo->length = cinfo->skb->len;
 
-	if (unlikely(info->length < sizeof(struct ethhdr))) {
+	if (unlikely(cinfo->length < sizeof(struct ethhdr))) {
 		pr_warn("HA_compare: %s packet is corrupted\n",
-			m->skb ? "master" : "slaver");
+			m_cinfo->skb ? "master" : "slaver");
 		goto err;
 	}
 
-	info->packet = (char *)info->eth + sizeof(struct ethhdr);
-	info->length -= sizeof(struct ethhdr);
+	cinfo->packet = (char *)cinfo->eth + sizeof(struct ethhdr);
+	cinfo->length -= sizeof(struct ethhdr);
 
 	/* clear other_info to avoid unexpected error */
-	other_info->eth = NULL;
-	other_info->packet = NULL;
-	other_info->length = 0;
+	other_cinfo->eth = NULL;
+	other_cinfo->packet = NULL;
+	other_cinfo->length = 0;
 
-	if (ntohs(info->eth->h_proto) == ETH_P_IP)
-		return ipv4_compare_one_packet(m, s);
+	if (ntohs(cinfo->eth->h_proto) == ETH_P_IP)
+		return ipv4_compare_one_packet(m_cinfo, s_cinfo);
 
-	if (ntohs(info->eth->h_proto) == ETH_P_ARP)
-		return arp_compare_one_packet(m, s);
+	if (ntohs(cinfo->eth->h_proto) == ETH_P_ARP)
+		return arp_compare_one_packet(m_cinfo, s_cinfo);
 
 	/* unsupported */
 	return 0;

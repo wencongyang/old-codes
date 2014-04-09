@@ -4,25 +4,27 @@
 
 #include "compare.h"
 
-static void debug_print_icmp(const struct compare_info *info, const void *data)
+static void debug_print_icmp(const struct compare_info *cinfo, const void *data)
 {
 	const struct icmphdr *icmp = data;
 
 	pr_warn("HA_compare:[ICMP] code=%u\n", icmp->code);
 }
 
-static uint32_t icmp_compare_packet(struct compare_info *m, struct compare_info *s)
+static uint32_t icmp_compare_packet(struct compare_info *m_cinfo,
+				    struct compare_info *s_cinfo)
 {
 	return SAME_PACKET;
 }
 
-static uint32_t icmp_compare_one_packet(struct compare_info *m, struct compare_info *s)
+static uint32_t icmp_compare_one_packet(struct compare_info *m_cinfo,
+					struct compare_info *s_cinfo)
 {
 	uint32_t ret = 0;
 
-	if (m->skb)
+	if (m_cinfo->skb)
 		ret |= BYPASS_MASTER;
-	if (s->skb)
+	if (s_cinfo->skb)
 		ret |= DROP_SLAVER;
 	return ret;
 }
