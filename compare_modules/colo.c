@@ -42,7 +42,7 @@ static struct if_connections *alloc_if_connections(struct colo_idx *idx, int fla
 	spin_lock(&queue_lock);
 	list_for_each_entry(ics, &queue, list) {
 		if (ics->idx.master_idx != idx->master_idx ||
-		    ics->idx.slaver_idx != idx->slaver_idx)
+		    ics->idx.slave_idx != idx->slave_idx)
 			continue;
 
 		if (flags & IS_MASTER)
@@ -51,10 +51,10 @@ static struct if_connections *alloc_if_connections(struct colo_idx *idx, int fla
 			else
 				ics->master = 1;
 		else
-			if (ics->slaver)
+			if (ics->slave)
 				ics = ERR_PTR(-EBUSY);
 			else
-				ics->slaver = 1;
+				ics->slave = 1;
 
 		goto out;
 	}
@@ -71,7 +71,7 @@ static struct if_connections *alloc_if_connections(struct colo_idx *idx, int fla
 	if (flags & IS_MASTER)
 		ics->master = 1;
 	else
-		ics->slaver = 1;
+		ics->slave = 1;
 	list_add_tail(&ics->list, &queue);
 
 out:
@@ -88,13 +88,13 @@ static void free_if_connections(struct if_connections *ics, int flags)
 
 	if (flags & IS_MASTER && ics->master) {
 		ics->master = 0;
-	} else if (!(flags & IS_MASTER) && ics->slaver) {
-		ics->slaver = 0;
+	} else if (!(flags & IS_MASTER) && ics->slave) {
+		ics->slave = 0;
 	} else {
 		goto out;
 	}
 
-	if (!ics->master && !ics->slaver) {
+	if (!ics->master && !ics->slave) {
 		list_del_init(&ics->list);
 		if (colo_ics == ics)
 			colo_ics = NULL;
@@ -191,11 +191,11 @@ static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 	flags = nla_data(tb[TCA_COLO_FLAGS]);
 	idx = nla_data(tb[TCA_COLO_IDX]);
 	if (!(*flags & IS_MASTER)) {
-		idx->master_idx = idx->master_idx ^ idx->slaver_idx;
-		idx->slaver_idx = idx->master_idx ^ idx->slaver_idx;
-		idx->master_idx = idx->master_idx ^ idx->slaver_idx;
+		idx->master_idx = idx->master_idx ^ idx->slave_idx;
+		idx->slave_idx = idx->master_idx ^ idx->slave_idx;
+		idx->master_idx = idx->master_idx ^ idx->slave_idx;
 	}
-	pr_info("master_idx is: %d, slaver_idx is: %d, flags: %02x\n", idx->master_idx, idx->slaver_idx, *flags);
+	pr_info("master_idx is: %d, slave_idx is: %d, flags: %02x\n", idx->master_idx, idx->slave_idx, *flags);
 
 	q->ics = alloc_if_connections(idx, *flags);
 	if (IS_ERR(q->ics))
@@ -204,7 +204,7 @@ static int colo_init(struct Qdisc *sch, struct nlattr *opt)
 	if (*flags & IS_MASTER)
 		q->ics->master_data = q;
 	else
-		q->ics->slaver_data = q;
+		q->ics->slave_data = q;
 	skb_queue_head_init(&q->rel);
 	q->sch = sch;
 	q->flags = *flags;

@@ -35,7 +35,7 @@ void destroy_frag_queue(struct ip_frag_queue *q)
 }
 
 /*
- * This API is for copying fragments from master to slaver. It is called
+ * This API is for copying fragments from master to slave. It is called
  * under the lock ip_frags.lock. src_q is in the list ip_frags.lru_list,
  * so it cannot be destroyed.
  */

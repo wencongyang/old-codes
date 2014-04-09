@@ -11,7 +11,7 @@
 
 struct colo_idx {
 	uint32_t master_idx;
-	uint32_t slaver_idx;
+	uint32_t slave_idx;
 };
 
 struct connection_keys {
@@ -31,7 +31,7 @@ struct colo_sched_data;
 
 struct connect_info {
 	struct sk_buff_head master_queue;
-	struct sk_buff_head slaver_queue;
+	struct sk_buff_head slave_queue;
 	struct if_connections *ics;
 
 	struct connection_keys key;
@@ -56,9 +56,9 @@ struct if_connections {
 	struct colo_idx idx;
 	struct sk_buff_head wait_for_release;
 	struct colo_sched_data *master_data;
-	struct colo_sched_data *slaver_data;
+	struct colo_sched_data *slave_data;
 	struct list_head list;
-	int master:1, slaver:1;
+	int master:1, slave:1;
 };
 
 extern void init_if_connections(struct if_connections *ics);

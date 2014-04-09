@@ -46,8 +46,8 @@ uint32_t state = state_comparing;
 /* compare_xxx_packet() returns:
  *   0: do a new checkpoint
  *   1: bypass the packet from master,
- *   2: drop the packet from slaver
- *   3: bypass the packet from master, and drop the packet from slaver
+ *   2: drop the packet from slave
+ *   3: bypass the packet from master, and drop the packet from slave
  */
 
 uint32_t compare_other_packet(void *m_data, void *s_data, int length)
@@ -73,7 +73,7 @@ compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 	}
 
 	if (unlikely(s_cinfo->length < sizeof(struct ethhdr))) {
-		pr_warn("HA_compare: slaver packet is corrupted\n");
+		pr_warn("HA_compare: slave packet is corrupted\n");
 		goto different;
 	}
 
@@ -84,7 +84,7 @@ compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 		pr_warn("HA_compare: protocol in eth header is different\n");
 		pr_warn("HA_compare: master's protocol: %d\n",
 			ntohs(m_cinfo->eth->h_proto));
-		pr_warn("HA_compare: slaver's protocol: %d\n",
+		pr_warn("HA_compare: slave's protocol: %d\n",
 			ntohs(s_cinfo->eth->h_proto));
 		goto different;
 	}
@@ -104,7 +104,7 @@ compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 			pr_warn("HA_compare: master packet, len=%d\n",
 				m_cinfo->length);
 			debug_print_arp(m_cinfo->packet);
-			pr_warn("HA_compare: slaver packet, len=%d\n",
+			pr_warn("HA_compare: slave packet, len=%d\n",
 				s_cinfo->length);
 			debug_print_arp(s_cinfo->packet);
 		}
@@ -173,7 +173,7 @@ static uint32_t compare_one_skb(struct compare_info *m_cinfo, struct compare_inf
 
 	if (unlikely(cinfo->length < sizeof(struct ethhdr))) {
 		pr_warn("HA_compare: %s packet is corrupted\n",
-			m_cinfo->skb ? "master" : "slaver");
+			m_cinfo->skb ? "master" : "slave");
 		goto err;
 	}
 
@@ -219,7 +219,7 @@ static void compare_one_connection(struct connect_info *conn_info)
 			break;
 
 		skb_m = skb_dequeue(&conn_info->master_queue);
-		skb_s = skb_dequeue(&conn_info->slaver_queue);
+		skb_s = skb_dequeue(&conn_info->slave_queue);
 
 		if (!skb_m && !skb_s)
 			break;
@@ -230,7 +230,7 @@ static void compare_one_connection(struct connect_info *conn_info)
 				skb_queue_head(&conn_info->master_queue, skb_m);
 
 			if (skb_s)
-				skb_queue_head(&conn_info->slaver_queue, skb_s);
+				skb_queue_head(&conn_info->slave_queue, skb_s);
 			break;
 		}
 
@@ -257,10 +257,10 @@ static void compare_one_connection(struct connect_info *conn_info)
 				skb_s = info_s.skb;
 
 			if (likely(ret & DROP_SLAVER)) {
-				release_skb(&ics->slaver_data->rel, skb_s);
-				netif_schedule_queue(ics->slaver_data->sch->dev_queue);
+				release_skb(&ics->slave_data->rel, skb_s);
+				netif_schedule_queue(ics->slave_data->sch->dev_queue);
 			} else if (skb_s) {
-				skb_queue_head(&conn_info->slaver_queue, skb_s);
+				skb_queue_head(&conn_info->slave_queue, skb_s);
 			}
 			//pr_info("netif_schedule%u.\n", cnt);
 			if (!ret)
@@ -269,12 +269,12 @@ static void compare_one_connection(struct connect_info *conn_info)
 				skip_compare_one = false;
 		} else {
 			/*
-			 *  Put makster's skb to temporary queue, drop slaver's.
+			 *  Put makster's skb to temporary queue, drop slave's.
 			 */
 			if (skb_m)
 				release_skb(&ics->wait_for_release, skb_m);
 			if (skb_s)
-				release_skb(&ics->slaver_data->rel, skb_s);
+				release_skb(&ics->slave_data->rel, skb_s);
 
 			state = state_incheckpoint;
 			wake_up_interruptible(&queue);
@@ -348,7 +348,7 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 	struct sk_buff *skb;
 	int i, j;
 	struct colo_sched_data *master_queue = colo_ics->master_data;
-	struct colo_sched_data *slaver_queue = colo_ics->slaver_data;
+	struct colo_sched_data *slave_queue = colo_ics->slave_data;
 	struct connect_info *conn_info;
 
 	pr_info("STAT: compare_count=%u, total_time=%llu, max_time=%llu\n",
@@ -372,15 +372,15 @@ int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *
 
 	for (i = 0; i < HASH_NR; i++) {
 		j = 0;
-		list_for_each_entry(conn_info, &slaver_queue->ics->entry[i], list) {
-			skb = skb_peek(&conn_info->slaver_queue);
+		list_for_each_entry(conn_info, &slave_queue->ics->entry[i], list) {
+			skb = skb_peek(&conn_info->slave_queue);
 			if (skb != NULL)
 				pr_info("STAT: s_blo[%d] not empty.\n", i);
 			j++;
 		}
 	}
 
-	skb = skb_peek(&slaver_queue->rel);
+	skb = skb_peek(&slave_queue->rel);
 	if (skb != NULL)
 		pr_info("STAT: s_rel not empty.\n");
 

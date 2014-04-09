@@ -120,7 +120,7 @@ static struct connect_info *alloc_connect_info(struct connection_keys *key)
 	INIT_LIST_HEAD(&conn_info->list);
 	INIT_LIST_HEAD(&conn_info->compare_list);
 	skb_queue_head_init(&conn_info->master_queue);
-	skb_queue_head_init(&conn_info->slaver_queue);
+	skb_queue_head_init(&conn_info->slave_queue);
 	conn_info->state = 0;
 	init_waitqueue_head(&conn_info->wait);
 	conn_info->ics = NULL;
@@ -187,7 +187,7 @@ struct connect_info *insert(struct if_connections *ics, struct sk_buff *skb,
 		if (flags & IS_MASTER)
 			ip_frags = &ics->master_data->ipv4_frags;
 		else
-			ip_frags = &ics->slaver_data->ipv4_frags;
+			ip_frags = &ics->slave_data->ipv4_frags;
 		head = ipv4_defrag(skb, ip_frags);
 		if (IS_ERR(head)) {
 			if (PTR_ERR(head) != -EINPROGRESS)
@@ -224,7 +224,7 @@ struct connect_info *insert(struct if_connections *ics, struct sk_buff *skb,
 	if (flags & IS_MASTER)
 		skb_queue_tail(&conn_info->master_queue, head ? head : skb);
 	else
-		skb_queue_tail(&conn_info->slaver_queue, head ? head : skb);
+		skb_queue_tail(&conn_info->slave_queue, head ? head : skb);
 
 	if (flags & IS_MASTER)
 		conn_info->flushed = 0;
@@ -240,7 +240,7 @@ static void destroy_connection_info(struct connect_info *conn_info, uint32_t fla
 	if (flags & IS_MASTER)
 		head = &conn_info->master_queue;
 	else
-		head = &conn_info->slaver_queue;
+		head = &conn_info->slave_queue;
 
 	while ((skb = skb_dequeue(head)) != NULL) {
 		if (FRAG_CB(skb)->flags & IS_FRAGMENT)
@@ -267,7 +267,7 @@ wait:
 }
 
 /*
- * don't call it to destroy both master and slaver interface connections
+ * don't call it to destroy both master and slave interface connections
  * at the same time
  */
 void destroy_connections(struct if_connections *ics, uint32_t flags)

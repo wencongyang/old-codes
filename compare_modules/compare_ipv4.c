@@ -130,7 +130,7 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 	}
 
 	if (unlikely(s_cinfo->ip->ihl * 4 > s_cinfo->length)) {
-		pr_warn("HA_compare: slaver iphdr is corrupted\n");
+		pr_warn("HA_compare: slave iphdr is corrupted\n");
 		return CHECKPOINT;
 	}
 
@@ -141,7 +141,7 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 				#elem);					\
 			pr_warn("HA_compare: master %s: %x\n", #elem,	\
 				m_cinfo->ip->elem);			\
-			pr_warn("HA_compare: slaver %s: %x\n", #elem,	\
+			pr_warn("HA_compare: slave %s: %x\n", #elem,	\
 				s_cinfo->ip->elem);			\
 			print_debuginfo(m_cinfo, s_cinfo);		\
 			return CHECKPOINT | UPDATE_COMPARE_INFO;	\
@@ -370,7 +370,7 @@ uint32_t ipv4_compare_one_packet(struct compare_info *m_cinfo,
 
 	if (unlikely(cinfo->ip->ihl * 4 > cinfo->length)) {
 		pr_warn("HA_compare: %s iphdr is corrupted\n",
-			m_cinfo->skb ? "master" : "slaver");
+			m_cinfo->skb ? "master" : "slave");
 		goto err;
 	}
 

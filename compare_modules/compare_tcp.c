@@ -211,7 +211,7 @@ update_tcp_fin(struct tcphdr *tcp, struct sk_buff *skb, bool clear)
 static void *get_next_opt_by_kind(void *opts, void *end, uint8_t kind);
 /*
  * if we generate a new packet for master, the old timestamp is from
- * slaver packet. Use the timestamp from master packet instead of it.
+ * slave packet. Use the timestamp from master packet instead of it.
  */
 static void
 update_tcp_timestamp(struct tcphdr *tcp, struct sk_buff *skb,

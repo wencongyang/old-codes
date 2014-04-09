@@ -23,7 +23,7 @@ struct colo_device {
 
 static dev_t colo_devno;
 
-static void clear_slaver_queue(struct if_connections *ics)
+static void clear_slave_queue(struct if_connections *ics)
 {
 	int i;
 	struct sk_buff *skb;
@@ -31,10 +31,10 @@ static void clear_slaver_queue(struct if_connections *ics)
 
 	for (i = 0; i < HASH_NR; i++) {
 		list_for_each_entry_safe(conn_info, temp, &ics->entry[i], list) {
-			skb = skb_dequeue(&conn_info->slaver_queue);
+			skb = skb_dequeue(&conn_info->slave_queue);
 			while (skb != NULL) {
-				skb_queue_tail(&conn_info->ics->slaver_data->rel, skb);
-				skb = skb_dequeue(&conn_info->slaver_queue);
+				skb_queue_tail(&conn_info->ics->slave_data->rel, skb);
+				skb = skb_dequeue(&conn_info->slave_queue);
 			}
 
 			if (jiffies_64 - conn_info->touch_time >= expire_time) {
@@ -52,11 +52,11 @@ static void clear_slaver_queue(struct if_connections *ics)
 	}
 
 	/* clear ip fragments */
-	clear_ipv4_frags(&ics->slaver_data->ipv4_frags);
+	clear_ipv4_frags(&ics->slave_data->ipv4_frags);
 
 	/* copy ipv4 fragments from master */
 	copy_ipv4_frags(&ics->master_data->ipv4_frags,
-			&ics->slaver_data->ipv4_frags);
+			&ics->slave_data->ipv4_frags);
 }
 
 static void update_compare_info(struct connect_info *conn_info, struct sk_buff *skb)
@@ -106,8 +106,8 @@ static void move_master_queue(struct if_connections *ics)
 			/*
 			 * copy compare info:
 			 *      We call this function when a new checkpoint is
-			 *      finished. The status of master and slaver is
-			 *      the same. So slaver's compare info shoule be
+			 *      finished. The status of master and slave is
+			 *      the same. So slave's compare info shoule be
 			 *      the same as master's.
 			 */
 			memcpy(&conn_info->s_info, &conn_info->m_info,
@@ -196,15 +196,15 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		break;
 	case COMP_IOCTFLUSH:
 		/*  Both side suspend the VM, at this point, no packets will
-		 *  send out from VM, so block skb queues(master&slaver) are
+		 *  send out from VM, so block skb queues(master&slave) are
 		 *  stable. Move master block queue to a temporary queue, then
-		 *  they will be released when checkpoint ends. For slaver
+		 *  they will be released when checkpoint ends. For slave
 		 *  block queue, just drop them.
 		 */
 		pr_notice("HA_compare: --------flush packets.\n");
 
 		move_master_queue(colo_ics);
-		clear_slaver_queue(colo_ics);
+		clear_slave_queue(colo_ics);
 		break;
 	case COMP_IOCTRESUME:
 		/*
