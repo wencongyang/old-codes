@@ -64,6 +64,7 @@ typedef struct compare_ops compare_ops_t;
 #define		CHECKPOINT		0x80000000
 #define		UPDATE_COMPARE_INFO	0x40000000
 #define		UPDATE_MASTER_PACKET	0x20000000
+#define		IGNORE_LEN		0x10000000
 
 extern uint32_t compare_other_packet(void *m_data, void *s_data, int length);
 extern wait_queue_head_t queue;

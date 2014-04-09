@@ -224,7 +224,8 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 		return ret;
 
 	compare_elem(tos);
-	compare_elem(tot_len);
+	if (!(ret & IGNORE_LEN))
+		compare_elem(tot_len);
 	compare_elem(frag_off);
 	compare_elem(ttl);
 	if (!ignore_id) {
