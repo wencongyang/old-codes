@@ -50,6 +50,8 @@ struct compare_ops {
 	uint32_t (*compare_one_fragment)(struct compare_info *m_cinfo,
 					 struct compare_info *s_cinfo);
 	void (*update_info)(void *info, void *data, uint32_t len, struct sk_buff *skb);
+	void (*update_packet)(struct compare_info *m_cinfo,
+			      struct compare_info *s_cinfo);
 	void (*flush_packets)(void *info);
 	void (*debug_print)(const struct compare_info *cinfo, const void *data);
 };
@@ -61,6 +63,7 @@ typedef struct compare_ops compare_ops_t;
 #define		SAME_PACKET		(BYPASS_MASTER | DROP_SLAVER)
 #define		CHECKPOINT		0x80000000
 #define		UPDATE_COMPARE_INFO	0x40000000
+#define		UPDATE_MASTER_PACKET	0x20000000
 
 extern uint32_t compare_other_packet(void *m_data, void *s_data, int length);
 extern wait_queue_head_t queue;

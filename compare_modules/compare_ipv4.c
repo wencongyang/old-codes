@@ -101,6 +101,22 @@ static inline void set_frag_cb(struct compare_info *cinfo)
 	skb_shinfo(cinfo->skb)->frag_list = NULL;
 }
 
+static void ipv4_update_packet(struct compare_info *m_cinfo,
+			       struct compare_info *s_cinfo,
+			       uint8_t protocol)
+{
+	const compare_ops_t *ops;
+
+	rcu_read_lock();
+	ops = rcu_dereference(compare_inet_ops[protocol]);
+	if (ops && ops->update_packet)
+		ops->update_packet(m_cinfo, s_cinfo);
+	else
+		pr_warn("update_packet is not supported,"
+			" but returns UPDATE_MASTER_PACKET\n");
+	rcu_read_unlock();
+}
+
 static uint32_t
 __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 {
@@ -204,7 +220,7 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 	if (ret & CHECKPOINT)
 		print_debuginfo(m_cinfo, s_cinfo);
 
-	if (ret != SAME_PACKET)
+	if ((ret & SAME_PACKET) != SAME_PACKET)
 		return ret;
 
 	compare_elem(tos);
@@ -220,7 +236,8 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 
 	last_id = ntohs(m_cinfo->ip->id);
 
-	return SAME_PACKET;
+	/* ret may contain UPDATE_MASTER_PACKET */
+	return ret;
 }
 
 uint32_t ipv4_compare_packet(struct compare_info *m_cinfo,
@@ -233,8 +250,13 @@ uint32_t ipv4_compare_packet(struct compare_info *m_cinfo,
 		if (ret & UPDATE_COMPARE_INFO)
 			ipv4_update_compare_info(m_cinfo->private_data,
 						 m_cinfo->ip, m_cinfo->skb);
-	} else if (ret == SAME_PACKET) {
+	} else if ((ret & SAME_PACKET) == SAME_PACKET) {
 		same_count++;
+	}
+
+	if (ret & UPDATE_MASTER_PACKET) {
+		BUG_ON((ret & BYPASS_MASTER) == 0);
+		ipv4_update_packet(m_cinfo, s_cinfo, m_cinfo->ip->protocol);
 	}
 
 	return ret;
@@ -388,6 +410,12 @@ err:
 		if (cinfo == m_cinfo && ret & UPDATE_COMPARE_INFO)
 			ipv4_update_compare_info(m_cinfo->private_data,
 						 m_cinfo->ip, m_cinfo->skb);
+	}
+
+	if (ret & UPDATE_MASTER_PACKET) {
+		BUG_ON((ret & BYPASS_MASTER) == 0);
+		BUG_ON(m_cinfo->skb == NULL);
+		ipv4_update_packet(m_cinfo, s_cinfo, cinfo->ip->protocol);
 	}
 
 	return ret;
