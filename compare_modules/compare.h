@@ -109,8 +109,4 @@ extern uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
 extern uint32_t ipv4_compare_one_packet(struct compare_info *m_cinfo,
 					struct compare_info *s_cinfo);
 
-/* udp */
-extern void compare_udp_init(void);
-extern void compare_udp_fini(void);
-
 #endif

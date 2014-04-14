@@ -12,6 +12,7 @@
  *
  */
 
+#include <linux/module.h>
 #include <linux/kernel.h>
 
 #include "compare.h"
@@ -30,12 +31,17 @@ static compare_ops_t udp_ops = {
 	.debug_print = debug_print_udp,
 };
 
-void compare_udp_init(void)
+static int __init compare_udp_init(void)
 {
-	register_compare_ops(&udp_ops, IPPROTO_UDP);
+	return register_compare_ops(&udp_ops, IPPROTO_UDP);
 }
 
-void compare_udp_fini(void)
+static void __exit compare_udp_fini(void)
 {
 	unregister_compare_ops(&udp_ops, IPPROTO_UDP);
 }
+
+module_init(compare_udp_init);
+module_exit(compare_udp_fini);
+MODULE_LICENSE("GPL");
+MODULE_INFO(intree, "Y");
