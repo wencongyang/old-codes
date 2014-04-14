@@ -793,6 +793,51 @@ out:
 	return ret;
 }
 
+/* The caller call this function only when tcp_compare_header() returns SAME_PACKET */
+static bool
+tcp_need_compare_data(struct tcp_hdr_info *m_tcp_hinfo,
+		      struct tcp_hdr_info *s_tcp_hinfo)
+{
+	/*
+	 * If m_tcp_hinfo->flags has ERR_SKB, s_tcp_hinfo->flags also
+	 * has ERR_SKB.
+	 */
+	if (m_tcp_hinfo->flags & ERR_SKB)
+		return false;
+
+	if (m_tcp_hinfo->flags & RETRANSMIT && s_tcp_hinfo->flags & RETRANSMIT)
+		return false;
+
+	/*
+	 * ignore_retransmitted_packet is 0, and ignore_tcp_dlen is 1.
+	 *
+	 * We have compared the data or compare_tcp_data is 0,
+	 * so return false.
+	 *
+	 * In this case, the caller should return BYPASS_MASTER or DROP_SLAVER.
+	 */
+	if (m_tcp_hinfo->flags & RETRANSMIT || s_tcp_hinfo->flags & RETRANSMIT)
+		return false;
+
+	if (!(m_tcp_hinfo->flags & HAVE_PAYLOAD) &&
+	    !(s_tcp_hinfo->flags & HAVE_PAYLOAD))
+		return false;
+
+	/*
+	 * In this case, the caller should check the dlen
+	 * if ignore_tcp_dlen is 1.
+	 */
+	if ((m_tcp_hinfo->flags & HAVE_PAYLOAD) &&
+	    (s_tcp_hinfo->flags & HAVE_PAYLOAD))
+		return compare_tcp_data;
+
+	/*
+	 * ignore_ack_packet is 0, one packet has payload while the other packet
+	 * doesn't have. In this case, do a new checkpoint.
+	 */
+	return true;
+}
+
 static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 				   struct compare_info *s_cinfo)
 {
@@ -809,8 +854,7 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 	if ((ret & SAME_PACKET) != SAME_PACKET)
 		return ret;
 
-	/* ERR_SKB or RETRANSMIT may return SAME_PACKET */
-	if (m_tcp_hinfo.flags & (ERR_SKB | RETRANSMIT))
+	if (!tcp_need_compare_data(&m_tcp_hinfo, &s_tcp_hinfo))
 		return ret;
 
 	saved_ret = ret;
@@ -822,16 +866,12 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
 
-	if (compare_tcp_data && m_len != 0 && s_len != 0) {
-		m_cinfo->tcp_data = m_cinfo->ip_data + m_cinfo->tcp->doff * 4;
-		s_cinfo->tcp_data = s_cinfo->ip_data + s_cinfo->tcp->doff * 4;
-		ret = compare_other_packet(m_cinfo->tcp_data,
-					   s_cinfo->tcp_data,
-					   min(m_len, s_len));
-		if (ret & CHECKPOINT) {
-			pr_warn("HA_compare: tcp data is different\n");
-			return CHECKPOINT | UPDATE_COMPARE_INFO;
-		}
+	m_cinfo->tcp_data = m_cinfo->ip_data + m_cinfo->tcp->doff * 4;
+	s_cinfo->tcp_data = s_cinfo->ip_data + s_cinfo->tcp->doff * 4;
+	ret = compare_other_packet(m_cinfo->tcp_data, s_cinfo->tcp_data, m_len);
+	if (ret & CHECKPOINT) {
+		pr_warn("HA_compare: tcp data is different\n");
+		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
 
 	return saved_ret;
@@ -921,7 +961,7 @@ tcp_compare_fragment(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 	if ((ret & SAME_PACKET) != SAME_PACKET)
 		goto out;
 
-	if (!compare_tcp_data)
+	if (!tcp_need_compare_data(&m_tcp_hinfo, &s_tcp_hinfo))
 		goto out;
 
 	saved_ret = ret;
