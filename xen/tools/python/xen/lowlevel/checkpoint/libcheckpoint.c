@@ -582,7 +582,7 @@ static int switch_qemu_logdirty(checkpoint_state *s, int enable)
      */
     len = 0;
     response = xs_read(s->xsh, XBT_NULL, path, &len);
-    if (!len || strcmp(response, cmd)) {
+    if (!len || !response || strcmp(response, cmd)) {
        if (len)
            free(response);
        s->errstr = "qemu logdirty command failed";
