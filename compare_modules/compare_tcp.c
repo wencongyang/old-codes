@@ -1137,12 +1137,17 @@ static compare_ops_t tcp_ops = {
 	.debug_print = debug_print_tcp,
 };
 
-void compare_tcp_init(void)
+static int __init compare_tcp_init(void)
 {
-	register_compare_ops(&tcp_ops, IPPROTO_TCP);
+	return register_compare_ops(&tcp_ops, IPPROTO_TCP);
 }
 
-void compare_tcp_fini(void)
+static void __exit compare_tcp_fini(void)
 {
 	unregister_compare_ops(&tcp_ops, IPPROTO_TCP);
 }
+
+module_init(compare_tcp_init);
+module_exit(compare_tcp_fini);
+MODULE_LICENSE("GPL");
+MODULE_INFO(intree, "Y");

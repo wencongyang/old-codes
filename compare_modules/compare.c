@@ -437,7 +437,6 @@ static int __init compare_module_init(void)
 
 	init_waitqueue_head(&queue);
 
-	compare_tcp_init();
 	compare_udp_init();
 
 #ifdef DEBUG_COMPARE_MODULE
@@ -461,7 +460,6 @@ static void __exit compare_module_exit(void)
 {
 	kthread_stop(compare_task);
 
-	compare_tcp_fini();
 	compare_udp_fini();
 
 	colo_dev_fini();
