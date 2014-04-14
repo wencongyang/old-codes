@@ -56,6 +56,10 @@ bool ignore_tcp_sack = 1;
 module_param(ignore_tcp_sack, bool, 0644);
 MODULE_PARM_DESC(ignore_tcp_sack, "ignored tcp sack option's difference");
 
+bool ignore_tcp_doff = 1;
+module_param(ignore_tcp_doff, bool, 0644);
+MODULE_PARM_DESC(ignore_tcp_doff, "ignore tcp doff's difference");
+
 struct tcp_compare_info {
 	struct net_device *dev;
 	uint32_t skb_iif;
@@ -750,7 +754,8 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 	}
 
 	/* data offset */
-	compare(doff);
+	if (!ignore_tcp_doff)
+		compare(doff);
 
 	ret = compare_tcp_options(m_cinfo->ip_data + sizeof(struct tcphdr),
 				  m_cinfo->ip_data + m_cinfo->tcp->doff * 4,
@@ -777,7 +782,10 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 	update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), s_tcp_hinfo,
 				s_cinfo->skb);
 
-	return SAME_PACKET | UPDATE_MASTER_PACKET;
+	if (ignore_tcp_doff)
+		return SAME_PACKET | UPDATE_MASTER_PACKET | IGNORE_LEN;
+	else
+		return SAME_PACKET | UPDATE_MASTER_PACKET;
 
 out:
 	/* Retransmitted packet or ack only packet */
