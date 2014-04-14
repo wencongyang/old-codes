@@ -64,7 +64,8 @@ struct compare_ops {
 					 struct compare_info *s_cinfo);
 	void (*update_info)(void *info, void *data, uint32_t len, struct sk_buff *skb);
 	void (*update_packet)(struct compare_info *m_cinfo,
-			      struct compare_info *s_cinfo);
+			      struct compare_info *s_cinfo,
+			      uint32_t ret);
 	void (*flush_packets)(void *info);
 	void (*debug_print)(const struct compare_info *cinfo, const void *data);
 };

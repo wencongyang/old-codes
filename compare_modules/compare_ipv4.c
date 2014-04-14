@@ -117,14 +117,14 @@ static inline void set_frag_cb(struct compare_info *cinfo)
 
 static void ipv4_update_packet(struct compare_info *m_cinfo,
 			       struct compare_info *s_cinfo,
-			       uint8_t protocol)
+			       uint8_t protocol, uint32_t ret)
 {
 	const compare_ops_t *ops;
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[protocol]);
 	if (ops && ops->update_packet)
-		ops->update_packet(m_cinfo, s_cinfo);
+		ops->update_packet(m_cinfo, s_cinfo, ret);
 	else
 		pr_warn("update_packet is not supported,"
 			" but returns UPDATE_MASTER_PACKET\n");
@@ -271,7 +271,8 @@ uint32_t ipv4_compare_packet(struct compare_info *m_cinfo,
 
 	if (ret & UPDATE_MASTER_PACKET) {
 		BUG_ON((ret & BYPASS_MASTER) == 0);
-		ipv4_update_packet(m_cinfo, s_cinfo, m_cinfo->ip->protocol);
+		ipv4_update_packet(m_cinfo, s_cinfo, m_cinfo->ip->protocol,
+				   ret);
 	}
 
 	return ret;
@@ -430,7 +431,7 @@ err:
 	if (ret & UPDATE_MASTER_PACKET) {
 		BUG_ON((ret & BYPASS_MASTER) == 0);
 		BUG_ON(m_cinfo->skb == NULL);
-		ipv4_update_packet(m_cinfo, s_cinfo, cinfo->ip->protocol);
+		ipv4_update_packet(m_cinfo, s_cinfo, cinfo->ip->protocol, ret);
 	}
 
 	return ret;

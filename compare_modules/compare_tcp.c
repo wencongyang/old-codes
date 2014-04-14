@@ -425,6 +425,58 @@ update_tcp_compare_info(struct tcp_compare_info *tcp_cinfo,
 	tcp_cinfo->skb_iif = skb->skb_iif;
 }
 
+static void tcp_update_packet(struct compare_info *m_cinfo,
+			      struct compare_info *s_cinfo,
+			      uint32_t ret)
+{
+	struct tcp_compare_info *m_tcp_cinfo = TCP_CMP_INFO(m_cinfo);
+	struct tcp_compare_info *s_tcp_cinfo = TCP_CMP_INFO(s_cinfo);
+	struct tcphdr *m_tcp = m_cinfo->tcp;
+	struct tcphdr *s_tcp = s_cinfo->tcp;
+	struct sk_buff *m_skb = m_cinfo->skb;
+
+	if (!(ret & BYPASS_MASTER))
+		return;
+
+	/* PSH */
+	if (!s_cinfo->skb)
+		goto skip_fin;
+	if ((ret & SAME_PACKET) != SAME_PACKET)
+		goto skip_psh;
+	if (m_tcp->psh != s_tcp->psh && !m_tcp->psh)
+		update_tcp_psh(m_tcp, m_skb);
+
+skip_psh:
+	/* FIN */
+	if (m_tcp_cinfo->flags & FIN && !m_tcp->fin &&
+	    s_tcp->fin) {
+		/* add the flags FIN again */
+		update_tcp_fin(m_tcp, m_skb, false);
+	} else if (m_tcp->fin &&
+		   !(m_tcp_cinfo->flags & FIN) &&
+		   !s_tcp->fin) {
+		/* clear the flags FIN */
+		update_tcp_fin(m_tcp, m_skb, true);
+	}
+
+skip_fin:
+	update_tcp_ackseq(m_tcp, m_skb, s_tcp_cinfo->rcv_nxt);
+	update_tcp_window(m_tcp, m_skb, s_tcp_cinfo->window);
+	/*
+	 * TODO: if the packets from master and slave contain the same sack, no
+	 * need to clear it.
+	 */
+	clear_tcp_sack(m_tcp, m_skb);
+
+	/*
+	 * we don't touch the packet from slave, so no need to save
+	 * sent info for slave
+	 */
+	update_tcp_sent_info(m_tcp_cinfo, m_tcp);
+
+	update_tcp_timestamp(m_tcp, m_skb, m_tcp_cinfo->timestamp);
+}
+
 static uint32_t check_ack_only_packet(uint32_t m_flags, uint32_t s_flags,
 				      bool m_fin, bool s_fin)
 {
@@ -719,59 +771,20 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 	}
 
 #undef compare
-	/* update flags */
-	/* PSH */
-	if (m_cinfo->tcp->psh != s_cinfo->tcp->psh && !m_cinfo->tcp->psh)
-		update_tcp_psh(m_cinfo->tcp, m_cinfo->skb);
-
-	/* FIN */
-	if (TCP_CMP_INFO(m_cinfo)->flags & FIN && !m_cinfo->tcp->fin &&
-	    s_cinfo->tcp->fin) {
-		/* add the flags FIN again */
-		update_tcp_fin(m_cinfo->tcp, m_cinfo->skb, false);
-	} else if (m_cinfo->tcp->fin &&
-		   !(TCP_CMP_INFO(s_cinfo)->flags & FIN) &&
-		   !s_cinfo->tcp->fin) {
-		/* clear the flags FIN */
-		update_tcp_fin(m_cinfo->tcp, m_cinfo->skb, true);
-	}
 
 	update_tcp_compare_info(TCP_CMP_INFO(m_cinfo), m_tcp_hinfo,
 				m_cinfo->skb);
 	update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), s_tcp_hinfo,
 				s_cinfo->skb);
 
-	if (ignore_ack_difference)
-		update_tcp_ackseq(m_cinfo->tcp, m_cinfo->skb,
-				  s_tcp_hinfo->ack_seq);
-	if (ignore_tcp_window)
-		update_tcp_window(m_cinfo->tcp, m_cinfo->skb,
-				  s_tcp_hinfo->window);
-	if (ignore_tcp_sack)
-		clear_tcp_sack(m_cinfo->tcp, m_cinfo->skb);
-
-	/*
-	 * we don't touch the packet from slave, so no need to save
-	 * sent info for slave
-	 */
-	update_tcp_sent_info(TCP_CMP_INFO(m_cinfo), m_cinfo->tcp);
-
-	return SAME_PACKET;
+	return SAME_PACKET | UPDATE_MASTER_PACKET;
 
 out:
 	/* Retransmitted packet or ack only packet */
 	if (ret & BYPASS_MASTER) {
-		/* clear FIN flags first before bypass master packet */
-		if (m_tcp_hinfo->flags & RETRANSMIT && m_cinfo->tcp->fin &&
-		    !(TCP_CMP_INFO(s_cinfo)->flags & FIN))
-			update_tcp_fin(m_cinfo->tcp, m_cinfo->skb, true);
 		update_tcp_compare_info(TCP_CMP_INFO(m_cinfo), m_tcp_hinfo,
 					m_cinfo->skb);
-		update_tcp_ackseq(m_cinfo->tcp, m_cinfo->skb,
-				  s_tcp_hinfo->ack_seq);
-		update_tcp_window(m_cinfo->tcp, m_cinfo->skb,
-				  s_tcp_hinfo->window);
-		update_tcp_sent_info(TCP_CMP_INFO(m_cinfo), m_cinfo->tcp);
+		ret |= UPDATE_MASTER_PACKET;
 	}
 	if (ret & DROP_SLAVER) {
 		update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), s_tcp_hinfo,
@@ -784,7 +797,7 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 				   struct compare_info *s_cinfo)
 {
 	int m_len, s_len;
-	uint32_t ret;
+	uint32_t ret, saved_ret;
 	struct tcp_hdr_info m_tcp_hinfo, s_tcp_hinfo;
 
 	get_tcp_hdr_info(m_cinfo->tcp, m_cinfo->length, TCP_CMP_INFO(m_cinfo),
@@ -793,8 +806,14 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 			 &s_tcp_hinfo);
 
 	ret = tcp_compare_header(m_cinfo, s_cinfo, &m_tcp_hinfo, &s_tcp_hinfo);
-	if (ret != SAME_PACKET)
+	if ((ret & SAME_PACKET) != SAME_PACKET)
 		return ret;
+
+	/* ERR_SKB or RETRANSMIT may return SAME_PACKET */
+	if (m_tcp_hinfo.flags & (ERR_SKB | RETRANSMIT))
+		return ret;
+
+	saved_ret = ret;
 
 	m_len = m_cinfo->length - m_cinfo->tcp->doff * 4;
 	s_len = s_cinfo->length - s_cinfo->tcp->doff * 4;
@@ -815,7 +834,7 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 		}
 	}
 
-	return SAME_PACKET;
+	return saved_ret;
 }
 
 #define IP_DATA(skb)	(void *)(ip_hdr(skb)->ihl * 4 + (char *)ip_hdr(skb))
@@ -874,7 +893,7 @@ tcp_compare_fragment(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 	struct sk_buff *s_skb = s_cinfo->skb;
 	struct tcphdr *m_tcp = NULL, *old_m_tcp = NULL;
 	struct tcphdr *s_tcp = NULL, *old_s_tcp = NULL;
-	int ret = CHECKPOINT | UPDATE_COMPARE_INFO;
+	uint32_t ret = CHECKPOINT | UPDATE_COMPARE_INFO, saved_ret;
 	struct tcp_hdr_info m_tcp_hinfo, s_tcp_hinfo;
 
 	if (FRAG_CB(m_skb)->len < sizeof(struct tcphdr) ||
@@ -899,15 +918,19 @@ tcp_compare_fragment(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 			 &s_tcp_hinfo);
 
 	ret = tcp_compare_header(m_cinfo, s_cinfo, &m_tcp_hinfo, &s_tcp_hinfo);
-	if (ret != SAME_PACKET)
+	if ((ret & SAME_PACKET) != SAME_PACKET)
 		goto out;
 
-	if (!compare_tcp_data) {
-		ret = SAME_PACKET;
+	if (!compare_tcp_data)
 		goto out;
-	}
+
+	saved_ret = ret;
 
 	ret = tcp_compare_payload(m_cinfo, s_cinfo);
+	if (ret & CHECKPOINT)
+		goto out;
+
+	ret = saved_ret;
 
 out:
 	if (m_tcp)
@@ -986,8 +1009,7 @@ tcp_compare_one_packet(struct compare_info *m_cinfo,
 	struct sk_buff *skb, *new_skb = NULL;
 	struct compare_info *cinfo, *other_cinfo;
 	struct tcp_hdr_info tcp_hinfo;
-	struct tcphdr *tcp;
-	int ret = 0;
+	uint32_t ret = 0;
 
 	/* compare one packet is only for tcp ack, window and fin */
 	if (!ignore_ack_packet && !ignore_ack_difference &&
@@ -1034,16 +1056,8 @@ tcp_compare_one_packet(struct compare_info *m_cinfo,
 
 		update_tcp_compare_info(TCP_CMP_INFO(cinfo), &tcp_hinfo,
 					cinfo->skb);
-
-		if (cinfo == m_cinfo) {
-			tcp = cinfo->tcp;
-			update_tcp_ackseq(tcp, skb,
-					  TCP_CMP_INFO(other_cinfo)->rcv_nxt);
-			update_tcp_window(tcp, skb,
-					  TCP_CMP_INFO(other_cinfo)->window);
-			update_tcp_sent_info(TCP_CMP_INFO(cinfo), tcp);
-			clear_tcp_sack(tcp, skb);
-		}
+		if (ret & BYPASS_MASTER)
+			ret |= UPDATE_MASTER_PACKET;
 		return ret;
 	}
 
@@ -1079,24 +1093,8 @@ send_packet:
 	update_tcp_compare_info(TCP_CMP_INFO(cinfo), &tcp_hinfo,
 				cinfo->skb);
 
-	tcp = m_cinfo->tcp;
-	update_tcp_ackseq(tcp, new_skb,
-			  TCP_CMP_INFO(other_cinfo)->rcv_nxt);
-	update_tcp_window(tcp, new_skb,
-			  TCP_CMP_INFO(other_cinfo)->window);
-	clear_tcp_sack(tcp, new_skb);
-	if (cinfo == s_cinfo)
-		/*
-		 * no need to update the timestamp if the packet is not auto
-		 * generated.
-		 */
-		update_tcp_timestamp(tcp, new_skb,
-				     TCP_CMP_INFO(other_cinfo)->timestamp);
-
-	/* update sent info */
-	update_tcp_sent_info(TCP_CMP_INFO(other_cinfo), tcp);
-
-	return cinfo == m_cinfo ? BYPASS_MASTER : SAME_PACKET;
+	ret = cinfo == m_cinfo ? BYPASS_MASTER : SAME_PACKET;
+	return ret | UPDATE_MASTER_PACKET;
 }
 
 static void tcp_update_info(void *info, void *data, uint32_t length, struct sk_buff *skb)
@@ -1134,6 +1132,7 @@ static compare_ops_t tcp_ops = {
 	.compare_one_packet = tcp_compare_one_packet,
 	.compare_fragment = tcp_compare_fragment,
 	.update_info = tcp_update_info,
+	.update_packet = tcp_update_packet,
 	.flush_packets = tcp_flush_packet,
 	.debug_print = debug_print_tcp,
 };
