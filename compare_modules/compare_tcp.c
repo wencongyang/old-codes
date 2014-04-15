@@ -465,8 +465,14 @@ skip_psh:
 	}
 
 skip_fin:
-	update_tcp_ackseq(m_tcp, m_skb, s_tcp_cinfo->rcv_nxt);
-	update_tcp_window(m_tcp, m_skb, s_tcp_cinfo->window);
+	if (ret & CLONED_PACKET) {
+		update_tcp_ackseq(m_tcp, m_skb, m_tcp_cinfo->rcv_nxt);
+		update_tcp_window(m_tcp, m_skb, m_tcp_cinfo->window);
+	} else {
+		update_tcp_ackseq(m_tcp, m_skb, s_tcp_cinfo->rcv_nxt);
+		update_tcp_window(m_tcp, m_skb, s_tcp_cinfo->window);
+	}
+
 	/*
 	 * TODO: if the packets from master and slave contain the same sack, no
 	 * need to clear it.
@@ -1142,7 +1148,7 @@ send_packet:
 	update_tcp_compare_info(TCP_CMP_INFO(cinfo), &tcp_hinfo,
 				cinfo->skb);
 
-	ret = cinfo == m_cinfo ? BYPASS_MASTER : SAME_PACKET;
+	ret = cinfo == m_cinfo ? BYPASS_MASTER : SAME_PACKET | CLONED_PACKET;
 	return ret | UPDATE_MASTER_PACKET;
 }
 
