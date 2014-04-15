@@ -1176,7 +1176,7 @@ static void tcp_flush_packet(void *info)
 			tcp_cinfo->window, tcp_cinfo->sent_window);
 }
 
-static compare_ops_t tcp_ops = {
+static ipv4_compare_ops_t tcp_ops = {
 	.compare = tcp_compare_packet,
 	.compare_one_packet = tcp_compare_one_packet,
 	.compare_fragment = tcp_compare_fragment,
@@ -1188,12 +1188,12 @@ static compare_ops_t tcp_ops = {
 
 static int __init compare_tcp_init(void)
 {
-	return register_compare_ops(&tcp_ops, IPPROTO_TCP);
+	return register_ipv4_compare_ops(&tcp_ops, IPPROTO_TCP);
 }
 
 static void __exit compare_tcp_fini(void)
 {
-	unregister_compare_ops(&tcp_ops, IPPROTO_TCP);
+	unregister_ipv4_compare_ops(&tcp_ops, IPPROTO_TCP);
 }
 
 module_init(compare_tcp_init);

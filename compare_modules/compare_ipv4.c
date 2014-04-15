@@ -28,14 +28,14 @@ bool ignore_id = 1;
 module_param(ignore_id, bool, 0644);
 MODULE_PARM_DESC(ignore_id, "bypass id difference");
 
-const compare_ops_t *compare_inet_ops[MAX_INET_PROTOS];
+const ipv4_compare_ops_t *compare_inet_ops[MAX_INET_PROTOS];
 DEFINE_MUTEX(inet_ops_lock);
 
 /* static */
 unsigned short last_id = 0;
 unsigned int same_count = 0;
 
-int register_compare_ops(compare_ops_t *ops, unsigned short protocol)
+int register_ipv4_compare_ops(ipv4_compare_ops_t *ops, unsigned short protocol)
 {
 	mutex_lock(&inet_ops_lock);
 	if (compare_inet_ops[protocol]) {
@@ -50,7 +50,7 @@ int register_compare_ops(compare_ops_t *ops, unsigned short protocol)
 	return 0;
 }
 
-int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol)
+int unregister_ipv4_compare_ops(ipv4_compare_ops_t *ops, unsigned short protocol)
 {
 	mutex_lock(&inet_ops_lock);
 	if (compare_inet_ops[protocol] != ops) {
@@ -64,8 +64,8 @@ int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol)
 	synchronize_rcu();
 	return 0;
 }
-EXPORT_SYMBOL(register_compare_ops);
-EXPORT_SYMBOL(unregister_compare_ops);
+EXPORT_SYMBOL(register_ipv4_compare_ops);
+EXPORT_SYMBOL(unregister_ipv4_compare_ops);
 
 static void debug_print_ip(const struct compare_info *cinfo,
 			   const struct iphdr *ip)
@@ -74,7 +74,7 @@ static void debug_print_ip(const struct compare_info *cinfo,
 	unsigned short id = ntohs(ip->id);
 	unsigned char protocol = ip->protocol;
 	void *data = (char *)ip + ip->ihl * 4;
-	const compare_ops_t * ops;
+	const ipv4_compare_ops_t * ops;
 
 	pr_warn("HA_compare:[IP]len = %u, id= %u.\n", len, id);
 
@@ -120,7 +120,7 @@ static void ipv4_update_packet(struct compare_info *m_cinfo,
 			       struct compare_info *s_cinfo,
 			       uint8_t protocol, uint32_t ret)
 {
-	const compare_ops_t *ops;
+	const ipv4_compare_ops_t *ops;
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[protocol]);
@@ -136,7 +136,7 @@ static uint32_t
 __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 {
 	uint32_t ret;
-	const compare_ops_t *ops;
+	const ipv4_compare_ops_t *ops;
 	bool m_fragment, s_fragment;
 
 	if (unlikely(m_cinfo->ip->ihl * 4 > m_cinfo->length)) {
@@ -284,7 +284,7 @@ void ipv4_update_compare_info(void *info, struct iphdr *ip, struct sk_buff *skb)
 	unsigned char protocol;
 	void *data;
 	uint32_t len;
-	const compare_ops_t *ops;
+	const ipv4_compare_ops_t *ops;
 
 	protocol = ip->protocol;
 	data = (char *)ip + ip->ihl * 4;
@@ -299,7 +299,7 @@ void ipv4_update_compare_info(void *info, struct iphdr *ip, struct sk_buff *skb)
 
 void ipv4_flush_packets(void *info, uint8_t protocol)
 {
-	const compare_ops_t *ops;
+	const ipv4_compare_ops_t *ops;
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[protocol]);
@@ -369,7 +369,7 @@ uint32_t ipv4_compare_one_packet(struct compare_info *m_cinfo,
 	struct compare_info *cinfo = NULL;
 	struct compare_info *other_cinfo = NULL;
 	uint32_t ret = 0;
-	const compare_ops_t *ops;
+	const ipv4_compare_ops_t *ops;
 	bool fragment;
 
 	if (m_cinfo->skb) {

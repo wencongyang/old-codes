@@ -28,18 +28,18 @@ static void debug_print_udp(const struct compare_info *info, const void *data)
 	pr_warn("HA_compare:[UDP] src=%u, dst=%u\n", src_port, dst_port);
 }
 
-static compare_ops_t udp_ops = {
+static ipv4_compare_ops_t udp_ops = {
 	.debug_print = debug_print_udp,
 };
 
 static int __init compare_udp_init(void)
 {
-	return register_compare_ops(&udp_ops, IPPROTO_UDP);
+	return register_ipv4_compare_ops(&udp_ops, IPPROTO_UDP);
 }
 
 static void __exit compare_udp_fini(void)
 {
-	unregister_compare_ops(&udp_ops, IPPROTO_UDP);
+	unregister_ipv4_compare_ops(&udp_ops, IPPROTO_UDP);
 }
 
 module_init(compare_udp_init);

@@ -44,7 +44,7 @@ static uint32_t icmp_compare_one_packet(struct compare_info *m_cinfo,
 	return ret;
 }
 
-static compare_ops_t icmp_ops = {
+static ipv4_compare_ops_t icmp_ops = {
 	.debug_print = debug_print_icmp,
 	.compare = icmp_compare_packet,
 	.compare_one_packet = icmp_compare_one_packet,
@@ -52,12 +52,12 @@ static compare_ops_t icmp_ops = {
 
 static __init int compare_icmp_init(void)
 {
-	return register_compare_ops(&icmp_ops, IPPROTO_ICMP);
+	return register_ipv4_compare_ops(&icmp_ops, IPPROTO_ICMP);
 }
 
 static __exit void compare_icmp_fini(void)
 {
-	unregister_compare_ops(&icmp_ops, IPPROTO_ICMP);
+	unregister_ipv4_compare_ops(&icmp_ops, IPPROTO_ICMP);
 }
 
 module_init(compare_icmp_init);
