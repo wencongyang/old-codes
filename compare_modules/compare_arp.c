@@ -95,7 +95,7 @@ __arp_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 				    m_cinfo->length);
 }
 
-uint32_t
+static uint32_t
 arp_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 {
 	uint32_t ret = __arp_compare_packet(m_cinfo, s_cinfo);
@@ -122,7 +122,7 @@ static struct sk_buff *create_new_skb(struct sk_buff *skb,
 	return new_skb;
 }
 
-uint32_t
+static uint32_t
 arp_compare_one_packet(struct compare_info *m_cinfo,
 		       struct compare_info *s_cinfo)
 {
@@ -145,3 +145,23 @@ arp_compare_one_packet(struct compare_info *m_cinfo,
 
 	return BYPASS_MASTER | DROP_SLAVER;
 }
+
+compare_net_ops_t arp_ops = {
+	.compare_packets = arp_compare_packet,
+	.compare_one_packet = arp_compare_one_packet,
+};
+
+static int __init compare_arp_init(void)
+{
+	return register_net_compare_ops(&arp_ops, COMPARE_ARP);
+}
+
+static void __exit compare_arp_fini(void)
+{
+	unregister_net_compare_ops(&arp_ops, COMPARE_ARP);
+}
+
+module_init(compare_arp_init);
+module_exit(compare_arp_fini);
+MODULE_LICENSE("GPL");
+MODULE_INFO(intree, "Y");

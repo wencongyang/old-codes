@@ -49,6 +49,9 @@ wait_queue_head_t queue;
 
 uint32_t state = state_comparing;
 
+const compare_net_ops_t *compare_net_ops[COMPARE_LAST];
+DEFINE_MUTEX(net_ops_lock);
+
 /* compare_xxx_packet() returns:
  *   0: do a new checkpoint
  *   1: bypass the packet from master,
@@ -64,10 +67,85 @@ uint32_t default_compare_data(void *m_data, void *s_data, int length)
 }
 EXPORT_SYMBOL(default_compare_data);
 
+int register_net_compare_ops(const compare_net_ops_t *ops,
+			     unsigned char protocol)
+{
+	if (protocol >= COMPARE_LAST)
+		return -EINVAL;
+
+	mutex_lock(&net_ops_lock);
+	if (compare_net_ops[protocol]) {
+		mutex_unlock(&net_ops_lock);
+		return -EBUSY;
+	}
+
+	rcu_assign_pointer(compare_net_ops[protocol], ops);
+	mutex_unlock(&net_ops_lock);
+
+	synchronize_rcu();
+	return 0;
+}
+
+int unregister_net_compare_ops(const compare_net_ops_t *ops,
+			       unsigned char protocol)
+{
+	if (protocol >= COMPARE_LAST)
+		return -EINVAL;
+
+	mutex_lock(&net_ops_lock);
+	if (compare_net_ops[protocol] != ops) {
+		mutex_unlock(&net_ops_lock);
+		return -EINVAL;
+	}
+
+	rcu_assign_pointer(compare_net_ops[protocol], NULL);
+	mutex_unlock(&net_ops_lock);
+
+	synchronize_rcu();
+	return 0;
+}
+EXPORT_SYMBOL(register_net_compare_ops);
+EXPORT_SYMBOL(unregister_net_compare_ops);
+
+const compare_net_ops_t *get_compare_net_ops(unsigned short protocol)
+{
+	unsigned char compare_protocol;
+
+	switch(ntohs(protocol)) {
+	case ETH_P_IP:
+		compare_protocol = COMPARE_IPV4;
+		break;
+	case ETH_P_IPV6:
+		compare_protocol = COMPARE_IPV6;
+		break;
+	case ETH_P_ARP:
+		compare_protocol = COMPARE_ARP;
+		break;
+	default:
+		return NULL;
+	}
+
+	return rcu_dereference(compare_net_ops[compare_protocol]);
+}
+
+static uint32_t
+default_compare_packets(struct compare_info *m_cinfo,
+			struct compare_info *s_cinfo)
+{
+//	pr_debug("HA_compare: unexpected protocol: %d\n", eth_master->h_proto);
+	if (m_cinfo->length != s_cinfo->length) {
+		pr_warn("HA_compare: the length of packet is different\n");
+		return CHECKPOINT;
+	}
+	return default_compare_data(m_cinfo->packet, s_cinfo->packet,
+				    m_cinfo->length);
+}
+
 static uint32_t
 compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 {
-	uint32_t ret;
+	uint32_t ret = CHECKPOINT;
+	const compare_net_ops_t *ops;
 
 	m_cinfo->eth = (struct ethhdr *)m_cinfo->skb->data;
 	s_cinfo->eth = (struct ethhdr *)s_cinfo->skb->data;
@@ -101,31 +179,20 @@ compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 	m_cinfo->length -= sizeof(struct ethhdr);
 	s_cinfo->length -= sizeof(struct ethhdr);
 
-	switch(ntohs(m_cinfo->eth->h_proto)) {
-	case ETH_P_IP:
-		ret = ipv4_compare_packet(m_cinfo, s_cinfo);
-		break;
-	case ETH_P_ARP:
-		ret = arp_compare_packet(m_cinfo, s_cinfo);
-		break;
-	default:
-//		pr_debug("HA_compare: unexpected protocol: %d\n", eth_master->h_proto);
-		if (m_cinfo->length != s_cinfo->length) {
-			pr_warn("HA_compare: the length of packet is different\n");
-			goto different;
-		}
-		ret = default_compare_data(m_cinfo->packet, s_cinfo->packet,
-					   m_cinfo->length);
-	}
-	if (ret & CHECKPOINT) {
+	rcu_read_lock();
+	ops = get_compare_net_ops(m_cinfo->eth->h_proto);
+	if (ops && ops->compare_packets)
+		ret = ops->compare_packets(m_cinfo, s_cinfo);
+	else
+		ret = default_compare_packets(m_cinfo, s_cinfo);
+	rcu_read_unlock();
+
+	if (ret & CHECKPOINT)
 		pr_warn("HA_compare: compare_xxx_packet() fails %04x\n",
 			ntohs(m_cinfo->eth->h_proto));
-		goto different;
-	}
-	return ret;
 
 different:
-	return CHECKPOINT;
+	return ret;
 }
 
 static void release_skb(struct sk_buff_head *head, struct sk_buff *skb)
@@ -153,6 +220,7 @@ static uint32_t compare_one_skb(struct compare_info *m_cinfo, struct compare_inf
 	struct compare_info *cinfo = NULL;
 	struct compare_info *other_cinfo = NULL;
 	uint32_t ret = 0;
+	const compare_net_ops_t *ops;
 
 	if (m_cinfo->skb) {
 		cinfo = m_cinfo;
@@ -184,14 +252,14 @@ static uint32_t compare_one_skb(struct compare_info *m_cinfo, struct compare_inf
 	other_cinfo->packet = NULL;
 	other_cinfo->length = 0;
 
-	if (ntohs(cinfo->eth->h_proto) == ETH_P_IP)
-		return ipv4_compare_one_packet(m_cinfo, s_cinfo);
-
-	if (ntohs(cinfo->eth->h_proto) == ETH_P_ARP)
-		return arp_compare_one_packet(m_cinfo, s_cinfo);
-
-	/* unsupported */
-	return 0;
+	rcu_read_lock();
+	ops = get_compare_net_ops(cinfo->eth->h_proto);
+	if (ops && ops->compare_one_packet)
+		ret = ops->compare_one_packet(m_cinfo, s_cinfo);
+	else
+		/* unsupported */
+		ret = 0;
+	rcu_read_unlock();
 
 err:
 	return ret;

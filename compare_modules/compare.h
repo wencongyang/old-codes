@@ -56,19 +56,45 @@ struct compare_info {
 extern uint32_t default_compare_data(void *m_data, void *s_data, int length);
 extern wait_queue_head_t queue;
 
-/* arp */
-extern uint32_t arp_compare_packet(struct compare_info *m_cinfo,
-				   struct compare_info *s_cinfo);
-extern uint32_t arp_compare_one_packet(struct compare_info *m_cinfo,
+/*
+ * for network layer protocol. Currently, we only support:
+ *   arp
+ *   ipv4
+ *   ipv6(TODO)
+ *
+ * It is protected by RCU, so don't sleep in all callbacks
+ */
+typedef struct compare_net_ops {
+	uint32_t (*compare_packets)(struct compare_info *m_cinfo,
+				    struct compare_info *s_cinfo);
+	uint32_t (*compare_one_packet)(struct compare_info *m_cinfo,
 				       struct compare_info *s_cinfo);
 
-/* ipv4 */
-extern uint32_t ipv4_compare_packet(struct compare_info *m_cinfo,
-				    struct compare_info *s_cinfo);
-extern void ipv4_update_compare_info(void *info, struct iphdr *ip,
-				   struct sk_buff *skb);
-extern void ipv4_flush_packets(void *info, uint8_t protocol);
-extern uint32_t ipv4_compare_one_packet(struct compare_info *m_cinfo,
-					struct compare_info *s_cinfo);
+	/*
+	 * info: compare_info.private_data
+	 * data: compare_info.packet
+	 * protocol: transport layer protocol, network endian
+	 */
+	void (*update_info)(void *info, void *data, struct sk_buff *skb);
+	void (*flush_packets)(void *info, unsigned short protocol);
+} compare_net_ops_t;
+
+enum compare_net_protocol{
+	COMPARE_IPV4,
+	COMPARE_ARP,
+	COMPARE_IPV6,
+
+	COMPARE_LAST,
+};
+
+extern int register_net_compare_ops(const compare_net_ops_t *ops,
+				    unsigned char protocol);
+extern int unregister_net_compare_ops(const compare_net_ops_t *ops,
+				      unsigned char protocol);
+
+/* caller should hold rcu_lock()
+ * protocol: network layer's protocol, network endian
+ */
+extern const compare_net_ops_t *get_compare_net_ops(unsigned short protocol);
 
 #endif

@@ -77,24 +77,33 @@ static void clear_slave_queue(struct if_connections *ics)
 static void update_compare_info(struct connect_info *conn_info, struct sk_buff *skb)
 {
 	struct ethhdr *eth = (struct ethhdr *)skb->data;
-	struct iphdr *ip;
+	void *data;
+	const compare_net_ops_t *ops;
 
-	if (eth->h_proto != htons(ETH_P_IP))
-		return;
+	data = skb->data + sizeof(*eth);
 
-	ip = (struct iphdr *)(skb->data + sizeof(*eth));
-	ipv4_update_compare_info(&conn_info->m_info, ip, skb);
+	rcu_read_lock();
+	ops = get_compare_net_ops(eth->h_proto);
+	if (ops && ops->update_info)
+		ops->update_info(&conn_info->m_info, data, skb);
+	rcu_read_unlock();
 }
 
 static void flush_packets(struct connect_info *conn_info)
 {
+	const compare_net_ops_t *ops;
+
 	if (conn_info->flushed)
 		return;
 
 	if (conn_info->key.ip_proto == 0)
 		return;
 
-	ipv4_flush_packets(&conn_info->m_info, conn_info->key.ip_proto);
+	rcu_read_lock();
+	ops = get_compare_net_ops(htons(ETH_P_IP));
+	if (ops && ops->flush_packets)
+		ops->flush_packets(&conn_info->m_info, conn_info->key.ip_proto);
+	rcu_read_unlock();
 	conn_info->flushed = 1;
 }
 

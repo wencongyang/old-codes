@@ -35,6 +35,9 @@ DEFINE_MUTEX(inet_ops_lock);
 unsigned short last_id = 0;
 unsigned int same_count = 0;
 
+static void ipv4_update_compare_info(void *info, void *data,
+				     struct sk_buff *skb);
+
 int register_ipv4_compare_ops(ipv4_compare_ops_t *ops, unsigned short protocol)
 {
 	mutex_lock(&inet_ops_lock);
@@ -256,8 +259,8 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 	return ret;
 }
 
-uint32_t ipv4_compare_packet(struct compare_info *m_cinfo,
-			     struct compare_info *s_cinfo)
+static uint32_t ipv4_compare_packet(struct compare_info *m_cinfo,
+				    struct compare_info *s_cinfo)
 {
 	uint32_t ret = __ipv4_compare_packet(m_cinfo, s_cinfo);
 
@@ -279,27 +282,31 @@ uint32_t ipv4_compare_packet(struct compare_info *m_cinfo,
 	return ret;
 }
 
-void ipv4_update_compare_info(void *info, struct iphdr *ip, struct sk_buff *skb)
+static void ipv4_update_compare_info(void *info, void *data,
+				     struct sk_buff *skb)
 {
 	unsigned char protocol;
-	void *data;
+	void *ip_data;
 	uint32_t len;
+	struct iphdr *ip = data;
 	const ipv4_compare_ops_t *ops;
 
 	protocol = ip->protocol;
-	data = (char *)ip + ip->ihl * 4;
+	ip_data = (char *)ip + ip->ihl * 4;
 	len = ntohs(ip->tot_len) - ip->ihl * 4;
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[protocol]);
 	if (ops && ops->update_info)
-		ops->update_info(info, data, len, skb);
+		ops->update_info(info, ip_data, len, skb);
 	rcu_read_unlock();
 }
 
-void ipv4_flush_packets(void *info, uint8_t protocol)
+static void ipv4_flush_packets(void *info, unsigned short protocol)
 {
 	const ipv4_compare_ops_t *ops;
+
+	BUG_ON(protocol >= MAX_INET_PROTOS);
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[protocol]);
@@ -362,8 +369,8 @@ uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
 }
 EXPORT_SYMBOL(ipv4_transport_compare_fragment);
 
-uint32_t ipv4_compare_one_packet(struct compare_info *m_cinfo,
-				 struct compare_info *s_cinfo)
+static uint32_t ipv4_compare_one_packet(struct compare_info *m_cinfo,
+					struct compare_info *s_cinfo)
 {
 	struct sk_buff *skb;
 	struct compare_info *cinfo = NULL;
@@ -441,3 +448,25 @@ err:
 unsupported:
 	return 0;
 }
+
+static compare_net_ops_t ipv4_ops = {
+	.compare_packets = ipv4_compare_packet,
+	.compare_one_packet = ipv4_compare_one_packet,
+	.flush_packets = ipv4_flush_packets,
+	.update_info = ipv4_update_compare_info,
+};
+
+static int __init compare_ipv4_init(void)
+{
+	return register_net_compare_ops(&ipv4_ops, COMPARE_IPV4);
+}
+
+static void __exit compare_ipv4_fini(void)
+{
+	unregister_net_compare_ops(&ipv4_ops, COMPARE_IPV4);
+}
+
+module_init(compare_ipv4_init);
+module_exit(compare_ipv4_fini);
+MODULE_LICENSE("GPL");
+MODULE_INFO(intree, "Y");
