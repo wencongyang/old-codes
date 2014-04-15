@@ -359,6 +359,7 @@ uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
 
 	return CHECKPOINT | UPDATE_COMPARE_INFO;
 }
+EXPORT_SYMBOL(ipv4_transport_compare_fragment);
 
 uint32_t ipv4_compare_one_packet(struct compare_info *m_cinfo,
 				 struct compare_info *s_cinfo)

@@ -61,6 +61,7 @@ uint32_t compare_other_packet(void *m_data, void *s_data, int length)
 
 	return ret ? CHECKPOINT | UPDATE_COMPARE_INFO : SAME_PACKET;
 }
+EXPORT_SYMBOL(compare_other_packet);
 
 static uint32_t
 compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
