@@ -91,7 +91,7 @@ __arp_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 	if (m_cinfo->length != s_cinfo->length)
 		return CHECKPOINT;
 
-	return compare_other_packet(m_cinfo->packet, s_cinfo->packet,
+	return default_compare_data(m_cinfo->packet, s_cinfo->packet,
 				    m_cinfo->length);
 }
 

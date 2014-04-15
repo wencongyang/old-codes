@@ -55,13 +55,13 @@ uint32_t state = state_comparing;
  *   3: bypass the packet from master, and drop the packet from slave
  */
 
-uint32_t compare_other_packet(void *m_data, void *s_data, int length)
+uint32_t default_compare_data(void *m_data, void *s_data, int length)
 {
 	int ret = memcmp(m_data, s_data, length);
 
 	return ret ? CHECKPOINT | UPDATE_COMPARE_INFO : SAME_PACKET;
 }
-EXPORT_SYMBOL(compare_other_packet);
+EXPORT_SYMBOL(default_compare_data);
 
 static uint32_t
 compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
@@ -113,7 +113,7 @@ compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 			pr_warn("HA_compare: the length of packet is different\n");
 			goto different;
 		}
-		ret = compare_other_packet(m_cinfo->packet, s_cinfo->packet,
+		ret = default_compare_data(m_cinfo->packet, s_cinfo->packet,
 					   m_cinfo->length);
 	}
 	if (ret & CHECKPOINT) {

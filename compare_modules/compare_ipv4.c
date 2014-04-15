@@ -226,7 +226,7 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 				rcu_read_unlock();
 				return CHECKPOINT | UPDATE_COMPARE_INFO;
 			}
-			ret = compare_other_packet(m_cinfo->ip_data,
+			ret = default_compare_data(m_cinfo->ip_data,
 						   s_cinfo->ip_data,
 						   m_cinfo->length);
 		}

@@ -877,7 +877,7 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 
 	m_cinfo->tcp_data = m_cinfo->ip_data + m_cinfo->tcp->doff * 4;
 	s_cinfo->tcp_data = s_cinfo->ip_data + s_cinfo->tcp->doff * 4;
-	ret = compare_other_packet(m_cinfo->tcp_data, s_cinfo->tcp_data, m_len);
+	ret = default_compare_data(m_cinfo->tcp_data, s_cinfo->tcp_data, m_len);
 	if (ret & CHECKPOINT) {
 		pr_warn("HA_compare: tcp data is different\n");
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
