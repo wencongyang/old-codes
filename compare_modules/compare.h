@@ -52,26 +52,6 @@ struct compare_info {
 	void *private_data;
 };
 
-/* It is protected by RCU, so don't sleep in all callbacks */
-struct compare_ops {
-	uint32_t (*compare)(struct compare_info *m_cinfo,
-			    struct compare_info *s_cinfo);
-	uint32_t (*compare_one_packet)(struct compare_info *m_cinfo,
-				       struct compare_info *s_cinfo);
-	uint32_t (*compare_fragment)(struct compare_info *m_cinfo,
-				     struct compare_info *s_cinfo);
-	uint32_t (*compare_one_fragment)(struct compare_info *m_cinfo,
-					 struct compare_info *s_cinfo);
-	void (*update_info)(void *info, void *data, uint32_t len, struct sk_buff *skb);
-	void (*update_packet)(struct compare_info *m_cinfo,
-			      struct compare_info *s_cinfo,
-			      uint32_t ret);
-	void (*flush_packets)(void *info);
-	void (*debug_print)(const struct compare_info *cinfo, const void *data);
-};
-
-typedef struct compare_ops compare_ops_t;
-
 #define		BYPASS_MASTER		0x01
 #define		DROP_SLAVER		0x02
 #define		SAME_PACKET		(BYPASS_MASTER | DROP_SLAVER)
@@ -100,12 +80,6 @@ extern uint32_t ipv4_compare_packet(struct compare_info *m_cinfo,
 extern void ipv4_update_compare_info(void *info, struct iphdr *ip,
 				   struct sk_buff *skb);
 extern void ipv4_flush_packets(void *info, uint8_t protocol);
-
-extern int register_compare_ops(compare_ops_t *ops, unsigned short protocol);
-extern int unregister_compare_ops(compare_ops_t *ops, unsigned short protocol);
-extern uint32_t ipv4_transport_compare_fragment(struct sk_buff *m_head,
-						struct sk_buff *s_head,
-						int m_off, int s_off, int len);
 extern uint32_t ipv4_compare_one_packet(struct compare_info *m_cinfo,
 					struct compare_info *s_cinfo);
 

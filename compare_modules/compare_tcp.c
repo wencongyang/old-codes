@@ -17,6 +17,7 @@
 #include <net/tcp.h>
 
 #include "compare.h"
+#include "compare_ipv4.h"
 #include "ip_fragment.h"
 #include "ipv4_fragment.h"
 

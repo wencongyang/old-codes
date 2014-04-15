@@ -17,6 +17,7 @@
 #include <linux/icmp.h>
 
 #include "compare.h"
+#include "compare_ipv4.h"
 
 static void debug_print_icmp(const struct compare_info *cinfo, const void *data)
 {

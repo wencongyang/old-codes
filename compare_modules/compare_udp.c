@@ -16,6 +16,7 @@
 #include <linux/kernel.h>
 
 #include "compare.h"
+#include "compare_ipv4.h"
 
 static void debug_print_udp(const struct compare_info *info, const void *data)
 {
