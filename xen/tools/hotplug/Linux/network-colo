@@ -92,7 +92,11 @@ function install_master() {
     echo "install master"
     load_module sch_colo
     load_module HA_compare
+    load_module HA_compare_ipv4
+    load_module HA_compare_arp
     load_module HA_compare_icmp
+    load_module HA_compare_tcp
+    load_module HA_compare_udp
 
     if [[ ! -e "/dev/$device" ]]; then
         major=$(awk "\$2==\"$module\" {print \$1}" /proc/devices)
