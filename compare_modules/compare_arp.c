@@ -36,6 +36,32 @@ struct arp_compare_info {
 
 #define ARP_CMP_INFO(compare_info) ((struct arp_compare_info *)compare_info->private_data)
 
+static void print_arp_packet(const struct arphdr *arp)
+{
+	struct arp_reply *temp;
+
+	pr_warn("HA_compare:[ARP] ar_hrd=%u, ar_pro=%u\n",
+		ntohs(arp->ar_hrd), ntohs(arp->ar_pro));
+	pr_warn("HA_compare:[ARP] ar_hln=%u, ar_pln=%u, ar_op=%u\n",
+		arp->ar_hln, arp->ar_pln, ntohs(arp->ar_op));
+	if (ntohs(arp->ar_op) == ARPOP_REPLY || ntohs(arp->ar_op) == ARPOP_REQUEST) {
+		temp = (struct arp_reply *)((char*)arp + sizeof(struct arphdr));
+		pr_warn("HA_compare:[ARP] ar_sha: %pM, ar_sip: %pI4\n", temp->ar_sha, temp->ar_sip);
+		pr_warn("HA_compare:[ARP] ar_tha: %pM, ar_tip: %pI4\n", temp->ar_tha, temp->ar_tip);
+	}
+}
+
+static void
+print_arp_info(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
+{
+	pr_warn("HA_compare: master packet, len=%d\n",
+		m_cinfo->length);
+	print_arp_packet(m_cinfo->arp);
+	pr_warn("HA_compare: slave packet, len=%d\n",
+		s_cinfo->length);
+	print_arp_packet(s_cinfo->arp);
+}
+
 static void update_arp_compare_info(struct arp_compare_info *arp_cinfo,
 				    struct sk_buff *skb)
 {
@@ -54,8 +80,8 @@ compare_arp_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 	return ret;
 }
 
-uint32_t
-arp_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
+static uint32_t
+__arp_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 {
 	update_arp_compare_info(ARP_CMP_INFO(m_cinfo), m_cinfo->skb);
 
@@ -67,6 +93,17 @@ arp_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 
 	return compare_other_packet(m_cinfo->packet, s_cinfo->packet,
 				    m_cinfo->length);
+}
+
+uint32_t
+arp_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
+{
+	uint32_t ret = __arp_compare_packet(m_cinfo, s_cinfo);
+
+	if (ret & CHECKPOINT)
+		print_arp_info(m_cinfo, s_cinfo);
+
+	return ret;
 }
 
 static struct sk_buff *create_new_skb(struct sk_buff *skb,
@@ -107,19 +144,4 @@ arp_compare_one_packet(struct compare_info *m_cinfo,
 		return 0;
 
 	return BYPASS_MASTER | DROP_SLAVER;
-}
-
-void debug_print_arp(const struct arphdr *arp)
-{
-	struct arp_reply *temp;
-
-	pr_warn("HA_compare:[ARP] ar_hrd=%u, ar_pro=%u\n",
-		ntohs(arp->ar_hrd), ntohs(arp->ar_pro));
-	pr_warn("HA_compare:[ARP] ar_hln=%u, ar_pln=%u, ar_op=%u\n",
-		arp->ar_hln, arp->ar_pln, ntohs(arp->ar_op));
-	if (ntohs(arp->ar_op) == ARPOP_REPLY || ntohs(arp->ar_op) == ARPOP_REQUEST) {
-		temp = (struct arp_reply *)((char*)arp + sizeof(struct arphdr));
-		pr_warn("HA_compare:[ARP] ar_sha: %pM, ar_sip: %pI4\n", temp->ar_sha, temp->ar_sip);
-		pr_warn("HA_compare:[ARP] ar_tha: %pM, ar_tip: %pI4\n", temp->ar_tha, temp->ar_tip);
-	}
 }

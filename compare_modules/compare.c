@@ -106,14 +106,6 @@ compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 		break;
 	case ETH_P_ARP:
 		ret = arp_compare_packet(m_cinfo, s_cinfo);
-		if (ret & CHECKPOINT) {
-			pr_warn("HA_compare: master packet, len=%d\n",
-				m_cinfo->length);
-			debug_print_arp(m_cinfo->packet);
-			pr_warn("HA_compare: slave packet, len=%d\n",
-				s_cinfo->length);
-			debug_print_arp(s_cinfo->packet);
-		}
 		break;
 	default:
 //		pr_debug("HA_compare: unexpected protocol: %d\n", eth_master->h_proto);

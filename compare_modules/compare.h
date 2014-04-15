@@ -72,7 +72,6 @@ extern uint32_t arp_compare_packet(struct compare_info *m_cinfo,
 				   struct compare_info *s_cinfo);
 extern uint32_t arp_compare_one_packet(struct compare_info *m_cinfo,
 				       struct compare_info *s_cinfo);
-extern void debug_print_arp(const struct arphdr *arp);
 
 /* ipv4 */
 extern uint32_t ipv4_compare_packet(struct compare_info *m_cinfo,
