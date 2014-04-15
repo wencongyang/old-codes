@@ -19,6 +19,7 @@
 
 #include "comm.h"
 #include "compare.h"
+#include "compare_device.h"
 #include "ip_fragment.h"
 #include "ipv4_fragment.h"
 

@@ -21,13 +21,6 @@
 #include <linux/udp.h>
 #include <linux/if_arp.h>
 
-enum {
-	state_comparing,
-	state_incheckpoint,
-	state_failover,
-};
-extern uint32_t state;
-
 struct compare_info {
 	struct sk_buff *skb;
 	struct ethhdr *eth;
@@ -62,10 +55,6 @@ struct compare_info {
 
 extern uint32_t default_compare_data(void *m_data, void *s_data, int length);
 extern wait_queue_head_t queue;
-
-/* compare device */
-extern int colo_dev_init(void);
-extern void colo_dev_fini(void);
 
 /* arp */
 extern uint32_t arp_compare_packet(struct compare_info *m_cinfo,
