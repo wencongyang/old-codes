@@ -19,7 +19,13 @@
 #include "comm.h"
 #include "ipv4_fragment.h"
 
-void init_if_connections(struct if_connections *ics)
+static struct list_head queue = LIST_HEAD_INIT(queue);
+static spinlock_t queue_lock;
+
+struct if_connections *colo_ics;
+EXPORT_SYMBOL(colo_ics);
+
+static void init_if_connections(struct if_connections *ics)
 {
 	int i;
 
@@ -284,7 +290,7 @@ wait:
  * don't call it to destroy both master and slave interface connections
  * at the same time
  */
-void destroy_connections(struct if_connections *ics, uint32_t flags)
+static void destroy_connections(struct if_connections *ics, uint32_t flags)
 {
 	int i;
 	struct connect_info *conn_info, *temp;
@@ -306,4 +312,81 @@ wait:
 				kfree(conn_info);
 		}
 	}
+}
+
+struct if_connections *alloc_if_connections(struct colo_idx *idx, int flags)
+{
+	struct if_connections *ics;
+
+	spin_lock(&queue_lock);
+	list_for_each_entry(ics, &queue, list) {
+		if (ics->idx.master_idx != idx->master_idx ||
+		    ics->idx.slave_idx != idx->slave_idx)
+			continue;
+
+		if (flags & IS_MASTER)
+			if (ics->master)
+				ics = ERR_PTR(-EBUSY);
+			else
+				ics->master = 1;
+		else
+			if (ics->slave)
+				ics = ERR_PTR(-EBUSY);
+			else
+				ics->slave = 1;
+
+		goto out;
+	}
+
+	ics = kmalloc(sizeof(struct if_connections), GFP_ATOMIC);
+	if (!ics) {
+		ics = ERR_PTR(-ENOMEM);
+		goto out;
+	}
+
+	init_if_connections(ics);
+
+	ics->idx = *idx;
+	if (flags & IS_MASTER)
+		ics->master = 1;
+	else
+		ics->slave = 1;
+	list_add_tail(&ics->list, &queue);
+
+out:
+	if (colo_ics)
+		pr_warn("colo_ics: %p, ics: %p\n", colo_ics, ics);
+	colo_ics = ics;
+	spin_unlock(&queue_lock);
+	return ics;
+}
+
+void free_if_connections(struct if_connections *ics, int flags)
+{
+	spin_lock(&queue_lock);
+
+	if (flags & IS_MASTER && ics->master) {
+		ics->master = 0;
+	} else if (!(flags & IS_MASTER) && ics->slave) {
+		ics->slave = 0;
+	} else {
+		goto out;
+	}
+
+	if (!ics->master && !ics->slave) {
+		list_del_init(&ics->list);
+		if (colo_ics == ics)
+			colo_ics = NULL;
+		destroy_connections(ics, flags | DESTROY);
+		kfree(ics);
+	} else
+		destroy_connections(ics, flags);
+
+out:
+	spin_unlock(&queue_lock);
+}
+
+void __init connections_init(void)
+{
+	spin_lock_init(&queue_lock);
 }

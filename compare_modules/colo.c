@@ -18,6 +18,7 @@
 
 #include "comm.h"
 #include "ipv4_fragment.h"
+#include "connections.h"
 
 enum {
 	TCA_COLO_UNSPEC,
@@ -31,12 +32,6 @@ enum {
 
 /* qidsc: colo */
 
-struct list_head queue = LIST_HEAD_INIT(queue);
-spinlock_t queue_lock;
-
-struct if_connections *colo_ics;
-EXPORT_SYMBOL(colo_ics);
-
 struct list_head compare_head = LIST_HEAD_INIT(compare_head);
 spinlock_t compare_lock;
 wait_queue_head_t compare_queue;
@@ -47,78 +42,6 @@ EXPORT_SYMBOL(compare_queue);
 static inline int skb_remove_foreign_references(struct sk_buff *skb)
 {
 	return !skb_linearize(skb);
-}
-
-static struct if_connections *alloc_if_connections(struct colo_idx *idx, int flags)
-{
-	struct if_connections *ics;
-
-	spin_lock(&queue_lock);
-	list_for_each_entry(ics, &queue, list) {
-		if (ics->idx.master_idx != idx->master_idx ||
-		    ics->idx.slave_idx != idx->slave_idx)
-			continue;
-
-		if (flags & IS_MASTER)
-			if (ics->master)
-				ics = ERR_PTR(-EBUSY);
-			else
-				ics->master = 1;
-		else
-			if (ics->slave)
-				ics = ERR_PTR(-EBUSY);
-			else
-				ics->slave = 1;
-
-		goto out;
-	}
-
-	ics = kmalloc(sizeof(struct if_connections), GFP_ATOMIC);
-	if (!ics) {
-		ics = ERR_PTR(-ENOMEM);
-		goto out;
-	}
-
-	init_if_connections(ics);
-
-	ics->idx = *idx;
-	if (flags & IS_MASTER)
-		ics->master = 1;
-	else
-		ics->slave = 1;
-	list_add_tail(&ics->list, &queue);
-
-out:
-	if (colo_ics)
-		pr_warn("colo_ics: %p, ics: %p\n", colo_ics, ics);
-	colo_ics = ics;
-	spin_unlock(&queue_lock);
-	return ics;
-}
-
-static void free_if_connections(struct if_connections *ics, int flags)
-{
-	spin_lock(&queue_lock);
-
-	if (flags & IS_MASTER && ics->master) {
-		ics->master = 0;
-	} else if (!(flags & IS_MASTER) && ics->slave) {
-		ics->slave = 0;
-	} else {
-		goto out;
-	}
-
-	if (!ics->master && !ics->slave) {
-		list_del_init(&ics->list);
-		if (colo_ics == ics)
-			colo_ics = NULL;
-		destroy_connections(ics, flags | DESTROY);
-		kfree(ics);
-	} else
-		destroy_connections(ics, flags);
-
-out:
-	spin_unlock(&queue_lock);
 }
 
 static int colo_enqueue(struct sk_buff *skb, struct Qdisc* sch)
@@ -251,7 +174,7 @@ struct Qdisc_ops colo_qdisc_ops = {
 
 static int __init colo_module_init(void)
 {
-	spin_lock_init(&queue_lock);
+	connections_init();
 	spin_lock_init(&compare_lock);
 	ipv4_frags_init();
 	init_waitqueue_head(&compare_queue);

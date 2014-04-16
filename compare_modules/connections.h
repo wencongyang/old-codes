@@ -75,10 +75,12 @@ struct if_connections {
 	int master:1, slave:1;
 };
 
-extern void init_if_connections(struct if_connections *ics);
 extern struct connect_info *insert(struct if_connections *ics,
 				   struct sk_buff *skb,
 				   uint32_t flags);
-extern void destroy_connections(struct if_connections *ics, uint32_t flags);
+extern struct if_connections *alloc_if_connections(struct colo_idx *idx,
+						   int flags);
+extern void free_if_connections(struct if_connections *ics, int flags);
+extern void connections_init(void);
 
 #endif
