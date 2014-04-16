@@ -62,7 +62,10 @@ module_param(ignore_tcp_doff, bool, 0644);
 MODULE_PARM_DESC(ignore_tcp_doff, "ignore tcp doff's difference");
 
 struct tcp_compare_info {
-	struct net_device *dev;
+	union {
+		struct net_device *dev;
+		uint32_t reserved_dev[2];
+	};
 	uint32_t skb_iif;
 	uint32_t snd_nxt;
 	uint32_t rcv_nxt;
@@ -74,6 +77,8 @@ struct tcp_compare_info {
 	uint16_t sent_flags;
 	uint16_t sent_window;
 	uint32_t sent_rcv_nxt;
+
+	/* add new members here */
 	uint32_t reserved[23];
 };
 
