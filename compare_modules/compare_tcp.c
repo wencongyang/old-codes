@@ -61,6 +61,8 @@ bool ignore_tcp_doff = 1;
 module_param(ignore_tcp_doff, bool, 0644);
 MODULE_PARM_DESC(ignore_tcp_doff, "ignore tcp doff's difference");
 
+//#define DEBUG_COMPARE_MORE_TCP
+
 struct tcp_compare_info {
 	union {
 		struct net_device *dev;
@@ -680,20 +682,46 @@ skip2:
 	return 0;
 }
 
+#ifdef DEBUG_COMPARE_MORE_TCP
+#define RETURN(value)			\
+	do {				\
+		saved_ret = value;	\
+	} while (0)
+#else
+#define RETURN(value)			\
+	do {				\
+		return value;		\
+	} while (0)
+#endif
+
+#define CHECK_BEFORE_FINISH		\
+	do {				\
+		if (saved_ret)		\
+			goto out;	\
+	} while (0)
+
+#define RETURN_FINISH(value)			\
+	do {					\
+		if (saved_ret)			\
+			return saved_ret;	\
+		else				\
+			return value;		\
+	} while (0)
+
 static int
 tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 		   struct tcp_hdr_info *m_tcp_hinfo,
 		   struct tcp_hdr_info *s_tcp_hinfo)
 {
 	uint8_t m_flags, s_flags;
-	uint32_t ret = 0;
+	uint32_t ret = 0, saved_ret = 0;
 
 #define compare(elem)								\
 	do {									\
 		if (unlikely(m_cinfo->tcp->elem != s_cinfo->tcp->elem)) {	\
 			pr_warn("HA_compare: tcp header's %s is different\n",	\
 				#elem);						\
-			return CHECKPOINT | UPDATE_COMPARE_INFO;		\
+			RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);		\
 		}								\
 	} while (0)
 
@@ -729,7 +757,7 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 			s_seq -= 1;
 		if (unlikely(m_seq != s_seq)) {
 			pr_warn("HA_compare: tcp header's seq is different\n");
-			return CHECKPOINT | UPDATE_COMPARE_INFO;
+			RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 		}
 	} else
 		compare(seq);
@@ -739,20 +767,20 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 	s_flags = *(uint8_t *)((char *)s_cinfo->tcp + 13);
 	if ((m_flags & TCP_CMP_FLAGS_MASK) != (s_flags & TCP_CMP_FLAGS_MASK)) {
 		pr_warn("HA_compare: tcp header's flags is different\n");
-		return CHECKPOINT | UPDATE_COMPARE_INFO;
+		RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 	}
 
 	if (!ignore_tcp_psh) {
 		if (m_cinfo->tcp->psh != s_cinfo->tcp->psh) {
 			pr_warn("HA_compare: tcp header's flags is different\n");
-			return CHECKPOINT | UPDATE_COMPARE_INFO;
+			RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 		}
 	}
 
 	if (!ignore_tcp_fin) {
 		if (m_cinfo->tcp->fin != s_cinfo->tcp->fin) {
 			pr_warn("HA_compare: tcp header's flags is different\n");
-			return CHECKPOINT | UPDATE_COMPARE_INFO;
+			RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 		}
 	}
 
@@ -775,7 +803,7 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 				  s_cinfo->ip_data + s_cinfo->tcp->doff * 4);
 	if (ret) {
 		pr_warn("HA_compare: tcp header's options are different\n");
-		return CHECKPOINT | UPDATE_COMPARE_INFO;
+		RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 	}
 
 	/* tcp window size */
@@ -788,6 +816,8 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 	}
 
 #undef compare
+
+	CHECK_BEFORE_FINISH;
 
 	update_tcp_compare_info(TCP_CMP_INFO(m_cinfo), m_tcp_hinfo,
 				m_cinfo->skb);
@@ -810,7 +840,8 @@ out:
 		update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), s_tcp_hinfo,
 					s_cinfo->skb);
 	}
-	return ret;
+
+	RETURN_FINISH(ret);
 }
 
 /* The caller call this function only when tcp_compare_header() returns SAME_PACKET */
