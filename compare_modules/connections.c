@@ -12,6 +12,7 @@
  *
  */
 
+#include <linux/module.h>
 #include <linux/ip.h>
 #include <net/ip.h>
 
