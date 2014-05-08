@@ -197,6 +197,7 @@ int cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	//struct _cmp_dev *dev;
 	int ret;
 	int new_mode;
+	unsigned long jiffies;
 
 	//printk("HA_compare: ioctl, cmd=%d, arg=%lx.\n", cmd, arg);
 	//dev = container_of(inode->i_cdev, struct _cmp_dev, cdev);	
@@ -212,7 +213,8 @@ int cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			return -1;
 		}
 #if 1
-		ret = wait_event_interruptible_timeout(queue, state&HASTATE_PENDING, arg);
+		jiffies = msecs_to_jiffies(arg);
+		ret = wait_event_interruptible_timeout(queue, state&HASTATE_PENDING, jiffies);
 		if (ret == 0) {
 #ifdef CHECK_QUEUE
 			/* Timeout */
@@ -279,7 +281,7 @@ int cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		case COMPARE_MODE:
 		case BUFFER_MODE:
 			curr_mode = new_mode;
-			pr_info("HA_compare: swtich to %s mode\n",
+			pr_info("HA_compare: switch to %s mode\n",
 				new_mode == COMPARE_MODE ? "compare" : "buffer");
 		}
 		break;
@@ -653,6 +655,7 @@ void update(int qlen)
 	unsigned int this_loop = 0;
 	int i, j, ib, jb;
 	unsigned int value;
+	int rc;
 	/*
 	 *  Compare starts untill two Qdisc are created.
 	 */
@@ -687,9 +690,6 @@ void update(int qlen)
 			printk("WARINING: too much time.\n");
 			//break;
 		}*/
-
-		if (curr_mode == BUFFER_MODE)
-			break;
 
 		if ( test_bit(HASTATE_INCHECKPOINT_NR, &state) ) {
 			//if (id != -1)
@@ -756,7 +756,9 @@ void update(int qlen)
 		spin_unlock(&slaver_queue->qlock_blo);
 		spin_unlock(&master_queue->qlock_blo);
 
-		if (same(skb_m, skb_s)) {
+		rc = same(skb_m, skb_s);
+
+		if (rc && (curr_mode == COMPARE_MODE)) {
 			/*
 			 *  Packets are the same, put skb_m to master_queue->rel for releasing,
 			 *  and also put skb_s to slaver_queue->rel, it will be freed by enqueue
@@ -779,6 +781,14 @@ void update(int qlen)
 			netif_schedule_queue(master_queue->sch->dev_queue);
 			netif_schedule_queue(slaver_queue->sch->dev_queue);
 			//printk("netif_schedule%u.\n", cnt);	
+		} else if (rc) {
+			/* buffer mode */
+			spin_lock(&wqlock);
+			__skb_queue_tail(&wait_for_release, skb_m);
+			spin_unlock(&wqlock);
+
+			slaver_queue->sch->qstats.backlog -= qdisc_pkt_len(skb_s);
+			kfree_skb(skb_s);
 		} else {
 			/*
 			 *  Put makster's skb to temporary queue, drop slaver's.

@@ -2169,7 +2169,19 @@ start_ck:
         }
     } else {
         /* buffer mode */
-        usleep(interval_us);
+        err = ioctl(dev_fd, COMP_IOCTWAIT, interval_us/1000);
+        if (err == 0) {
+            /* checkpoint */
+            usleep(interval_us);
+        } else {
+            if (errno != ETIME) {
+                /* not timeout */
+                usleep(interval_us);
+            } else {
+                printf("timeout\n");
+            }
+        }
+        err = 0;
     }
 #else
 		printf("pause:");
