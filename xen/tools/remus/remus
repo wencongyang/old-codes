@@ -6,12 +6,15 @@
 #
 # TODO: fencing.
 
-import optparse, os, re, select, signal, sys, time
+import optparse, os, re, select, signal, sys, time, string
 
 from xen.remus import save, util, vm
 from xen.remus.device import ReplicatedDisk, ReplicatedDiskException
 from xen.remus.device import BufferedNIC, BufferedNICException
 from xen.xend import XendOptions
+
+import xen.lowlevel.xc
+xc = xen.lowlevel.xc.xc()
 
 class CfgException(Exception): pass
 
@@ -71,6 +74,7 @@ class SignalException(Exception): pass
 def run(cfg):
     closure = lambda: None
     closure.cmd = None
+    closure.interval_ms = 0
 
     def sigexception(signo, frame):
         raise SignalException(signo)
@@ -95,13 +99,19 @@ def run(cfg):
           r2: die after preresume hook
           c: die prior to commit hook
           c2: die after commit hook
+          colo: colo mode
+          buffer: buffer mode(need argument)
           """
         r, w, x = select.select([sys.stdin], [], [], 0)
         if sys.stdin not in r:
             return
 
         cmd = sys.stdin.readline().strip()
-        if cmd not in ('s', 's2', 'r', 'r2', 'c', 'c2'):
+        m = re.match('^(buffer) +([0-9])+$', cmd)
+        if m is not None:
+            closure.interval_ms = string.atoi(m.group(2))
+            cmd = m.group(1)
+        if cmd not in ('s', 's2', 'r', 'r2', 'c', 'c2', 'colo', 'buffer'):
             print "unknown command: %s" % cmd
         closure.cmd = cmd
 
@@ -159,6 +169,13 @@ def run(cfg):
 
         if closure.cmd == 'r2':
             die()
+
+        if closure.cmd in ('colo', 'buffer'):
+            if closure.cmd == 'colo':
+                mode = 0
+            else:
+                mode = 1
+            xc.update_colo_mode(mode, closure.interval_ms);
 
     def commit():
         'commit network buffer'
