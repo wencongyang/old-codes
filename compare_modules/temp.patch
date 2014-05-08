@@ -1,0 +1,45 @@
+diff --git a/compare_modules/HA_compare_1.c b/compare_modules/HA_compare_1.c
+index cc845b1..9deb5da 100644
+--- a/compare_modules/HA_compare_1.c
++++ b/compare_modules/HA_compare_1.c
+@@ -33,6 +33,12 @@ int fail = 0;
+ #define COMP_IOCTWAIT 		_IO(COMP_IOC_MAGIC, 0)
+ #define COMP_IOCTSUSPEND 	_IO(COMP_IOC_MAGIC, 1)
+ #define COMP_IOCTRESUME 	_IO(COMP_IOC_MAGIC, 2)
++#define COMP_IOCT_SWITCH	_IO(COMP_IOC_MAGIC, 3)
++
++enum colo_mode {
++	COMPARE_MODE,
++	BUFFER_MODE,
++} curr_mode;
+ 
+ struct proc_dir_entry* proc_entry;
+ struct statistic_data {
+@@ -264,6 +270,17 @@ int cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 		//update(); // VMs are running at this point, trigger a comparision in case
+ 			  // there are allready packets in queues.
+ 		break;
++	case COMP_IOCT_SWITCH:
++		new_mode = arg;
++		switch(new_mode) {
++		default:
++			return -EINVAL;
++		case COMPARE_MODE:
++		case BUFFER_MODE:
++			curr_mode = new_mode;
++			pr_info("HA_compare: swtich to %s mode\n",
++				new_mode == COMPARE_MODE ? "compare" : "buffer");
++		}
+ 	}
+ 
+ 	return 0;	
+@@ -669,6 +686,9 @@ void update(int qlen)
+ 			//break;
+ 		}*/
+ 
++		if (curr_mode == BUFFER_MODE)
++			break;
++
+ 		if ( test_bit(HASTATE_INCHECKPOINT_NR, &state) ) {
+ 			//if (id != -1)
+ 			//	printk("HA_compare: ignore skb in checkpoint.\n");
