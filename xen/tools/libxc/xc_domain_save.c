@@ -2325,6 +2325,7 @@ int update_colo_mode(int new_mode, int interval_ms)
         interval_us = interval_ms * 1000;
     case COMPARE_MODE:
         curr_mode = new_mode;
+        break;
     default:
         return -EINVAL;
     }

@@ -107,7 +107,7 @@ def run(cfg):
             return
 
         cmd = sys.stdin.readline().strip()
-        m = re.match('^(buffer) +([0-9])+$', cmd)
+        m = re.match('^(buffer) +([0-9]+)$', cmd)
         if m is not None:
             closure.interval_ms = string.atoi(m.group(2))
             cmd = m.group(1)
@@ -175,7 +175,8 @@ def run(cfg):
                 mode = 0
             else:
                 mode = 1
-            xc.update_colo_mode(mode, closure.interval_ms);
+            xc.update_colo_mode(mode, closure.interval_ms)
+            closure.cmd = None
 
     def commit():
         'commit network buffer'
