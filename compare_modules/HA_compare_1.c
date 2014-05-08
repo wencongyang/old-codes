@@ -33,6 +33,12 @@ int fail = 0;
 #define COMP_IOCTWAIT 		_IO(COMP_IOC_MAGIC, 0)
 #define COMP_IOCTSUSPEND 	_IO(COMP_IOC_MAGIC, 1)
 #define COMP_IOCTRESUME 	_IO(COMP_IOC_MAGIC, 2)
+#define COMP_IOCT_SWITCH	_IO(COMP_IOC_MAGIC, 3)
+
+enum colo_mode {
+	COMPARE_MODE,
+	BUFFER_MODE,
+} curr_mode;
 
 struct proc_dir_entry* proc_entry;
 struct statistic_data {
@@ -190,6 +196,7 @@ int cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	//struct _cmp_dev *dev;
 	int ret;
+	int new_mode;
 
 	//printk("HA_compare: ioctl, cmd=%d, arg=%lx.\n", cmd, arg);
 	//dev = container_of(inode->i_cdev, struct _cmp_dev, cdev);	
@@ -263,6 +270,18 @@ int cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		//state &= ~HASTATE_INCHECKPOINT; // compare process will begin
 		//update(); // VMs are running at this point, trigger a comparision in case
 			  // there are allready packets in queues.
+		break;
+	case COMP_IOCT_SWITCH:
+		new_mode = arg;
+		switch(new_mode) {
+		default:
+			return -EINVAL;
+		case COMPARE_MODE:
+		case BUFFER_MODE:
+			curr_mode = new_mode;
+			pr_info("HA_compare: swtich to %s mode\n",
+				new_mode == COMPARE_MODE ? "compare" : "buffer");
+		}
 		break;
 	}
 
@@ -668,6 +687,9 @@ void update(int qlen)
 			printk("WARINING: too much time.\n");
 			//break;
 		}*/
+
+		if (curr_mode == BUFFER_MODE)
+			break;
 
 		if ( test_bit(HASTATE_INCHECKPOINT_NR, &state) ) {
 			//if (id != -1)
