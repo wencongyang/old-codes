@@ -223,4 +223,11 @@ xen_pfn_t *xc_map_m2p(xc_interface *xch,
                       unsigned long max_mfn,
                       int prot,
                       unsigned long *mfn0);
+
+enum colo_mode {
+    COMPARE_MODE,
+    BUFFER_MODE,
+};
+extern int update_colo_mode(int new_mode, int time_ms);
+
 #endif /* XENGUEST_H */

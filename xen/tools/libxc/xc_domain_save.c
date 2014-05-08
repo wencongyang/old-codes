@@ -48,6 +48,9 @@
 #define NR_vif_block		313
 #define NR_reset_suspend_count	314
 
+static int curr_mode = COMPARE_MODE;
+static uint64_t interval_us;
+
 /*
 ** Default values for important tuning parameters. Can override by passing
 ** non-zero replacement values to xc_domain_save().
@@ -2152,15 +2155,20 @@ start_ck:
 
     fprintf(stat_fp, "%lu.%06lu\n", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
 #ifdef NET_FW
-    while (1) {
-        err = ioctl(dev_fd, COMP_IOCTWAIT);
-        if (err == 0 || err == -1)
-            break;
-        if (callbacks->check) {
-            err = callbacks->check(callbacks->data);
-            if (err)
+    if (curr_mode == COMPARE_MODE) {
+        while (1) {
+            err = ioctl(dev_fd, COMP_IOCTWAIT);
+            if (err == 0 || err == -1)
                 break;
+            if (callbacks->check) {
+                err = callbacks->check(callbacks->data);
+                if (err)
+                    break;
+            }
         }
+    } else {
+        /* buffer mode */
+        usleep(interval_us);
     }
 #else
 		printf("pause:");
@@ -2304,6 +2312,21 @@ sigintr:
 
     fclose(stat_fp);
     return !!rc;
+}
+
+int update_colo_mode(int new_mode, int interval_ms)
+{
+    switch(new_mode)
+    {
+    case BUFFER_MODE:
+        interval_us = interval_ms * 1000;
+    case COMPARE_MODE:
+        curr_mode = new_mode;
+    default:
+        return -EINVAL;
+    }
+
+    return 0;
 }
 
 /*
