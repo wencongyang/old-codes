@@ -2283,6 +2283,21 @@ static PyObject *pyflask_access(PyObject *self, PyObject *args,
     return Py_BuildValue("i",ret);
 }
 
+static PyObject *pyupdate_colo_mode(XcObject *self, PyObject *args)
+{
+    uint32_t new_mode;
+    uint32_t interval_ms;
+
+    if (!PyArg_ParseTuple(args, "ii", &new_mode, &interval_ms))
+        return NULL;
+
+    if (update_colo_mode(new_mode, interval_ms) != 0)
+        return NULL;
+
+    Py_INCREF(zero);
+    return zero;
+}
+
 static PyMethodDef pyxc_methods[] = {
     { "domain_create", 
       (PyCFunction)pyxc_domain_create, 
@@ -2929,6 +2944,10 @@ static PyMethodDef pyxc_methods[] = {
       " seqno [int] not used\n"
       "Returns: [int]: 0 on all permission granted; -1 if any permissions are \
        denied\n" }, 
+
+    { "update_colo_mode",
+      (PyCFunction)pyupdate_colo_mode,
+      METH_VARARGS, "update colo mode\n"},
 
     { NULL, NULL, 0, NULL }
 };
