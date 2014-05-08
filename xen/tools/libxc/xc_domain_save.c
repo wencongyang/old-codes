@@ -44,12 +44,14 @@
 #define COMP_IOCTWAIT		_IO(COMP_IOC_MAGIC, 0)
 #define COMP_IOCTSUSPEND	_IO(COMP_IOC_MAGIC, 1)
 #define COMP_IOCTRESUME		_IO(COMP_IOC_MAGIC, 2)
+#define COMP_IOCT_SWITCH    _IO(COMP_IOC_MAGIC, 3)
 #define NR_wait_resume		312
 #define NR_vif_block		313
 #define NR_reset_suspend_count	314
 
 static int curr_mode = COMPARE_MODE;
 static uint64_t interval_us;
+static int dev_fd = -1;
 
 /*
 ** Default values for important tuning parameters. Can override by passing
@@ -1082,7 +1084,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int first_time = 1;
 
     char sig_buf[20];
-    int dev_fd=0;
     int err;
     struct timeval tv;
     fd_set rfds;
@@ -2316,6 +2317,8 @@ sigintr:
 
 int update_colo_mode(int new_mode, int interval_ms)
 {
+    int rc;
+
     switch(new_mode)
     {
     case BUFFER_MODE:
@@ -2325,6 +2328,13 @@ int update_colo_mode(int new_mode, int interval_ms)
     default:
         return -EINVAL;
     }
+
+    if (dev_fd < 0)
+        return -EBUSY;
+
+    rc = ioctl(dev_fd, COMP_IOCT_SWITCH, new_mode);
+    if (rc < 0)
+        return -errno;
 
     return 0;
 }
