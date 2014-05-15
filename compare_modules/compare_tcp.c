@@ -61,9 +61,11 @@ bool ignore_tcp_doff = 1;
 module_param(ignore_tcp_doff, bool, 0644);
 MODULE_PARM_DESC(ignore_tcp_doff, "ignore tcp doff's difference");
 
-//#define DEBUG_COMPARE_MORE_TCP
+bool ignore_tcp_dlen = 1;
+module_param(ignore_tcp_dlen, bool, 0644);
+MODULE_PARM_DESC(ignore_tcp_dlen, "ignore tcp payload's length");
 
-bool ignore_tcp_dlen = 0;
+//#define DEBUG_COMPARE_MORE_TCP
 
 struct tcp_compare_info {
 	union {
@@ -757,11 +759,11 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 			m_seq -= 1;
 		if (TCP_CMP_INFO(s_cinfo)->flags & FIN)
 			s_seq -= 1;
-		if (unlikely(m_seq != s_seq)) {
+		if (unlikely(m_seq != s_seq) && !ignore_tcp_dlen) {
 			pr_warn("HA_compare: tcp header's seq is different\n");
 			RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 		}
-	} else
+	} else if (!ignore_tcp_dlen)
 		compare(seq);
 
 	/* flags */
@@ -914,7 +916,7 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 
 	m_len = m_cinfo->length - m_cinfo->tcp->doff * 4;
 	s_len = s_cinfo->length - s_cinfo->tcp->doff * 4;
-	if (m_len != s_len) {
+	if (!ignore_tcp_dlen && (m_len != s_len)) {
 		pr_warn("HA_compare: tcp data's len is different\n");
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
@@ -929,6 +931,7 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 			s_cinfo->tcp_data += m_tcp_hinfo.seq - s_tcp_hinfo.seq;
 			s_len -= m_tcp_hinfo.seq - s_tcp_hinfo.seq;
 		}
+		m_len = min(m_len, s_len);
 	}
 	ret = default_compare_data(m_cinfo->tcp_data, s_cinfo->tcp_data, m_len);
 	if (ret & CHECKPOINT) {
@@ -979,20 +982,26 @@ tcp_compare_payload(struct compare_info *m_cinfo,
 {
 	struct sk_buff *m_head = m_cinfo->skb, *s_head = s_cinfo->skb;
 	int m_off, s_off;
+	int m_dlen, s_dlen;
 
 	m_off = m_cinfo->tcp->doff * 4;
 	s_off = s_cinfo->tcp->doff * 4;
+	m_dlen = m_cinfo->length - m_off;
+	s_dlen = s_cinfo->length - s_off;
 
 	if (ignore_tcp_dlen) {
-		if (before(m_tcp_hinfo->seq, s_tcp_hinfo->seq))
+		if (before(m_tcp_hinfo->seq, s_tcp_hinfo->seq)) {
 			m_off += s_tcp_hinfo->seq - m_tcp_hinfo->seq;
-		else
+			m_dlen -= s_tcp_hinfo->seq - m_tcp_hinfo->seq;
+		} else {
 			s_off += m_tcp_hinfo->seq - s_tcp_hinfo->seq;
-	} else if (m_cinfo->length - m_off != s_cinfo->length - s_off)
+			s_dlen -= m_tcp_hinfo->seq - s_tcp_hinfo->seq;
+		}
+	} else if (m_dlen != s_dlen)
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 
 	return ipv4_transport_compare_fragment(m_head, s_head, m_off, s_off,
-					       m_cinfo->length - m_off);
+					       min(m_dlen, s_dlen));
 }
 
 static uint32_t
