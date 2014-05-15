@@ -961,6 +961,20 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 			s_cinfo->tcp_data += m_tcp_hinfo.seq - s_tcp_hinfo.seq;
 			s_len -= m_tcp_hinfo.seq - s_tcp_hinfo.seq;
 		}
+
+		if (m_len < s_len) {
+			/*
+			 * The packet from slave contains some data that is not
+			 * compared this time
+			 */
+			saved_ret &= ~DROP_SLAVER;
+		} else if (m_len > s_len) {
+			/*
+			 * The packet from master contains some data that is not
+			 * compared this time
+			 */
+			saved_ret &= ~(BYPASS_MASTER | UPDATE_MASTER_PACKET);
+		}
 		m_len = min(m_len, s_len);
 	}
 	ret = default_compare_data(m_cinfo->tcp_data, s_cinfo->tcp_data, m_len);
@@ -1008,7 +1022,8 @@ static uint32_t
 tcp_compare_payload(struct compare_info *m_cinfo,
 		    struct compare_info *s_cinfo,
 		    struct tcp_hdr_info *m_tcp_hinfo,
-		    struct tcp_hdr_info *s_tcp_hinfo)
+		    struct tcp_hdr_info *s_tcp_hinfo,
+		    uint32_t *saved_ret)
 {
 	struct sk_buff *m_head = m_cinfo->skb, *s_head = s_cinfo->skb;
 	int m_off, s_off;
@@ -1026,6 +1041,20 @@ tcp_compare_payload(struct compare_info *m_cinfo,
 		} else {
 			s_off += m_tcp_hinfo->seq - s_tcp_hinfo->seq;
 			s_dlen -= m_tcp_hinfo->seq - s_tcp_hinfo->seq;
+		}
+
+		if (m_dlen < s_dlen) {
+			/*
+			 * The packet from slave contains some data that is not
+			 * compared this time
+			 */
+			*saved_ret &= ~DROP_SLAVER;
+		} else if (m_dlen > s_dlen) {
+			/*
+			 * The packet from master contains some data that is not
+			 * compared this time
+			 */
+			*saved_ret &= ~(BYPASS_MASTER | UPDATE_MASTER_PACKET);
 		}
 	} else if (m_dlen != s_dlen)
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
@@ -1074,7 +1103,8 @@ tcp_compare_fragment(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 
 	saved_ret = ret;
 
-	ret = tcp_compare_payload(m_cinfo, s_cinfo, &m_tcp_hinfo, &s_tcp_hinfo);
+	ret = tcp_compare_payload(m_cinfo, s_cinfo, &m_tcp_hinfo, &s_tcp_hinfo,
+				  &saved_ret);
 	if (ret & CHECKPOINT)
 		goto out;
 
