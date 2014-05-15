@@ -80,11 +80,12 @@ static void debug_print_ip(const struct compare_info *cinfo,
 	const ipv4_compare_ops_t * ops;
 
 	pr_warn("HA_compare:[IP]len = %u, id= %u.\n", len, id);
+	len -= ip->ihl * 4;
 
 	rcu_read_lock();
 	ops = rcu_dereference(compare_inet_ops[protocol]);
 	if (ops && ops->debug_print)
-		ops->debug_print(cinfo, data);
+		ops->debug_print(cinfo, data, len);
 	else
 		pr_warn("HA_compare: unknown protocol: %u\n", protocol);
 	rcu_read_unlock();

@@ -66,6 +66,7 @@ module_param(ignore_tcp_dlen, bool, 0644);
 MODULE_PARM_DESC(ignore_tcp_dlen, "ignore tcp payload's length");
 
 //#define DEBUG_COMPARE_MORE_TCP
+//#define DEBUG_TCP_DATA
 
 struct tcp_compare_info {
 	union {
@@ -155,7 +156,33 @@ static void debug_print_tcp_header(const unsigned char *n, unsigned int doff)
 	}
 }
 
-static void debug_print_tcp(const struct compare_info *info, const void *data)
+#ifdef DEBUG_TCP_DATA
+static void debug_print_tcp_payload(const void *payload, const int length)
+{
+	int i;
+	const char *n = payload;
+
+	for (i = 0; i < length / 8; i += 8) {
+		pr_warn("HA_compare: %02x %02x %02x %02x\t%02x %02x %02x %02x\n",
+			n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7]);
+		n += 8;
+	}
+
+	if (length % 8 != 0) {
+		pr_warn("HA_compare:");
+		for (i = 0; i < length % 8; i++)
+			pr_cont(" %02x", n[i]);
+		pr_cont("\n");
+	}
+}
+#else
+static void debug_print_tcp_payload(const void *payload, const int length)
+{
+}
+#endif
+
+static void debug_print_tcp(const struct compare_info *info, const void *data,
+			    int length)
 {
 	unsigned int ack, seq;
 	unsigned int doff;
@@ -178,6 +205,9 @@ static void debug_print_tcp(const struct compare_info *info, const void *data)
 
 	doff = tcp->doff * 4;
 	debug_print_tcp_header(data, doff);
+
+	length -= doff;
+	debug_print_tcp_payload((const char *)data + doff, length);
 }
 
 static void

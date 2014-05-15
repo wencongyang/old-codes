@@ -18,7 +18,8 @@
 #include "compare.h"
 #include "compare_ipv4.h"
 
-static void debug_print_udp(const struct compare_info *info, const void *data)
+static void debug_print_udp(const struct compare_info *info, const void *data,
+			    int length)
 {
 	const struct udphdr *udp = data;
 	unsigned short src_port, dst_port;

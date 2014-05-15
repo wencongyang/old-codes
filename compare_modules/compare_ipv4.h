@@ -30,7 +30,8 @@ typedef struct ipv4_compare_ops {
 			      struct compare_info *s_cinfo,
 			      uint32_t ret);
 	void (*flush_packets)(void *info);
-	void (*debug_print)(const struct compare_info *cinfo, const void *data);
+	void (*debug_print)(const struct compare_info *cinfo, const void *data,
+			    int length);
 } ipv4_compare_ops_t;
 
 extern int register_ipv4_compare_ops(ipv4_compare_ops_t *ops,

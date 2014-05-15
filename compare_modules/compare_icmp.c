@@ -19,7 +19,8 @@
 #include "compare.h"
 #include "compare_ipv4.h"
 
-static void debug_print_icmp(const struct compare_info *cinfo, const void *data)
+static void debug_print_icmp(const struct compare_info *cinfo, const void *data,
+			     int length)
 {
 	const struct icmphdr *icmp = data;
 
