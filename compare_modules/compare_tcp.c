@@ -793,7 +793,7 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 			pr_warn("HA_compare: tcp header's seq is different\n");
 			RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 		}
-	} else if (!ignore_tcp_dlen)
+	} else if (!ignore_tcp_dlen || (m_tcp_hinfo->flags & SYN))
 		compare(seq);
 
 	/* flags */
