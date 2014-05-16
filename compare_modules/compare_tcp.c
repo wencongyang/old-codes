@@ -853,11 +853,6 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 
 	CHECK_BEFORE_FINISH;
 
-	update_tcp_compare_info(TCP_CMP_INFO(m_cinfo), m_tcp_hinfo,
-				m_cinfo->skb);
-	update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), s_tcp_hinfo,
-				s_cinfo->skb);
-
 	if (ignore_tcp_doff)
 		return SAME_PACKET | UPDATE_MASTER_PACKET | IGNORE_LEN;
 	else
@@ -865,15 +860,8 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 
 out:
 	/* Retransmitted packet or ack only packet */
-	if (ret & BYPASS_MASTER) {
-		update_tcp_compare_info(TCP_CMP_INFO(m_cinfo), m_tcp_hinfo,
-					m_cinfo->skb);
+	if (ret & BYPASS_MASTER)
 		ret |= UPDATE_MASTER_PACKET;
-	}
-	if (ret & DROP_SLAVER) {
-		update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), s_tcp_hinfo,
-					s_cinfo->skb);
-	}
 
 	RETURN_FINISH(ret);
 }
@@ -937,10 +925,10 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 
 	ret = tcp_compare_header(m_cinfo, s_cinfo, &m_tcp_hinfo, &s_tcp_hinfo);
 	if ((ret & SAME_PACKET) != SAME_PACKET)
-		return ret;
+		goto update_cinfo;
 
 	if (!tcp_need_compare_data(&m_tcp_hinfo, &s_tcp_hinfo))
-		return ret;
+		goto update_cinfo;
 
 	saved_ret = ret;
 
@@ -982,8 +970,18 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 		pr_warn("HA_compare: tcp data is different\n");
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
+	ret = saved_ret;
 
-	return saved_ret;
+update_cinfo:
+	if (ret & BYPASS_MASTER) {
+		update_tcp_compare_info(TCP_CMP_INFO(m_cinfo), &m_tcp_hinfo,
+					m_cinfo->skb);
+	}
+	if (ret & DROP_SLAVER) {
+		update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), &s_tcp_hinfo,
+					s_cinfo->skb);
+	}
+	return ret;
 }
 
 #define IP_DATA(skb)	(void *)(ip_hdr(skb)->ihl * 4 + (char *)ip_hdr(skb))
@@ -1096,10 +1094,10 @@ tcp_compare_fragment(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 
 	ret = tcp_compare_header(m_cinfo, s_cinfo, &m_tcp_hinfo, &s_tcp_hinfo);
 	if ((ret & SAME_PACKET) != SAME_PACKET)
-		goto out;
+		goto update_cinfo;
 
 	if (!tcp_need_compare_data(&m_tcp_hinfo, &s_tcp_hinfo))
-		goto out;
+		goto update_cinfo;
 
 	saved_ret = ret;
 
@@ -1109,6 +1107,16 @@ tcp_compare_fragment(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 		goto out;
 
 	ret = saved_ret;
+
+update_cinfo:
+	if (ret & BYPASS_MASTER) {
+		update_tcp_compare_info(TCP_CMP_INFO(m_cinfo), &m_tcp_hinfo,
+					m_cinfo->skb);
+	}
+	if (ret & DROP_SLAVER) {
+		update_tcp_compare_info(TCP_CMP_INFO(s_cinfo), &s_tcp_hinfo,
+					s_cinfo->skb);
+	}
 
 out:
 	if (m_tcp)
