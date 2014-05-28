@@ -91,8 +91,20 @@ def run(cfg):
         print "dying..."
         print util.runcmd(['sudo', 'ifdown', 'eth2'])
         # dangling imq0 handle on vif locks up the system
-        for buf in bufs:
-            buf.uninstall()
+        if cfg.colo:
+            vifno = 0
+            pvdrv = check_pvdrv()
+            for vif in dom.vifs:
+                if not pvdrv:
+                    vifstr = 'tap%d.%d' % (dom.dom['domid'], vifno)
+                    vifno += 1
+                else:
+                    vifstr = vif.dev
+                print "teardown %s" % vifstr
+                print util.runcmd(['/etc/xen/scripts/network-colo', 'master', 'install', vifstr, 'eth0'])
+        else:
+            for buf in bufs:
+                buf.uninstall()
         print util.runcmd(['sudo', 'xm', 'destroy', cfg.domid])
         print util.runcmd(['sudo', 'ifup', 'eth2'])
         sys.exit(1)
