@@ -95,6 +95,7 @@ def run(cfg):
             buf.uninstall()
         print util.runcmd(['sudo', 'xm', 'destroy', cfg.domid])
         print util.runcmd(['sudo', 'ifup', 'eth2'])
+        sys.exit(1)
 
     def getcommand():
         """Get a command to execute while running.
