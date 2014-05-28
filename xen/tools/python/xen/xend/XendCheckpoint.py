@@ -340,7 +340,12 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
             # In colo mode, the vm is resumed in xc_restore
             restoreHandler.resume(True, paused, None)
         else:
-            util.runcmd("/etc/xen/scripts/network-colo slaver uninstall vif%d.0 eth0" % dominfo.getDomid());
+            if is_hvm:
+                pvdrv = xc.hvm_get_param(dominfo.getDomid(), HVM_PARAM_CALLBACK_IRQ)
+            if is_hvm and not pvdrv:
+                util.runcmd("/etc/xen/scripts/network-colo slaver uninstall tap%d.0 eth0" % dominfo.getDomid());
+            else:
+                util.runcmd("/etc/xen/scripts/network-colo slaver uninstall vif%d.0 eth0" % dominfo.getDomid());
 
         return dominfo
     except Exception, exn:
