@@ -31,6 +31,7 @@
 #include "compare_device.h"
 #include "ip_fragment.h"
 #include "ipv4_fragment.h"
+#include "compare_debugfs.h"
 
 struct task_struct *compare_task;
 
@@ -497,6 +498,10 @@ static int __init compare_module_init(void)
 		goto err_thread;
 	}
 
+	result = colo_debugfs_init();
+	if (result)
+		goto err_debugfs;
+
 	init_waitqueue_head(&queue);
 
 #ifdef DEBUG_COMPARE_MODULE
@@ -510,6 +515,8 @@ static int __init compare_module_init(void)
 
 	return 0;
 
+err_debugfs:
+	kthread_stop(compare_task);
 err_thread:
 	colo_dev_fini();
 
@@ -518,6 +525,8 @@ err_thread:
 
 static void __exit compare_module_exit(void)
 {
+	colo_debugfs_exit();
+
 	kthread_stop(compare_task);
 
 	colo_dev_fini();

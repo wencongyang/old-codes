@@ -4,7 +4,7 @@ obj-m += HA_compare_icmp.o HA_compare_tcp.o HA_compare_udp.o
 obj-m += HA_compare_tcp_bypass.o HA_compare_udp_bypass.o
 
 sch_colo-objs := colo.o connections.o ipv4_fragment.o ip_fragment.o
-HA_compare-objs := compare.o compare_device.o
+HA_compare-objs := compare.o compare_device.o compare_debugfs.o
 
 HA_compare_arp-objs := compare_arp.o
 HA_compare_ipv4-objs := compare_ipv4.o
