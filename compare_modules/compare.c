@@ -38,9 +38,13 @@ struct task_struct *compare_task;
 #define DEBUG_COMPARE_MODULE
 #ifdef DEBUG_COMPARE_MODULE
 struct statistic_data {
-	unsigned int compare_count;
+	unsigned long long compare_count;
 	unsigned long long total_time;
 	unsigned long long max_time;
+
+	struct dentry *compare_count_entry;
+	struct dentry *total_time_entry;
+	struct dentry *max_time_entry;
 } statis;
 #endif
 
@@ -410,6 +414,77 @@ static int compare_kthread(void *data)
 	return 0;
 }
 
+#ifdef DEBUG_COMPARE_MODULE
+static void remove_statis_file(void)
+{
+	if (statis.compare_count_entry) {
+		colo_remove_file(statis.compare_count_entry);
+		statis.compare_count_entry = NULL;
+	}
+
+	if (statis.max_time_entry) {
+		colo_remove_file(statis.max_time_entry);
+		statis.max_time_entry = NULL;
+	}
+
+	if (statis.total_time_entry) {
+		colo_remove_file(statis.total_time_entry);
+		statis.total_time_entry = NULL;
+	}
+}
+
+static int __init create_statis_file(void)
+{
+	struct dentry *entry;
+	int ret = 0;
+
+	entry = colo_create_file("compare_count",
+				 &colo_u64_ops,
+				 NULL,
+				 &statis.compare_count);
+	if (!entry) {
+		ret = -ENOMEM;
+		goto err;
+	} else if (IS_ERR(entry)) {
+		ret = PTR_ERR(entry);
+		goto err;
+	}
+	statis.compare_count_entry = entry;
+
+	entry = colo_create_file("total_time",
+				 &colo_u64_ops,
+				 NULL,
+				 &statis.total_time);
+	if (!entry) {
+		ret = -ENOMEM;
+		goto err;
+	} else if (IS_ERR(entry)) {
+		ret = PTR_ERR(entry);
+		goto err;
+	}
+	statis.total_time_entry = entry;
+
+	entry = colo_create_file("max_time",
+				 &colo_u64_ops,
+				 NULL,
+				 &statis.max_time);
+	if (!entry) {
+		ret = -ENOMEM;
+		goto err;
+	} else if (IS_ERR(entry)) {
+		ret = PTR_ERR(entry);
+		goto err;
+	}
+	statis.max_time_entry = entry;
+
+	return 0;
+
+err:
+	remove_statis_file();
+	return ret;
+}
+#endif
+
 static int __init compare_module_init(void)
 {
 	int result;
@@ -444,12 +519,22 @@ static int __init compare_module_init(void)
 		goto err_add_status_file;
 	}
 
+#ifdef DEBUG_COMPARE_MODULE
+	result = create_statis_file();
+	if (result)
+		goto err_create_statis_file;
+#endif
+
 	init_waitqueue_head(&queue);
 
 	wake_up_process(compare_task);
 
 	return 0;
 
+#ifdef DEBUG_COMPARE_MODULE
+err_create_statis_file:
+	colo_remove_file(status_entry);
+#endif
 err_add_status_file:
 	colo_debugfs_exit();
 err_debugfs:
@@ -462,6 +547,10 @@ err_thread:
 
 static void __exit compare_module_exit(void)
 {
+#ifdef DEBUG_COMPARE_MODULE
+	remove_statis_file();
+#endif
+
 	colo_remove_file(status_entry);
 
 	colo_debugfs_exit();
