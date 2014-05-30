@@ -170,8 +170,18 @@ void colo_remove_file(struct dentry *entry)
 {
 	debugfs_remove(entry);
 }
+
+struct dentry * colo_create_dir(const char *name, struct dentry *parent)
+{
+	if (!parent)
+		parent = colo_root_dir;
+
+	return debugfs_create_dir(name, parent);
+}
+
 EXPORT_SYMBOL(colo_create_file);
 EXPORT_SYMBOL(colo_remove_file);
+EXPORT_SYMBOL(colo_create_dir);
 
 struct dentry *colo_add_status_file(const char *name,
 				    struct if_connections **ics)

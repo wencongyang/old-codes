@@ -26,6 +26,11 @@ extern struct dentry * colo_create_file(const char *name,
 					struct dentry *parent,
 					void *data);
 extern void colo_remove_file(struct dentry *entry);
+
+/* use IS_ERR_OR_NULL to check the return value */
+extern struct dentry * colo_create_dir(const char *name,
+				       struct dentry *parent);
+
 extern struct dentry *colo_add_status_file(const char *name,
 					   struct if_connections **ics);
 
