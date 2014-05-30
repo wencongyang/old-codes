@@ -101,6 +101,23 @@ struct tcp_hdr_info {
 	uint16_t window;
 };
 
+static struct {
+	unsigned long long m_error_packet;
+	unsigned long long s_error_packet;
+	unsigned long long other_options;
+	unsigned long long sack;
+	unsigned long long timestamp;
+	unsigned long long seq;
+	unsigned long long other_flags;
+	unsigned long long psh;
+	unsigned long long fin;
+	unsigned long long window;
+	unsigned long long ack_seq;
+	unsigned long long doff;
+	unsigned long long data;
+	unsigned long long data_len;
+} statis;
+
 /* tcp_compare_info & tcp_hdr_info's flags */
 #define		SYN		0x01
 #define		FIN		0x02
@@ -573,8 +590,10 @@ static uint32_t check_ack_only_packet(uint32_t m_flags, uint32_t s_flags,
 
 	/* case 1,3-5 */
 	if (((m_flags & FIN) && (s_flags & HAVE_PAYLOAD)) ||
-	    ((m_flags & HAVE_PAYLOAD) && (s_flags & FIN)))
+	    ((m_flags & HAVE_PAYLOAD) && (s_flags & FIN))) {
+		statis.fin++;
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
+	}
 
 	/* case 2,6-8 */
 	if (m_flags & HAVE_PAYLOAD)
@@ -630,10 +649,26 @@ static void *get_next_opt_by_kind(void *opts, void *end, uint8_t kind)
 	return NULL;
 }
 
+static void update_statis_options(uint8_t opcode)
+{
+	switch(opcode) {
+	case TCPOPT_SACK:
+		statis.sack++;
+		break;
+	case TCPOPT_TIMESTAMP:
+		statis.timestamp++;
+		break;
+	default:
+		statis.other_options++;
+		break;
+	}
+}
+
 static uint32_t compare_opt(uint8_t *m_optr, uint8_t *s_optr)
 {
 	uint8_t m_opcode, m_opsize;
 	uint8_t s_opcode, s_opsize;
+	uint32_t ret;
 
 	m_opcode = *m_optr++;
 	m_opsize = *m_optr++;
@@ -641,20 +676,23 @@ static uint32_t compare_opt(uint8_t *m_optr, uint8_t *s_optr)
 	s_opsize = *s_optr++;
 
 	BUG_ON(m_opcode != s_opcode);
-	if (m_opsize != s_opsize)
-		/* TODO: SACK */
+	if (m_opsize != s_opsize) {
+		update_statis_options(m_opcode);
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
+	}
 
 	if (m_opsize == 2)
 		return 0;
 
-	if (m_opcode != TCPOPT_TIMESTAMP)
-		return memcmp(m_optr, s_optr, m_opsize - 2) ? CHECKPOINT | UPDATE_COMPARE_INFO : 0;
+	if (m_opcode != TCPOPT_TIMESTAMP || !ignore_tcp_timestamp) {
+		ret = memcmp(m_optr, s_optr, m_opsize - 2);
+		if (ret) {
+			update_statis_options(m_opcode);
+			ret = CHECKPOINT | UPDATE_COMPARE_INFO;
+		}
+		return ret;
+	}
 
-	if (!ignore_tcp_timestamp)
-		return memcmp(m_optr, s_optr, m_opsize - 2) ? CHECKPOINT | UPDATE_COMPARE_INFO : 0;
-
-	/* TODO:  TIMESTAMP */
 	return 0;
 }
 
@@ -671,8 +709,10 @@ compare_tcp_options(void *m_opts, void *m_opts_end, void *s_opts, void *s_opts_e
 	if (!m_opt && !s_opt)
 		return 0;
 
-	if (!m_opt || !s_opt)
+	if (!m_opt || !s_opt) {
+		statis.other_options++;
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
+	}
 
 	while (m_optr != NULL) {
 		opcode = *m_optr;
@@ -682,9 +722,10 @@ compare_tcp_options(void *m_opts, void *m_opts_end, void *s_opts, void *s_opts_e
 			goto skip;
 
 		s_optr = get_next_opt_by_kind(s_opt, s_opts_end, opcode);
-		if (!s_optr)
-			/* TODO: SACK */
+		if (!s_optr) {
+			update_statis_options(opcode);
 			return CHECKPOINT | UPDATE_COMPARE_INFO;
+		}
 
 		ret = compare_opt(m_optr, s_optr);
 		if (ret)
@@ -704,9 +745,10 @@ skip:
 			goto skip2;
 
 		m_optr = get_next_opt_by_kind(m_opt, m_opts_end, opcode);
-		if (!m_optr)
-			/* TODO: SACK */
+		if (!m_optr) {
+			update_statis_options(opcode);
 			return CHECKPOINT | UPDATE_COMPARE_INFO;
+		}
 
 skip2:
 		s_optr += opsize;
@@ -755,18 +797,27 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 		if (unlikely(m_cinfo->tcp->elem != s_cinfo->tcp->elem)) {	\
 			pr_warn("HA_compare: tcp header's %s is different\n",	\
 				#elem);						\
+			UPDATE_STATIS(elem);					\
 			RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);		\
 		}								\
 	} while (0)
 
+#define UPDATE_STATIS(elem)
 	/* source port and dest port*/
 	compare(source);
 	compare(dest);
+#undef UPDATE_STATIS
 
-	if (m_tcp_hinfo->flags & ERR_SKB)
+#define UPDATE_STATIS(elem)	statis.elem++
+
+	if (m_tcp_hinfo->flags & ERR_SKB) {
+		statis.m_error_packet++;
 		ret |= BYPASS_MASTER;
-	if (m_tcp_hinfo->flags & ERR_SKB)
+	}
+	if (s_tcp_hinfo->flags & ERR_SKB) {
+		statis.s_error_packet++;
 		ret |= DROP_SLAVER;
+	}
 	if (ret)
 		return ret;
 
@@ -791,6 +842,7 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 			s_seq -= 1;
 		if (unlikely(m_seq != s_seq) && !ignore_tcp_dlen) {
 			pr_warn("HA_compare: tcp header's seq is different\n");
+			statis.seq++;
 			RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 		}
 	} else if (!ignore_tcp_dlen || (m_tcp_hinfo->flags & SYN))
@@ -801,12 +853,14 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 	s_flags = *(uint8_t *)((char *)s_cinfo->tcp + 13);
 	if ((m_flags & TCP_CMP_FLAGS_MASK) != (s_flags & TCP_CMP_FLAGS_MASK)) {
 		pr_warn("HA_compare: tcp header's flags is different\n");
+		statis.other_flags++;
 		RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 	}
 
 	if (!ignore_tcp_psh) {
 		if (m_cinfo->tcp->psh != s_cinfo->tcp->psh) {
 			pr_warn("HA_compare: tcp header's flags is different\n");
+			statis.psh++;
 			RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 		}
 	}
@@ -814,6 +868,7 @@ tcp_compare_header(struct compare_info *m_cinfo, struct compare_info *s_cinfo,
 	if (!ignore_tcp_fin) {
 		if (m_cinfo->tcp->fin != s_cinfo->tcp->fin) {
 			pr_warn("HA_compare: tcp header's flags is different\n");
+			statis.fin++;
 			RETURN(CHECKPOINT | UPDATE_COMPARE_INFO);
 		}
 	}
@@ -936,6 +991,7 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 	s_len = s_cinfo->length - s_cinfo->tcp->doff * 4;
 	if (!ignore_tcp_dlen && (m_len != s_len)) {
 		pr_warn("HA_compare: tcp data's len is different\n");
+		statis.data_len++;
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
 
@@ -968,6 +1024,7 @@ static uint32_t tcp_compare_packet(struct compare_info *m_cinfo,
 	ret = default_compare_data(m_cinfo->tcp_data, s_cinfo->tcp_data, m_len);
 	if (ret & CHECKPOINT) {
 		pr_warn("HA_compare: tcp data is different\n");
+		statis.data++;
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
 	ret = saved_ret;
@@ -1026,6 +1083,7 @@ tcp_compare_payload(struct compare_info *m_cinfo,
 	struct sk_buff *m_head = m_cinfo->skb, *s_head = s_cinfo->skb;
 	int m_off, s_off;
 	int m_dlen, s_dlen;
+	uint32_t ret;
 
 	m_off = m_cinfo->tcp->doff * 4;
 	s_off = s_cinfo->tcp->doff * 4;
@@ -1054,11 +1112,17 @@ tcp_compare_payload(struct compare_info *m_cinfo,
 			 */
 			*saved_ret &= ~(BYPASS_MASTER | UPDATE_MASTER_PACKET);
 		}
-	} else if (m_dlen != s_dlen)
+	} else if (m_dlen != s_dlen) {
+		statis.data_len++;
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
+	}
 
-	return ipv4_transport_compare_fragment(m_head, s_head, m_off, s_off,
-					       min(m_dlen, s_dlen));
+	ret = ipv4_transport_compare_fragment(m_head, s_head, m_off, s_off,
+					      min(m_dlen, s_dlen));
+	if (ret & CHECKPOINT)
+		statis.data++;
+
+	return ret;
 }
 
 static uint32_t
@@ -1075,16 +1139,20 @@ tcp_compare_fragment(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 	    FRAG_CB(m_skb)->len < m_cinfo->tcp->doff * 4) {
 		old_m_tcp = m_cinfo->tcp;
 		m_cinfo->tcp = m_tcp = get_tcphdr(m_skb);
-		if (!m_tcp)
+		if (!m_tcp) {
+			statis.m_error_packet++;
 			goto out;
+		}
 	}
 
 	if (FRAG_CB(s_skb)->len < sizeof(struct tcphdr) ||
 	    FRAG_CB(s_skb)->len < s_cinfo->tcp->doff * 4) {
 		old_s_tcp = s_cinfo->tcp;
 		s_cinfo->tcp = s_tcp = get_tcphdr(s_skb);
-		if (!s_tcp)
+		if (!s_tcp) {
+			statis.s_error_packet++;
 			goto out;
+		}
 	}
 
 	get_tcp_hdr_info(m_cinfo->tcp, m_cinfo->length, TCP_CMP_INFO(m_cinfo),
@@ -1248,8 +1316,10 @@ tcp_compare_one_packet(struct compare_info *m_cinfo,
 	}
 
 	if ((tcp_hinfo.flags & HAVE_PAYLOAD) &&
-	    (TCP_CMP_INFO(other_cinfo)->flags & FIN))
+	    (TCP_CMP_INFO(other_cinfo)->flags & FIN)) {
+		statis.fin++;
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
+	}
 
 	if (tcp_hinfo.flags & (HAVE_PAYLOAD | SYN))
 		/*
