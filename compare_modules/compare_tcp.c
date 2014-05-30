@@ -20,6 +20,8 @@
 #include "compare_ipv4.h"
 #include "ip_fragment.h"
 #include "ipv4_fragment.h"
+#include "connections.h"
+#include "compare_debugfs.h"
 
 bool ignore_ack_packet = 1;
 module_param(ignore_ack_packet, bool, 0644);
@@ -117,6 +119,26 @@ static struct {
 	unsigned long long data;
 	unsigned long long data_len;
 } statis;
+
+static struct {
+	struct dentry *root_entry;
+	struct dentry *status_entry;
+
+	struct dentry *m_error_packet_entry;
+	struct dentry *s_error_packet_entry;
+	struct dentry *other_options_entry;
+	struct dentry *sack_entry;
+	struct dentry *timestamp_entry;
+	struct dentry *seq_entry;
+	struct dentry *other_flags_entry;
+	struct dentry *psh_entry;
+	struct dentry *fin_entry;
+	struct dentry *window_entry;
+	struct dentry *ack_seq_entry;
+	struct dentry *doff_entry;
+	struct dentry *data_entry;
+	struct dentry *data_len_entry;
+} statis_entry;
 
 /* tcp_compare_info & tcp_hdr_info's flags */
 #define		SYN		0x01
@@ -1393,13 +1415,99 @@ static ipv4_compare_ops_t tcp_ops = {
 	.debug_print = debug_print_tcp,
 };
 
+static void remove_statis_file(void)
+{
+#define REMOVE_STATIS_FILE(entry)				\
+	do {							\
+		if (statis_entry.entry) {			\
+			colo_remove_file(statis_entry.entry);	\
+			statis_entry.entry = NULL;		\
+		}						\
+	} while (0)
+
+	REMOVE_STATIS_FILE(status_entry);
+	REMOVE_STATIS_FILE(m_error_packet_entry);
+	REMOVE_STATIS_FILE(s_error_packet_entry);
+	REMOVE_STATIS_FILE(other_options_entry);
+	REMOVE_STATIS_FILE(sack_entry);
+	REMOVE_STATIS_FILE(timestamp_entry);
+	REMOVE_STATIS_FILE(seq_entry);
+	REMOVE_STATIS_FILE(other_flags_entry);
+	REMOVE_STATIS_FILE(psh_entry);
+	REMOVE_STATIS_FILE(fin_entry);
+	REMOVE_STATIS_FILE(window_entry);
+	REMOVE_STATIS_FILE(ack_seq_entry);
+	REMOVE_STATIS_FILE(doff_entry);
+	REMOVE_STATIS_FILE(data_entry);
+	REMOVE_STATIS_FILE(data_len_entry);
+	REMOVE_STATIS_FILE(root_entry);
+}
+
+static int create_statis_file(void)
+{
+	int ret;
+
+#define CREATE_STATIS_FILE(elem)					\
+	do {								\
+		struct dentry *entry;					\
+		void *data = &statis.elem;				\
+		struct dentry *parent = statis_entry.root_entry;	\
+		entry = colo_create_file(#elem, &colo_u64_ops,		\
+					 parent, data);			\
+		CHECK_RETURN_VALUE(entry);				\
+		statis_entry.elem##_entry = entry;			\
+	} while (0)
+
+#define CHECK_RETURN_VALUE(entry)		\
+	do {					\
+		if (!entry) {			\
+			ret = -ENOMEM;		\
+			goto err;		\
+		} else if (IS_ERR(entry)) {	\
+			ret = PTR_ERR(entry);	\
+			goto err;		\
+		}				\
+	} while (0)
+
+	statis_entry.root_entry = colo_create_dir("tcp", NULL);
+	CHECK_RETURN_VALUE(statis_entry.root_entry);
+
+	CREATE_STATIS_FILE(m_error_packet);
+	CREATE_STATIS_FILE(s_error_packet);
+	CREATE_STATIS_FILE(other_options);
+	CREATE_STATIS_FILE(sack);
+	CREATE_STATIS_FILE(timestamp);
+	CREATE_STATIS_FILE(seq);
+	CREATE_STATIS_FILE(other_flags);
+	CREATE_STATIS_FILE(psh);
+	CREATE_STATIS_FILE(fin);
+	CREATE_STATIS_FILE(window);
+	CREATE_STATIS_FILE(ack_seq);
+	CREATE_STATIS_FILE(doff);
+	CREATE_STATIS_FILE(data);
+	CREATE_STATIS_FILE(data_len);
+
+	return 0;
+
+err:
+	remove_statis_file();
+	return ret;
+}
+
 static int __init compare_tcp_init(void)
 {
-	return register_ipv4_compare_ops(&tcp_ops, IPPROTO_TCP);
+	int ret;
+
+	ret = register_ipv4_compare_ops(&tcp_ops, IPPROTO_TCP);
+	if (ret)
+		return ret;
+
+	return create_statis_file();
 }
 
 static void __exit compare_tcp_fini(void)
 {
+	remove_statis_file();
 	unregister_ipv4_compare_ops(&tcp_ops, IPPROTO_TCP);
 }
 
