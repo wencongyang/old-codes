@@ -35,15 +35,13 @@
 
 struct task_struct *compare_task;
 
+#define DEBUG_COMPARE_MODULE
 #ifdef DEBUG_COMPARE_MODULE
-struct proc_dir_entry* proc_entry;
 struct statistic_data {
 	unsigned int compare_count;
 	unsigned long long total_time;
 	unsigned long long max_time;
 } statis;
-
-static int failover = 0;
 #endif
 
 wait_queue_head_t queue;
@@ -52,6 +50,8 @@ uint32_t state = state_comparing;
 
 const compare_net_ops_t *compare_net_ops[COMPARE_LAST];
 DEFINE_MUTEX(net_ops_lock);
+
+struct dentry *status_entry;
 
 /* compare_xxx_packet() returns:
  *   0: do a new checkpoint
@@ -410,73 +410,6 @@ static int compare_kthread(void *data)
 	return 0;
 }
 
-#ifdef DEBUG_COMPARE_MODULE
-int read_proc(char *buf, char **start, off_t offset, int count, int *eof, void *data)
-{
-	struct sk_buff *skb;
-	int i, j;
-	struct colo_sched_data *master_queue = colo_ics->master_data;
-	struct colo_sched_data *slave_queue = colo_ics->slave_data;
-	struct connect_info *conn_info;
-
-	pr_info("STAT: compare_count=%u, total_time=%llu, max_time=%llu\n",
-		statis.compare_count, statis.total_time, statis.max_time);
-	pr_info("STAT Debug info:\n");
-	pr_info("\nSTAT: status=%d.\n", state);
-
-	for (i = 0; i < HASH_NR; i++) {
-		j = 0;
-		list_for_each_entry(conn_info, &master_queue->ics->entry[i], list) {
-			skb = skb_peek(&conn_info->master_queue);
-			if (skb != NULL)
-				pr_info("STAT: m_blo[%d, %d] not empty.\n", i, j);
-			j++;
-		}
-	}
-
-	skb = skb_peek(&master_queue->rel);
-	if (skb != NULL)
-		pr_info("STAT: m_rel not empty.\n");
-
-	for (i = 0; i < HASH_NR; i++) {
-		j = 0;
-		list_for_each_entry(conn_info, &slave_queue->ics->entry[i], list) {
-			skb = skb_peek(&conn_info->slave_queue);
-			if (skb != NULL)
-				pr_info("STAT: s_blo[%d] not empty.\n", i);
-			j++;
-		}
-	}
-
-	skb = skb_peek(&slave_queue->rel);
-	if (skb != NULL)
-		pr_info("STAT: s_rel not empty.\n");
-
-	return 0;
-}
-
-int write_proc(struct file *file, const char *buffer, unsigned long count, void *data)
-{
-	char buf[20];
-	int ret;
-
-	ret = copy_from_user(buf, buffer, count);
-	if (ret < 0)
-		return 0;
-	if (buf[0]=='f') { //failover manually
-		failover = 1;
-		state = state_failover;
-		wake_up_interruptible(&queue);
-		pr_info("failover.\n");
-	} else if (buf[0]=='r') {
-		state = state_comparing;
-		failover = 0;
-	}
-
-	return count;
-}
-#endif
-
 static int __init compare_module_init(void)
 {
 	int result;
@@ -502,19 +435,23 @@ static int __init compare_module_init(void)
 	if (result)
 		goto err_debugfs;
 
-	init_waitqueue_head(&queue);
+	status_entry = colo_add_status_file("status", &colo_ics);
+	if (!status_entry) {
+		result = -ENOMEM;
+		goto err_add_status_file;
+	} else if (IS_ERR(status_entry)) {
+		result = PTR_ERR(status_entry);
+		goto err_add_status_file;
+	}
 
-#ifdef DEBUG_COMPARE_MODULE
-	memset(&statis, 0, sizeof(struct statistic_data));
-	proc_entry = create_proc_entry("HA_compare", 0, NULL);
-	proc_entry->read_proc = read_proc;
-	proc_entry->write_proc = write_proc;
-#endif
+	init_waitqueue_head(&queue);
 
 	wake_up_process(compare_task);
 
 	return 0;
 
+err_add_status_file:
+	colo_debugfs_exit();
 err_debugfs:
 	kthread_stop(compare_task);
 err_thread:
@@ -525,15 +462,13 @@ err_thread:
 
 static void __exit compare_module_exit(void)
 {
+	colo_remove_file(status_entry);
+
 	colo_debugfs_exit();
 
 	kthread_stop(compare_task);
 
 	colo_dev_fini();
-
-#ifdef DEBUG_COMPARE_MODULE
-	remove_proc_entry("HA_compare", NULL);
-#endif
 }
 module_init(compare_module_init);
 module_exit(compare_module_exit);

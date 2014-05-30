@@ -192,7 +192,7 @@ int __init colo_debugfs_init(void)
 	return 0;
 }
 
-void __exit colo_debugfs_exit(void)
+void colo_debugfs_exit(void)
 {
 	debugfs_remove(colo_root_dir);
 }
