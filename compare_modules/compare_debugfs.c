@@ -14,7 +14,11 @@
 
 #include <linux/debugfs.h>
 #include <linux/fs.h>
+#include <linux/seq_file.h>
 #include <linux/module.h>
+
+#include "connections.h"
+#include "comm.h"
 
 static struct dentry *colo_root_dir;
 
@@ -73,6 +77,85 @@ const struct file_operations colo_u64_ops = {
 };
 EXPORT_SYMBOL(colo_u64_ops);
 
+/* ops for status file */
+static int compare_status_show(struct seq_file *m, void *data)
+{
+	struct if_connections *ics = *(struct if_connections **)m->private;
+	struct sk_buff *skb;
+	int i, j;
+	struct colo_sched_data *master_queue;
+	struct colo_sched_data *slave_queue;
+	struct connect_info *conn_info;
+	int found = 0;
+
+	if (!ics)
+		return 0;
+
+	master_queue = ics->master_data;
+	slave_queue = ics->slave_data;
+
+	for (i = 0; i < HASH_NR; i++) {
+		j = 0;
+		list_for_each_entry(conn_info, &ics->entry[i], list) {
+			skb = skb_peek(&conn_info->master_queue);
+			if (skb != NULL) {
+				found = 1;
+				break;
+			}
+			j++;
+		}
+		if (found)
+			break;
+	}
+	if (found) {
+		seq_printf(m, "master compare queue[%d, %d] is not empty.\n",
+			   i, j);
+		found = 0;
+	}
+
+	skb = skb_peek(&master_queue->rel);
+	if (skb != NULL)
+		seq_printf(m, "master release queue is not empty.\n");
+
+	found = 0;
+	for (i = 0; i < HASH_NR; i++) {
+		j = 0;
+		list_for_each_entry(conn_info, &ics->entry[i], list) {
+			skb = skb_peek(&conn_info->slave_queue);
+			if (skb != NULL) {
+				found = 1;
+				break;
+			}
+			j++;
+		}
+		if (found)
+			break;
+	}
+	if (found) {
+		seq_printf(m, "slave compare queue[%d, %d] is not empty.\n",
+			   i, j);
+		found = 0;
+	}
+
+	skb = skb_peek(&slave_queue->rel);
+	if (skb != NULL)
+		seq_printf(m, "slave release queue is not empty.\n");
+
+	return 0;
+}
+
+static int status_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, compare_status_show, inode->i_private);
+}
+
+static const struct file_operations colo_status_ops = {
+	.open		= status_open,
+	.read		= seq_read,
+	.llseek		= generic_file_llseek,
+	.release	= single_release,
+};
+
 struct dentry *
 colo_create_file(const char *name, const struct file_operations *ops,
 		 struct dentry *parent, void *data)
@@ -89,6 +172,13 @@ void colo_remove_file(struct dentry *entry)
 }
 EXPORT_SYMBOL(colo_create_file);
 EXPORT_SYMBOL(colo_remove_file);
+
+struct dentry *colo_add_status_file(const char *name,
+				    struct if_connections **ics)
+{
+	return debugfs_create_file(name, 0444, colo_root_dir,
+				   ics, &colo_status_ops);
+}
 
 int __init colo_debugfs_init(void)
 {

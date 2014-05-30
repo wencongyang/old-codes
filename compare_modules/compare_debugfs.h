@@ -26,5 +26,7 @@ extern struct dentry * colo_create_file(const char *name,
 					struct dentry *parent,
 					void *data);
 extern void colo_remove_file(struct dentry *entry);
+extern struct dentry *colo_add_status_file(const char *name,
+					   struct if_connections **ics);
 
 #endif
