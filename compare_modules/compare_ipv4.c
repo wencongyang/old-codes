@@ -23,6 +23,9 @@
 #include "compare_ipv4.h"
 #include "ip_fragment.h"
 #include "ipv4_fragment.h"
+#include "connections.h"
+#include "comm.h"
+#include "compare_debugfs.h"
 
 bool ignore_id = 1;
 module_param(ignore_id, bool, 0644);
@@ -48,6 +51,21 @@ static struct {
 	unsigned long long ttl;
 	unsigned long long id;
 } statis;
+
+static struct {
+	struct dentry *root_entry;
+	struct dentry *status_entry;
+	struct dentry *m_error_packet_entry;
+	struct dentry *s_error_packet_entry;
+	struct dentry *ihl_entry;
+	struct dentry *options_entry;
+	struct dentry *data_len_entry;
+	struct dentry *data_entry;
+	struct dentry *tos_entry;
+	struct dentry *frag_off_entry;
+	struct dentry *ttl_entry;
+	struct dentry *id_entry;
+} statis_entry;
 
 static void ipv4_update_compare_info(void *info, void *data,
 				     struct sk_buff *skb);
@@ -492,13 +510,91 @@ static compare_net_ops_t ipv4_ops = {
 	.update_info = ipv4_update_compare_info,
 };
 
+static void remove_statis_file(void)
+{
+#define REMOVE_STATIS_FILE(entry)				\
+	do {							\
+		if (statis_entry.entry) {			\
+			colo_remove_file(statis_entry.entry);	\
+			statis_entry.entry = NULL;		\
+		}						\
+	} while (0)
+
+	REMOVE_STATIS_FILE(status_entry);
+	REMOVE_STATIS_FILE(m_error_packet_entry);
+	REMOVE_STATIS_FILE(s_error_packet_entry);
+	REMOVE_STATIS_FILE(ihl_entry);
+	REMOVE_STATIS_FILE(options_entry);
+	REMOVE_STATIS_FILE(data_len_entry);
+	REMOVE_STATIS_FILE(data_entry);
+	REMOVE_STATIS_FILE(tos_entry);
+	REMOVE_STATIS_FILE(frag_off_entry);
+	REMOVE_STATIS_FILE(ttl_entry);
+	REMOVE_STATIS_FILE(id_entry);
+	REMOVE_STATIS_FILE(root_entry);
+}
+
+static int create_statis_file(void)
+{
+	int ret;
+
+#define CREATE_STATIS_FILE(elem)					\
+	do {								\
+		struct dentry *entry;					\
+		void *data = &statis.elem;				\
+		struct dentry *parent = statis_entry.root_entry;	\
+		entry = colo_create_file(#elem, &colo_u64_ops,		\
+					 parent, data);			\
+		CHECK_RETURN_VALUE(entry);				\
+		statis_entry.elem##_entry = entry;			\
+	} while (0)
+
+#define CHECK_RETURN_VALUE(entry)		\
+	do {					\
+		if (!entry) {			\
+			ret = -ENOMEM;		\
+			goto err;		\
+		} else if (IS_ERR(entry)) {	\
+			ret = PTR_ERR(entry);	\
+			goto err;		\
+		}				\
+	} while (0)
+
+	statis_entry.root_entry = colo_create_dir("ipv4", NULL);
+	CHECK_RETURN_VALUE(statis_entry.root_entry);
+
+	CREATE_STATIS_FILE(m_error_packet);
+	CREATE_STATIS_FILE(s_error_packet);
+	CREATE_STATIS_FILE(ihl);
+	CREATE_STATIS_FILE(options);
+	CREATE_STATIS_FILE(data_len);
+	CREATE_STATIS_FILE(data);
+	CREATE_STATIS_FILE(tos);
+	CREATE_STATIS_FILE(frag_off);
+	CREATE_STATIS_FILE(ttl);
+	CREATE_STATIS_FILE(id);
+
+	return 0;
+
+err:
+	remove_statis_file();
+	return ret;
+}
+
 static int __init compare_ipv4_init(void)
 {
-	return register_net_compare_ops(&ipv4_ops, COMPARE_IPV4);
+	int ret;
+
+	ret = register_net_compare_ops(&ipv4_ops, COMPARE_IPV4);
+	if (ret)
+		return ret;
+
+	return create_statis_file();
 }
 
 static void __exit compare_ipv4_fini(void)
 {
+	remove_statis_file();
 	unregister_net_compare_ops(&ipv4_ops, COMPARE_IPV4);
 }
 
