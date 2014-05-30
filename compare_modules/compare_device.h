@@ -18,7 +18,6 @@
 enum {
 	state_comparing,
 	state_incheckpoint,
-	state_failover,
 };
 extern uint32_t state;
 

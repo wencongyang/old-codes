@@ -212,9 +212,6 @@ long cmp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (ret < 0)
 			return -ERESTART;
 
-		if (state == state_failover)
-			return -2;
-
 		pr_notice("HA_compare: --------start a new checkpoint.\n");
 
 		break;
