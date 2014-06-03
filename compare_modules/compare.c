@@ -159,17 +159,20 @@ default_compare_packets(struct compare_info *m_cinfo,
 {
 	uint32_t ret;
 
-//	pr_debug("HA_compare: unexpected protocol: %d\n", eth_master->h_proto);
 	if (m_cinfo->length != s_cinfo->length) {
 		pr_warn("HA_compare: the length of packet is different\n");
+		pr_warn("  protocol: %04x\n", ntohs(m_cinfo->eth->h_proto));
 		other_statis.data_len++;
 		return CHECKPOINT;
 	}
 
 	ret = default_compare_data(m_cinfo->packet, s_cinfo->packet,
 				   m_cinfo->length);
-	if (ret & CHECKPOINT)
+	if (ret & CHECKPOINT) {
+		pr_warn("HA_compare: the data is different\n");
+		pr_warn("  protocol: %04x\n", ntohs(m_cinfo->eth->h_proto));
 		other_statis.data++;
+	}
 
 	return ret;
 }
