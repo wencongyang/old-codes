@@ -41,12 +41,32 @@ struct statistic_data {
 	unsigned long long compare_count;
 	unsigned long long total_time;
 	unsigned long long max_time;
+} statis;
 
+static struct {
 	struct dentry *compare_count_entry;
 	struct dentry *total_time_entry;
 	struct dentry *max_time_entry;
-} statis;
+}statis_entry;
 #endif
+
+static struct {
+	unsigned long long m_error_packet;
+	unsigned long long s_error_packet;
+	unsigned long long protocol;
+	unsigned long long data_len;
+	unsigned long long data;
+} other_statis;
+
+static struct {
+	struct dentry *root_entry;
+	struct dentry *status_entry;
+	struct dentry *m_error_packet_entry;
+	struct dentry *s_error_packet_entry;
+	struct dentry *protocol_entry;
+	struct dentry *data_len_entry;
+	struct dentry *data_entry;
+} other_statis_entry;
 
 wait_queue_head_t queue;
 
@@ -137,13 +157,21 @@ static uint32_t
 default_compare_packets(struct compare_info *m_cinfo,
 			struct compare_info *s_cinfo)
 {
+	uint32_t ret;
+
 //	pr_debug("HA_compare: unexpected protocol: %d\n", eth_master->h_proto);
 	if (m_cinfo->length != s_cinfo->length) {
 		pr_warn("HA_compare: the length of packet is different\n");
+		other_statis.data_len++;
 		return CHECKPOINT;
 	}
-	return default_compare_data(m_cinfo->packet, s_cinfo->packet,
-				    m_cinfo->length);
+
+	ret = default_compare_data(m_cinfo->packet, s_cinfo->packet,
+				   m_cinfo->length);
+	if (ret & CHECKPOINT)
+		other_statis.data++;
+
+	return ret;
 }
 
 static uint32_t
@@ -158,11 +186,13 @@ compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 	s_cinfo->length = s_cinfo->skb->len;
 
 	if (unlikely(m_cinfo->length < sizeof(struct ethhdr))) {
+		other_statis.m_error_packet++;
 		pr_warn("HA_compare: master packet is corrupted\n");
 		goto different;
 	}
 
 	if (unlikely(s_cinfo->length < sizeof(struct ethhdr))) {
+		other_statis.s_error_packet++;
 		pr_warn("HA_compare: slave packet is corrupted\n");
 		goto different;
 	}
@@ -176,6 +206,7 @@ compare_skb(struct compare_info *m_cinfo, struct compare_info *s_cinfo)
 			ntohs(m_cinfo->eth->h_proto));
 		pr_warn("HA_compare: slave's protocol: %d\n",
 			ntohs(s_cinfo->eth->h_proto));
+		other_statis.protocol++;
 		goto different;
 	}
 
@@ -414,68 +445,79 @@ static int compare_kthread(void *data)
 	return 0;
 }
 
-#ifdef DEBUG_COMPARE_MODULE
 static void remove_statis_file(void)
 {
-	if (statis.compare_count_entry) {
-		colo_remove_file(statis.compare_count_entry);
-		statis.compare_count_entry = NULL;
-	}
+#define REMOVE_STATIS_FILE_L(statis, entry)			\
+	do {							\
+		if (statis.entry) {				\
+			colo_remove_file(statis.entry);		\
+			statis.entry = NULL;			\
+		}						\
+	} while (0)
 
-	if (statis.max_time_entry) {
-		colo_remove_file(statis.max_time_entry);
-		statis.max_time_entry = NULL;
-	}
+#define REMOVE_STATIS_FILE(entry)	REMOVE_STATIS_FILE_L(statis_entry, entry)
 
-	if (statis.total_time_entry) {
-		colo_remove_file(statis.total_time_entry);
-		statis.total_time_entry = NULL;
-	}
+#ifdef DEBUG_COMPARE_MODULE
+	REMOVE_STATIS_FILE(compare_count_entry);
+	REMOVE_STATIS_FILE(max_time_entry);
+	REMOVE_STATIS_FILE(total_time_entry);
+#endif
+
+#undef REMOVE_STATIS_FILE
+#define REMOVE_STATIS_FILE(entry)	REMOVE_STATIS_FILE_L(other_statis_entry, entry)
+	REMOVE_STATIS_FILE(status_entry);
+	REMOVE_STATIS_FILE(m_error_packet_entry);
+	REMOVE_STATIS_FILE(s_error_packet_entry);
+	REMOVE_STATIS_FILE(protocol_entry);
+	REMOVE_STATIS_FILE(data_entry);
+	REMOVE_STATIS_FILE(data_len_entry);
+	REMOVE_STATIS_FILE(root_entry);
 }
 
 static int __init create_statis_file(void)
 {
-	struct dentry *entry;
 	int ret = 0;
 
-	entry = colo_create_file("compare_count",
-				 &colo_u64_ops,
-				 NULL,
-				 &statis.compare_count);
-	if (!entry) {
-		ret = -ENOMEM;
-		goto err;
-	} else if (IS_ERR(entry)) {
-		ret = PTR_ERR(entry);
-		goto err;
-	}
-	statis.compare_count_entry = entry;
+#define CREATE_STATIS_FILE_L(parent, statis, elem)			\
+	do {								\
+		struct dentry *entry;					\
+		void *data = &statis.elem;				\
+		entry = colo_create_file(#elem, &colo_u64_ops,		\
+					 parent, data);			\
+		CHECK_RETURN_VALUE(entry);				\
+		statis##_entry.elem##_entry = entry;			\
+	} while (0)
 
-	entry = colo_create_file("total_time",
-				 &colo_u64_ops,
-				 NULL,
-				 &statis.total_time);
-	if (!entry) {
-		ret = -ENOMEM;
-		goto err;
-	} else if (IS_ERR(entry)) {
-		ret = PTR_ERR(entry);
-		goto err;
-	}
-	statis.total_time_entry = entry;
+#define CHECK_RETURN_VALUE(entry)		\
+	do {					\
+		if (!entry) {			\
+			ret = -ENOMEM;		\
+			goto err;		\
+		} else if (IS_ERR(entry)) {	\
+			ret = PTR_ERR(entry);	\
+			goto err;		\
+		}				\
+	} while (0)
 
-	entry = colo_create_file("max_time",
-				 &colo_u64_ops,
-				 NULL,
-				 &statis.max_time);
-	if (!entry) {
-		ret = -ENOMEM;
-		goto err;
-	} else if (IS_ERR(entry)) {
-		ret = PTR_ERR(entry);
-		goto err;
-	}
-	statis.max_time_entry = entry;
+#ifdef DEBUG_COMPARE_MODULE
+#define CREATE_STATIS_FILE(elem)	CREATE_STATIS_FILE_L(NULL, statis, elem)
+
+	CREATE_STATIS_FILE(compare_count);
+	CREATE_STATIS_FILE(total_time);
+	CREATE_STATIS_FILE(max_time);
+#undef CREATE_STATIS_FILE
+#endif
+
+#define CREATE_STATIS_FILE(elem)	CREATE_STATIS_FILE_L(other_statis_entry.root_entry, other_statis, elem)
+
+	other_statis_entry.root_entry = colo_create_dir("other", NULL);
+	CHECK_RETURN_VALUE(other_statis_entry.root_entry);
+
+	CREATE_STATIS_FILE(m_error_packet);
+	CREATE_STATIS_FILE(s_error_packet);
+	CREATE_STATIS_FILE(protocol);
+	CREATE_STATIS_FILE(data_len);
+	CREATE_STATIS_FILE(data);
 
 	return 0;
 
@@ -483,7 +525,6 @@ err:
 	remove_statis_file();
 	return ret;
 }
-#endif
 
 static int __init compare_module_init(void)
 {
@@ -519,11 +560,9 @@ static int __init compare_module_init(void)
 		goto err_add_status_file;
 	}
 
-#ifdef DEBUG_COMPARE_MODULE
 	result = create_statis_file();
 	if (result)
 		goto err_create_statis_file;
-#endif
 
 	init_waitqueue_head(&queue);
 
@@ -531,10 +570,8 @@ static int __init compare_module_init(void)
 
 	return 0;
 
-#ifdef DEBUG_COMPARE_MODULE
 err_create_statis_file:
 	colo_remove_file(status_entry);
-#endif
 err_add_status_file:
 	colo_debugfs_exit();
 err_debugfs:
@@ -547,9 +584,7 @@ err_thread:
 
 static void __exit compare_module_exit(void)
 {
-#ifdef DEBUG_COMPARE_MODULE
 	remove_statis_file();
-#endif
 
 	colo_remove_file(status_entry);
 
