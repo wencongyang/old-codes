@@ -50,7 +50,7 @@ static struct {
 }statis_entry;
 #endif
 
-static struct {
+static struct other_statistics {
 	unsigned long long m_error_packet;
 	unsigned long long s_error_packet;
 	unsigned long long protocol;
@@ -448,6 +448,30 @@ static int compare_kthread(void *data)
 	return 0;
 }
 
+static int statistics_status_show(struct seq_file *m, void *data)
+{
+	struct other_statistics *statis = m->private;
+
+	OUTPUT_STATIS(m_error_packet);
+	OUTPUT_STATIS(s_error_packet);
+	OUTPUT_STATIS(protocol);
+	OUTPUT_STATIS(data_len);
+	OUTPUT_STATIS(data);
+	return 0;
+}
+
+static int statistics_status_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, statistics_status_show, inode->i_private);
+}
+
+static const struct file_operations statistics_status_ops = {
+	.open		= statistics_status_open,
+	.read		= seq_read,
+	.llseek		= generic_file_llseek,
+	.release	= single_release,
+};
+
 static void remove_statis_file(void)
 {
 #define REMOVE_STATIS_FILE(entry)	REMOVE_STATIS_FILE_L(statis_entry, entry)
@@ -486,6 +510,12 @@ static int __init create_statis_file(void)
 
 	other_statis_entry.root_entry = colo_create_dir("other", NULL);
 	CHECK_RETURN_VALUE(other_statis_entry.root_entry);
+
+	other_statis_entry.status_entry = colo_create_file("statistics_status",
+							   &statistics_status_ops,
+							   other_statis_entry.root_entry,
+							   &other_statis);
+	CHECK_RETURN_VALUE(other_statis_entry.status_entry);
 
 	CREATE_STATIS_FILE(m_error_packet);
 	CREATE_STATIS_FILE(s_error_packet);

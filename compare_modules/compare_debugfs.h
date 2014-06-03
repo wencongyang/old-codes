@@ -15,14 +15,14 @@
 #ifndef COMPARE_DEBUGFS_H
 #define COMPARE_DEBUGFS_H
 
-extern struct file_operations colo_u64_ops;
+extern const struct file_operations colo_u64_ops;
 
 extern int __init colo_debugfs_init(void);
 extern void __exit colo_debugfs_exit(void);
 
 /* use IS_ERR_OR_NULL to check the return value */
 extern struct dentry * colo_create_file(const char *name,
-					struct file_operations *fops,
+					const struct file_operations *fops,
 					struct dentry *parent,
 					void *data);
 extern void colo_remove_file(struct dentry *entry);
@@ -61,6 +61,14 @@ extern struct dentry *colo_add_status_file(const char *name,
 			colo_remove_file(statis.entry);		\
 			statis.entry = NULL;			\
 		}						\
+	} while (0)
+
+#define OUTPUT_STATIS(elem)						\
+	do {								\
+		if (strlen(#elem) < 7)					\
+			seq_printf(m, #elem":\t\t%lld\n", statis->elem);\
+		else							\
+			seq_printf(m, #elem":\t%lld\n", statis->elem);	\
 	} while (0)
 
 #endif

@@ -103,7 +103,7 @@ struct tcp_hdr_info {
 	uint16_t window;
 };
 
-static struct {
+static struct tcp_statistics {
 	unsigned long long m_error_packet;
 	unsigned long long s_error_packet;
 	unsigned long long other_options;
@@ -1418,6 +1418,39 @@ static ipv4_compare_ops_t tcp_ops = {
 	.debug_print = debug_print_tcp,
 };
 
+static int statistics_status_show(struct seq_file *m, void *data)
+{
+	struct tcp_statistics *statis = m->private;
+
+	OUTPUT_STATIS(m_error_packet);
+	OUTPUT_STATIS(s_error_packet);
+	OUTPUT_STATIS(sack);
+	OUTPUT_STATIS(timestamp);
+	OUTPUT_STATIS(other_options);
+	OUTPUT_STATIS(psh);
+	OUTPUT_STATIS(fin);
+	OUTPUT_STATIS(other_flags);
+	OUTPUT_STATIS(seq);
+	OUTPUT_STATIS(window);
+	OUTPUT_STATIS(ack_seq);
+	OUTPUT_STATIS(doff);
+	OUTPUT_STATIS(data_len);
+	OUTPUT_STATIS(data);
+	return 0;
+}
+
+static int statistics_status_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, statistics_status_show, inode->i_private);
+}
+
+static const struct file_operations statistics_status_ops = {
+	.open		= statistics_status_open,
+	.read		= seq_read,
+	.llseek		= generic_file_llseek,
+	.release	= single_release,
+};
+
 static void remove_statis_file(void)
 {
 #define REMOVE_STATIS_FILE(entry)	REMOVE_STATIS_FILE_L(statis_entry, entry)
@@ -1446,6 +1479,12 @@ static int create_statis_file(void)
 
 	statis_entry.root_entry = colo_create_dir("tcp", NULL);
 	CHECK_RETURN_VALUE(statis_entry.root_entry);
+
+	statis_entry.status_entry = colo_create_file("statistics_status",
+						     &statistics_status_ops,
+						     statis_entry.root_entry,
+						     &statis);
+	CHECK_RETURN_VALUE(statis_entry.status_entry);
 
 #define CREATE_STATIS_FILE(elem)	CREATE_STATIS_FILE_L(statis_entry.root_entry, statis, elem)
 	CREATE_STATIS_FILE(m_error_packet);
