@@ -34,4 +34,33 @@ extern struct dentry * colo_create_dir(const char *name,
 extern struct dentry *colo_add_status_file(const char *name,
 					   struct if_connections **ics);
 
+#define CREATE_STATIS_FILE_L(parent, statis, elem)			\
+	do {								\
+		struct dentry *entry;					\
+		void *data = &statis.elem;				\
+		entry = colo_create_file(#elem, &colo_u64_ops,		\
+					 parent, data);			\
+		CHECK_RETURN_VALUE(entry);				\
+		statis##_entry.elem##_entry = entry;			\
+	} while (0)
+
+#define CHECK_RETURN_VALUE(entry)		\
+	do {					\
+		if (!entry) {			\
+			ret = -ENOMEM;		\
+			goto err;		\
+		} else if (IS_ERR(entry)) {	\
+			ret = PTR_ERR(entry);	\
+			goto err;		\
+		}				\
+	} while (0)
+
+#define REMOVE_STATIS_FILE_L(statis, entry)			\
+	do {							\
+		if (statis.entry) {				\
+			colo_remove_file(statis.entry);		\
+			statis.entry = NULL;			\
+		}						\
+	} while (0)
+
 #endif

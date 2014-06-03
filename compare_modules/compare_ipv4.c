@@ -524,13 +524,7 @@ static compare_net_ops_t ipv4_ops = {
 
 static void remove_statis_file(void)
 {
-#define REMOVE_STATIS_FILE(entry)				\
-	do {							\
-		if (statis_entry.entry) {			\
-			colo_remove_file(statis_entry.entry);	\
-			statis_entry.entry = NULL;		\
-		}						\
-	} while (0)
+#define REMOVE_STATIS_FILE(entry)	REMOVE_STATIS_FILE_L(statis_entry, entry)
 
 	REMOVE_STATIS_FILE(status_entry);
 	REMOVE_STATIS_FILE(m_error_packet_entry);
@@ -550,31 +544,10 @@ static int create_statis_file(void)
 {
 	int ret;
 
-#define CREATE_STATIS_FILE(elem)					\
-	do {								\
-		struct dentry *entry;					\
-		void *data = &statis.elem;				\
-		struct dentry *parent = statis_entry.root_entry;	\
-		entry = colo_create_file(#elem, &colo_u64_ops,		\
-					 parent, data);			\
-		CHECK_RETURN_VALUE(entry);				\
-		statis_entry.elem##_entry = entry;			\
-	} while (0)
-
-#define CHECK_RETURN_VALUE(entry)		\
-	do {					\
-		if (!entry) {			\
-			ret = -ENOMEM;		\
-			goto err;		\
-		} else if (IS_ERR(entry)) {	\
-			ret = PTR_ERR(entry);	\
-			goto err;		\
-		}				\
-	} while (0)
-
 	statis_entry.root_entry = colo_create_dir("ipv4", NULL);
 	CHECK_RETURN_VALUE(statis_entry.root_entry);
 
+#define CREATE_STATIS_FILE(elem)	CREATE_STATIS_FILE_L(statis_entry.root_entry, statis, elem)
 	CREATE_STATIS_FILE(m_error_packet);
 	CREATE_STATIS_FILE(s_error_packet);
 	CREATE_STATIS_FILE(ihl);
