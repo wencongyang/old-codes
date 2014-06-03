@@ -940,6 +940,9 @@ out:
 	if (ret & BYPASS_MASTER)
 		ret |= UPDATE_MASTER_PACKET;
 
+	if ((ret & SAME_PACKET) == SAME_PACKET)
+		ret |= IGNORE_LEN;
+
 	RETURN_FINISH(ret);
 }
 
