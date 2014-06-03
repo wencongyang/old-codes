@@ -255,14 +255,20 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 		} else {
 			if (m_cinfo->length != s_cinfo->length) {
 				pr_warn("HA_compare: the length of packet is different\n");
+				pr_warn("  transport protocol: %d\n",
+					m_cinfo->ip->protocol);
 				print_debuginfo(m_cinfo, s_cinfo);
 				rcu_read_unlock();
 				statis.data_len++;
 				return CHECKPOINT | UPDATE_COMPARE_INFO;
 			}
 			ret = ipv4_compare_fragment(m_cinfo, s_cinfo);
-			if (ret & CHECKPOINT)
+			if (ret & CHECKPOINT) {
+				pr_warn("HA_compare: the data is different\n");
+				pr_warn("  transport protocol: %d\n",
+					m_cinfo->ip->protocol);
 				statis.data++;
+			}
 		}
 	} else {
 		if (ops && ops->compare) {
@@ -271,6 +277,8 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 //			pr_info("unknown protocol: %u", ntohs(master->protocol));
 			if (m_cinfo->length != s_cinfo->length) {
 				pr_warn("HA_compare: the length of packet is different\n");
+				pr_warn("  transport protocol: %d\n",
+					m_cinfo->ip->protocol);
 				print_debuginfo(m_cinfo, s_cinfo);
 				rcu_read_unlock();
 				statis.data_len++;
@@ -279,8 +287,12 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 			ret = default_compare_data(m_cinfo->ip_data,
 						   s_cinfo->ip_data,
 						   m_cinfo->length);
-			if (ret & CHECKPOINT)
+			if (ret & CHECKPOINT) {
+				pr_warn("HA_compare: the data is different\n");
+				pr_warn("  transport protocol: %d\n",
+					m_cinfo->ip->protocol);
 				statis.data++;
+			}
 		}
 	}
 	rcu_read_unlock();
