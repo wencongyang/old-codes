@@ -2072,7 +2072,7 @@ out_wait_checkpoint:
 
     fcntl(io_fd, F_SETFL, orig_io_fd_flags);
 
-    DPRINTF("Restore exit with rc=%d\n", rc);
+    colo_output_log(fp, "Restore exit with rc=%d\n", rc);
 
     return rc;
 

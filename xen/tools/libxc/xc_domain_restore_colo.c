@@ -1285,5 +1285,7 @@ int colo_resume_vm(struct restore_data *comm_data, void *data)
         }
     }
 
+    colo_output_log(colo_data->fp, "resuming domain after failover finishes\n");
+
     return 0;
 }
