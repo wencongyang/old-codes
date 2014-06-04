@@ -89,7 +89,7 @@ def run(cfg):
         # I am not sure what the best way to die is. xm destroy is another option,
         # or we could attempt to trigger some instant reboot.
         print "dying..."
-        print util.runcmd(['sudo', 'ifdown', 'eth2'])
+        print util.runcmd(['sudo', 'ip', 'link', 'set', 'dev', 'peth1', 'down'])
         # dangling imq0 handle on vif locks up the system
         if cfg.colo:
             vifno = 0
@@ -106,7 +106,8 @@ def run(cfg):
             for buf in bufs:
                 buf.uninstall()
         print util.runcmd(['sudo', 'xm', 'destroy', cfg.domid])
-        print util.runcmd(['sudo', 'ifup', 'eth2'])
+        print "domain is destroyed"
+        print util.runcmd(['sudo', 'ip', 'link', 'set', 'dev', 'peth1', 'up'])
         sys.exit(1)
 
     def getcommand():
