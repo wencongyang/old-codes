@@ -35,6 +35,20 @@ DEFINE_MUTEX(inet_ops_lock);
 unsigned short last_id = 0;
 unsigned int same_count = 0;
 
+/* statistics */
+static struct {
+	unsigned long long m_error_packet;
+	unsigned long long s_error_packet;
+	unsigned long long ihl;
+	unsigned long long options;
+	unsigned long long data_len;
+	unsigned long long data;
+	unsigned long long tos;
+	unsigned long long frag_off;
+	unsigned long long ttl;
+	unsigned long long id;
+} statis;
+
 static void ipv4_update_compare_info(void *info, void *data,
 				     struct sk_buff *skb);
 
@@ -145,15 +159,17 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 
 	if (unlikely(m_cinfo->ip->ihl * 4 > m_cinfo->length)) {
 		pr_warn("HA_compare: master iphdr is corrupted\n");
+		statis.m_error_packet++;
 		return CHECKPOINT;
 	}
 
 	if (unlikely(s_cinfo->ip->ihl * 4 > s_cinfo->length)) {
 		pr_warn("HA_compare: slave iphdr is corrupted\n");
+		statis.s_error_packet++;
 		return CHECKPOINT;
 	}
 
-#define compare_elem(elem)						\
+#define compare_elem_l(elem, statis)					\
 	do {								\
 		if (unlikely(m_cinfo->ip->elem != s_cinfo->ip->elem)) {	\
 			pr_warn("HA_compare: iphdr's %s is different\n",\
@@ -163,21 +179,29 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 			pr_warn("HA_compare: slave %s: %x\n", #elem,	\
 				s_cinfo->ip->elem);			\
 			print_debuginfo(m_cinfo, s_cinfo);		\
+			UPDATE_STATIS(statis);				\
 			return CHECKPOINT | UPDATE_COMPARE_INFO;	\
 		}							\
 	} while (0)
+#define compare_elem(elem)	compare_elem_l(elem, elem)
 
+	/* version/protocol/saddr/daddr should be the same */
+#define UPDATE_STATIS(elem)
 	compare_elem(version);
-	compare_elem(ihl);
 	compare_elem(protocol);
 	compare_elem(saddr);
 	compare_elem(daddr);
+
+#undef UPDATE_STATIS
+#define UPDATE_STATIS(elem)	statis.elem++
+	compare_elem(ihl);
 
 	/* IP options */
 	if (memcmp((char *)m_cinfo->ip + 20, (char*)s_cinfo->ip + 20,
 		   m_cinfo->ip->ihl * 4 - 20)) {
 		pr_warn("HA_compare: iphdr option is different\n");
 		print_debuginfo(m_cinfo, s_cinfo);
+		statis.options++;
 		return CHECKPOINT | UPDATE_COMPARE_INFO;
 	}
 
@@ -215,9 +239,12 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 				pr_warn("HA_compare: the length of packet is different\n");
 				print_debuginfo(m_cinfo, s_cinfo);
 				rcu_read_unlock();
+				statis.data_len++;
 				return CHECKPOINT | UPDATE_COMPARE_INFO;
 			}
 			ret = ipv4_compare_fragment(m_cinfo, s_cinfo);
+			if (ret & CHECKPOINT)
+				statis.data++;
 		}
 	} else {
 		if (ops && ops->compare) {
@@ -228,11 +255,14 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 				pr_warn("HA_compare: the length of packet is different\n");
 				print_debuginfo(m_cinfo, s_cinfo);
 				rcu_read_unlock();
+				statis.data_len++;
 				return CHECKPOINT | UPDATE_COMPARE_INFO;
 			}
 			ret = default_compare_data(m_cinfo->ip_data,
 						   s_cinfo->ip_data,
 						   m_cinfo->length);
+			if (ret & CHECKPOINT)
+				statis.data++;
 		}
 	}
 	rcu_read_unlock();
@@ -244,13 +274,18 @@ __ipv4_compare_packet(struct compare_info *m_cinfo, struct compare_info *s_cinfo
 
 	compare_elem(tos);
 	if (!(ret & IGNORE_LEN))
-		compare_elem(tot_len);
+		compare_elem_l(tot_len, data_len);
 	compare_elem(frag_off);
 	compare_elem(ttl);
-	if (!ignore_id) {
+	if (!ignore_id)
 		compare_elem(id);
-		compare_elem(check);
-	}
+
+	/*
+	 * No need to compare checksum:
+	 *      If ip header without checksum are the same, checksum
+	 *      shoule be the same too.
+	 */
+//	compare_elem(check);
 
 #undef compare_elem
 
