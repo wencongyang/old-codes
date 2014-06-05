@@ -16,6 +16,7 @@ from xen.xend import XendOptions, XendConfig
 from xen.xend import sxp
 import xen.lowlevel.xc
 from xen.xend.XendConstants import *
+import time
 
 class CfgException(Exception): pass
 
@@ -88,7 +89,7 @@ def run(cfg):
     def die():
         # I am not sure what the best way to die is. xm destroy is another option,
         # or we could attempt to trigger some instant reboot.
-        print "dying..."
+        print "%f: dying..." % time.time()
         print util.runcmd(['sudo', 'ip', 'link', 'set', 'dev', 'peth1', 'down'])
         # dangling imq0 handle on vif locks up the system
         if cfg.colo:
@@ -100,13 +101,13 @@ def run(cfg):
                     vifno += 1
                 else:
                     vifstr = vif.dev
-                print "teardown %s" % vifstr
+                print "%f: teardown %s" % (time.time(), vifstr)
                 print util.runcmd(['/etc/xen/scripts/network-colo', 'master', 'install', vifstr, 'eth0'])
         else:
             for buf in bufs:
                 buf.uninstall()
         print util.runcmd(['sudo', 'xm', 'destroy', cfg.domid])
-        print "domain is destroyed"
+        print "%f: domain is destroyed" % time.time()
         print util.runcmd(['sudo', 'ip', 'link', 'set', 'dev', 'peth1', 'up'])
         sys.exit(1)
 
