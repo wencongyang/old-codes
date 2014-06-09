@@ -343,6 +343,8 @@ int __xen_suspend(int fast_suspend, void (*resume_notifier)(int))
 	fb_disconnect();
 	printk("[%lums]fb_disconnect end.\n", get_ms());	
 	//fast_suspend = 0;
+	/* don't use printk after xencons_suspend() */
+	xencons_suspend();
 	if (fast_suspend) {
 		printk("fast suspend\n");
 		xenbus_suspend();
@@ -388,8 +390,11 @@ int __xen_suspend(int fast_suspend, void (*resume_notifier)(int))
 	//printk("[%lums] smp_resume done\n", get_ms());
 
 	/* Rearrage the irqs */
-	if (HA_first_time && HA_dom_id > 0)
+	if (HA_first_time && HA_dom_id > 0) {
 		xencons_resume();
+	} else {
+		xencons_fast_resume();
+	}
 
 	return 0;
 }
