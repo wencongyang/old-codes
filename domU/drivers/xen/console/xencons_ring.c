@@ -47,10 +47,13 @@
 #include <linux/sched.h>
 #include <linux/err.h>
 #include <xen/interface/io/console.h>
+#include <linux/console.h>
 
 static int xencons_irq;
 extern int HA_xencons_evtchn;
 extern int HA_xencons_irq;
+
+static wait_queue_head_t xencons_suspend_queue;
 
 static inline struct xencons_interface *xencons_interface(void)
 {
@@ -107,21 +110,30 @@ static irqreturn_t handle_input(int irq, void *unused, struct pt_regs *regs)
 
 	xencons_tx();
 
+	mb();
+	if (intf->out_cons == intf->out_prod)
+		wake_up(&xencons_suspend_queue);
+
 	return IRQ_HANDLED;
 }
 
 int xencons_ring_init(void)
 {
-	int irq;
+	int irq, init = 1;
 
-	if (xencons_irq)
+	if (xencons_irq) {
 		unbind_from_irqhandler(xencons_irq, NULL);
+		init = 0;
+	}
 	xencons_irq = 0;
 
 	if (!is_running_on_xen() ||
 	    is_initial_xendomain() ||
 	    !xen_start_info->console.domU.evtchn)
 		return -ENODEV;
+
+	if (init)
+		init_waitqueue_head(&xencons_suspend_queue);
 
 	irq = bind_caller_port_to_irqhandler(
 		xen_start_info->console.domU.evtchn,
@@ -135,13 +147,38 @@ int xencons_ring_init(void)
 	HA_xencons_irq = irq;
 	HA_xencons_evtchn = xen_start_info->console.domU.evtchn;
 
+	printk("console evtchn: %d\n", HA_xencons_evtchn);
+
 	/* In case we have in-flight data after save/restore... */
 	notify_daemon();
 
 	return 0;
 }
 
+static void __xencons_resume(void)
+{
+	/* resume printk */
+	resume_console();
+}
+
 void xencons_resume(void)
 {
+	__xencons_resume();
 	(void)xencons_ring_init();
+}
+
+void xencons_fast_resume(void)
+{
+	__xencons_resume();
+}
+
+void xencons_suspend(void)
+{
+	struct xencons_interface *intf = xencons_interface();
+
+	/* suspend printk */
+	suspend_console();
+
+	/* wait all data is handled by xenconsoled */
+	wait_event(xencons_suspend_queue, intf->out_cons == intf->out_prod);
 }

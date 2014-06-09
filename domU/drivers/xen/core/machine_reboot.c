@@ -300,6 +300,8 @@ int __xen_suspend(int fast_suspend, void (*resume_notifier)(int))
 	pr_info("[%lums]fb_disconnect begin.\n", get_ms());
 	fb_disconnect();
 	pr_info("[%lums]fb_disconnect end.\n", get_ms());
+	/* don't use printk after xencons_suspend() */
+	xencons_suspend();
 	if (fast_suspend) {
 		xenbus_suspend();
 		err = stop_machine_run(take_machine_down, &suspend, 0);
@@ -318,12 +320,14 @@ int __xen_suspend(int fast_suspend, void (*resume_notifier)(int))
 		xencons_resume();
 		xenbus_resume();
 	} else if (suspend_cancelled == 1) {
+		xencons_fast_resume();
 		xs_suspend_cancel();
 		pr_info("[%lu]fb_connect begin\n", get_ms());
 		fb_connect();
 		pr_info("[%lu]fb_connect end\n", get_ms());
 	} else {
 		/* second and later checkpoint on slave */
+		xencons_fast_resume();
 		xs_fast_resume();
 		pr_info("[%lums]yewei: fb connect begin.\n", get_ms());
 		fb_connect();
