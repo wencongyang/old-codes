@@ -96,8 +96,36 @@ function uninstall()
 	exit 1
 } #uninstall()
 
+function remus()
+{
+	# stop forwarding packets to slave
+	tc filter del dev $1 parent 1: protocol ip prio 10 u32
+	tc filter del dev $1 parent 1: protocol arp prio 11 u32
+	tc qdisc del dev $1 root handle 1: prio
+
+	# remove qdisc master from vnif
+	tc qdisc del dev ifb0 root handle 1: master
+
+	# add qdisc sch_plug for vnif
+	tc qdisc add dev ifb0 root handle 1: sch_plug
+}
+
+function noremus()
+{
+	# remove qdisc sch_plug from vnif
+	tc qdisc del dev ifb0 root handle 1: sch_plug
+
+	# add qdisc sch_plug for vnif
+	tc qdisc add dev ifb0 root handle 1: master
+
+	# start forwarding packets to slave
+	tc qdisc add dev $1 root handle 1: prio
+	tc filter add dev $1 parent 1: protocol ip prio 10 u32 match u32 0 0 flowid 1:2 action mirred egress mirror dev eth0
+	tc filter add dev $1 parent 1: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress mirror dev eth0
+}
+
 if [ $# -ne 2 ]; then
-	echo "Usage: $0 (install|uninstall) vnif"
+	echo "Usage: $0 (install|uninstall|remus|noremus) vnif"
 	exit 1
 fi
 
@@ -111,6 +139,10 @@ if [ $1 == "install" ]; then
 	install $vnif
 elif [ $1 == "uninstall" ]; then
 	uninstall $vnif
+elif [ $1 == "remus" ]; then
+	remus $vnif
+elif [ $1 == "noremus" ]; then
+	noremus $vnif
 else
 	echo "Usage: $0 (install|uninstall)"
 	exit 1
