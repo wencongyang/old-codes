@@ -1310,10 +1310,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     gettimeofday(&tv, NULL);
     printf("\n[%lu.%06lu]page transmit start.\n", (unsigned long)tv.tv_sec,
-		(unsigned long)tv.tv_usec);
+           (unsigned long)tv.tv_usec);
 
-    
-    fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
+    fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec,
+            (unsigned long)tv.tv_usec);
     /* Now write out each data page, canonicalising page tables as we go... */
     for ( ; ; )
     {
@@ -1446,7 +1446,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
             if ( batch == 0 )
                 goto skip; /* vanishingly unlikely... */
 
-	    if (colo_ro_map_and_cache(xch, dom, pfn_batch, pfn_type, pfn_err, batch) < 0)
+            if (colo_ro_map_and_cache(xch, dom, pfn_batch, pfn_type, pfn_err, batch) < 0)
             {
                 PERROR("map batch failed");
                 goto out;
@@ -1586,7 +1586,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                 else
                 {
                     /* We have a normal page: accumulate it for writing. */
-		    /* Laijs: stop accumulate write temporarily. we will add it back via writev() when needed */
+                    /*
+                     * Laijs: stop accumulate write temporarily.
+                     * we will add it back via writev() when needed
+                     */
                     if ( ratewrite(io_fd, live, spage, PAGE_SIZE) != PAGE_SIZE )
                     {
                         PERROR("Error when writing to state file (4b)"
@@ -1667,7 +1670,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                     ERROR("Domain appears not to have suspended");
                     goto out;
                 }
-		callbacks->flush_disk(callbacks->data);
+                callbacks->flush_disk(callbacks->data);
 
                 DPRINTF("SUSPEND shinfo %08lx\n", info.shared_info_frame);
                 if ( (tmem_saved > 0) &&
@@ -1703,7 +1706,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     gettimeofday(&tv, NULL);
     printf("[%lu.%06lu]page transmit end.\n", (unsigned long)tv.tv_sec,
-		(unsigned long)tv.tv_usec);
+           (unsigned long)tv.tv_usec);
 
     fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
 
@@ -2048,11 +2051,11 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
  out:
     completed = 1;
-   
+
     gettimeofday(&tv, NULL); 
     printf("[%lu.%06lu]begin flush sockets.\n", (unsigned long)tv.tv_sec, 
-	(unsigned long)tv.tv_usec);
- 
+           (unsigned long)tv.tv_usec);
+
     /* Flush last write and discard cache for file. */
     if ( outbuf_flush(xch, &ob, io_fd) < 0 ) {
         PERROR("Error when flushing output buffer");
@@ -2060,14 +2063,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     }
 
     gettimeofday(&tv, NULL);
-    printf("[%lu.%06lu]finished flush, begin discard file cache.\n", (unsigned long)tv.tv_sec,
-	(unsigned long)tv.tv_usec);
+    printf("[%lu.%06lu]finished flush, begin discard file cache.\n",
+           (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
 
     discard_file_cache(xch, io_fd, 1);
 
     gettimeofday(&tv, NULL);
-    printf("[%lu.%06lu]finished discard file cache.\n", (unsigned long)tv.tv_sec,
-	(unsigned long)tv.tv_usec);
+    printf("[%lu.%06lu]finished discard file cache.\n",
+           (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
 
 
  resume:
@@ -2094,67 +2097,69 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         callbacks->postcopy(callbacks->data);
 
     if (want_exit)
-	goto sigintr;
-    
+        goto sigintr;
+
     /* wait VM resume from suspend, and vnif connects */
     //TODO
     gettimeofday(&tv, NULL);
-    	frc = syscall(NR_wait_resume);
-   
+    frc = syscall(NR_wait_resume);
+
     /* wait slaver finish resume */
     read(io_fd, sig_buf, 7);
     sig_buf[7] = 0;
     gettimeofday(&tv, NULL);
-    printf("[%lu.%06lu]Received from slaver: str=%s\n", (unsigned long)tv.tv_sec,
-		(unsigned long)tv.tv_usec, sig_buf);
+    printf("[%lu.%06lu]Received from slaver: str=%s\n",
+           (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec, sig_buf);
 
-    fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
+    fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec,
+            (unsigned long)tv.tv_usec);
     /* forward network */
-    // COMMENTS: For manually raise ck. 
+    // COMMENTS: For manually raise ck.
 #ifdef NET_FW
     if(first_time) {
-	install_fw_network();
-    	start_input_network();
+        install_fw_network();
+        start_input_network();
     } else {
-	syscall(NR_vif_block, 0);
-    }     
+        syscall(NR_vif_block, 0);
+    }
 #endif
 
     // COMMENTS: For manually raise ck.
 #ifdef NET_FW
     if (!first_time) {
-    	// notify compare module checkpoint finish
-	gettimeofday(&tv, NULL);
-    	printf("[%lu.%06lu]Notify checkpoint finish.\n", (unsigned long)tv.tv_sec,
-		(unsigned long)tv.tv_usec);
-    	ioctl(dev_fd, COMP_IOCTRESUME);
-	gettimeofday(&tv, NULL);
-    	printf("[%lu.%06lu]Done.\n", (unsigned long)tv.tv_sec,
-		(unsigned long)tv.tv_usec);
+        // notify compare module checkpoint finish
+        gettimeofday(&tv, NULL);
+        printf("[%lu.%06lu]Notify checkpoint finish.\n",
+               (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
+        ioctl(dev_fd, COMP_IOCTRESUME);
+        gettimeofday(&tv, NULL);
+        printf("[%lu.%06lu]Done.\n", (unsigned long)tv.tv_sec,
+               (unsigned long)tv.tv_usec);
     }
 #endif
 
     callbacks->checkpoint(callbacks->data);
-    
+
     // COMMENTS: For manually raise ck.
 #ifdef NET_FW
     if (first_time) {
-	printf("open /dev/HA_compare done.\n");
-	dev_fd = open("/dev/HA_compare", O_RDWR);
-	if (dev_fd < 0) {
-		printf("open /dev/HA_compare failed, check whether load compare module.\n");
-		return 1;
-	}
-    }	
+        printf("open /dev/HA_compare done.\n");
+        dev_fd = open("/dev/HA_compare", O_RDWR);
+        if (dev_fd < 0) {
+            printf("open /dev/HA_compare failed, check whether load compare module.\n");
+            return 1;
+        }
+    }
 #endif
-	/* wait for a new chekcpoint */
+    /* wait for a new chekcpoint */
 
 start_ck:
     gettimeofday(&tv, NULL);
     printf("[%lu.%06lu]wait for new checkpoint.\n", (unsigned long)tv.tv_sec,
-         (unsigned long)tv.tv_usec);
+           (unsigned long)tv.tv_usec);
 
-    fprintf(stat_fp, "%lu.%06lu\n", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
+    fprintf(stat_fp, "%lu.%06lu\n", (unsigned long)tv.tv_sec,
+            (unsigned long)tv.tv_usec);
 #ifdef NET_FW
     if (curr_mode == COMPARE_MODE) {
         while (1) {
@@ -2184,38 +2189,39 @@ start_ck:
         err = 0;
     }
 #else
-		printf("pause:");
-		scanf("%d", &err);
+        printf("pause:");
+        scanf("%d", &err);
 #endif
 #ifdef FAILOVER
 #ifdef NET_FW
-	if (err < 0) {
-		failover();
-		printf("failover.\n");
-		scanf("%d", &err);
-		goto start_ck;
-	}
+    if (err < 0) {
+        failover();
+        printf("failover.\n");
+        scanf("%d", &err);
+        goto start_ck;
+    }
 #endif
 #endif
 
- 	gettimeofday(&tv, NULL);
-  	printf("[%lu.%06lu]checkpoint start.\n", (unsigned long)tv.tv_sec,
-         (unsigned long)tv.tv_usec);
+    gettimeofday(&tv, NULL);
+    printf("[%lu.%06lu]checkpoint start.\n", (unsigned long)tv.tv_sec,
+           (unsigned long)tv.tv_usec);
 
-        fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
+    fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec,
+            (unsigned long)tv.tv_usec);
 
-        /* reset stats timer */
-        print_stats(xch, dom, 0, &stats, 0);
-	
-	//stop_input_network();
-	syscall(NR_vif_block, 1);
-	
-	/* notify to continue checkpoint */ 
-	if ( write_exact(io_fd, "continue", 8) )
-	{
-		PERROR("write: continue");
-		goto out;
-	}
+    /* reset stats timer */
+    print_stats(xch, dom, 0, &stats, 0);
+
+    //stop_input_network();
+    syscall(NR_vif_block, 1);
+
+    /* notify to continue checkpoint */ 
+    if ( write_exact(io_fd, "continue", 8) )
+    {
+        PERROR("write: continue");
+        goto out;
+    }
 
         rc = 1;
         /* last_iter = 1; */
@@ -2235,54 +2241,54 @@ start_ck:
             PERROR("Error flushing shadow PT");
         }
 
-	/* wait slaver side suspend done */
-	while (1) {
-		tv.tv_sec = 100;
-		tv.tv_usec = 0;
+    /* wait slaver side suspend done */
+    while (1) {
+        tv.tv_sec = 100;
+        tv.tv_usec = 0;
 
-		FD_ZERO(&rfds);
-		FD_SET(io_fd, &rfds);
-		err = select(io_fd + 1, &rfds, NULL, NULL, &tv);
-		if ( err == -1 && errno == EINTR )
-			continue;
-		if ( !FD_ISSET(io_fd, &rfds) ) {
-			printf("Timeout to notify slaver.\n");
-			rc = 0;
-			want_exit = 1;
-                       goto resume;
-		}
-		
-		read(io_fd, sig_buf, 8);
-		sig_buf[8] = 0;
- 		
-                gettimeofday(&tv, NULL);
-                printf("[%lu.%06lu]Received from slaver: str=%s\n", (unsigned long)tv.tv_sec,
-		      (unsigned long)tv.tv_usec, sig_buf);
-  
-                fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec);
-		break;
+        FD_ZERO(&rfds);
+        FD_SET(io_fd, &rfds);
+        err = select(io_fd + 1, &rfds, NULL, NULL, &tv);
+        if ( err == -1 && errno == EINTR )
+            continue;
+        if ( !FD_ISSET(io_fd, &rfds) ) {
+            printf("Timeout to notify slaver.\n");
+            rc = 0;
+            want_exit = 1;
+            goto resume;
         }
 
-	if (sig_buf[0] == 'r')
-		goto start_ck;
-	
-	// Notify the slaver to flush the disk.
- 	gettimeofday(&tv, NULL);
-	printf("[%lu.%06lu]Begin to flush disk.\n", (unsigned long)tv.tv_sec,
-	      (unsigned long)tv.tv_usec);
+        read(io_fd, sig_buf, 8);
+        sig_buf[8] = 0;
 
-	callbacks->flush_disk(callbacks->data);
-	
-	gettimeofday(&tv, NULL);
-	printf("[%lu.%06lu]Flush disk end.\n", (unsigned long)tv.tv_sec,
-	      (unsigned long)tv.tv_usec);
+        gettimeofday(&tv, NULL);
+        printf("[%lu.%06lu]Received from slaver: str=%s\n",
+               (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec, sig_buf);
 
-	write_exact(io_fd, "start", 5);
+        fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec,
+                (unsigned long)tv.tv_usec);
+        break;
+    }
 
-	/* Tell the xc_domain_restore routine this is not the first checkpoint */
-	first_time = 0;
-        goto copypages;
-    //}
+    if (sig_buf[0] == 'r')
+        goto start_ck;
+
+    // Notify the slaver to flush the disk.
+    gettimeofday(&tv, NULL);
+    printf("[%lu.%06lu]Begin to flush disk.\n", (unsigned long)tv.tv_sec,
+           (unsigned long)tv.tv_usec);
+
+    callbacks->flush_disk(callbacks->data);
+
+    gettimeofday(&tv, NULL);
+    printf("[%lu.%06lu]Flush disk end.\n", (unsigned long)tv.tv_sec,
+           (unsigned long)tv.tv_usec);
+
+    write_exact(io_fd, "start", 5);
+
+    /* Tell the xc_domain_restore routine this is not the first checkpoint */
+    first_time = 0;
+    goto copypages;
     /* notify to stop checkpoint */
 sigintr:
     write_exact(io_fd, "byebye!!", 8);
