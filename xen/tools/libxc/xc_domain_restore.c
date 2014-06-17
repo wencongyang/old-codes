@@ -1100,19 +1100,20 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
     return rc;
 }
 
-static int update_pfn_type(xc_interface *xch, uint32_t dom, int count, xen_pfn_t *pfn_batch,
-			   xen_pfn_t *pfn_type_batch, xen_pfn_t *pfn_type)
+static int update_pfn_type(xc_interface *xch, uint32_t dom, int count,
+                           xen_pfn_t *pfn_batch, xen_pfn_t *pfn_type_batch,
+                           xen_pfn_t *pfn_type)
 {
     int k;
 
-    if ( xc_get_pfn_type_batch(xch, dom, count, pfn_type_batch) )
+    if (xc_get_pfn_type_batch(xch, dom, count, pfn_type_batch))
     {
-	ERROR("xc_get_pfn_type_batch for slaver failed");
-	return -1;
+        ERROR("xc_get_pfn_type_batch for slaver failed");
+        return -1;
     }
 
     for (k = 0; k < count; k++)
-	pfn_type[pfn_batch[k]] = pfn_type_batch[k] & XEN_DOMCTL_PFINFO_LTAB_MASK;
+        pfn_type[pfn_batch[k]] = pfn_type_batch[k] & XEN_DOMCTL_PFINFO_LTAB_MASK;
     return 0;
 }
 
@@ -1212,7 +1213,10 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     xc_dominfo_t info;
     unsigned long max_mem_pfn;
 
-    static int count = 0;
+    int mode = COMPARE_MODE;
+    bool remus_first = false;
+    bool switching_mode = false;
+    bool colo_first = false;
 
     fp = fopen("/root/yewei/1.txt", "at");
     stat_fp = fopen("/root/yewei/slaver.txt", "at");
@@ -1682,6 +1686,17 @@ next_checkpoint:
         }
     }
 
+    if (mode == BUFFER_MODE) {
+        if (remus_first)
+            /* unpin all pagetables */
+            goto skip_step1;
+
+        goto skip_step2;
+    }
+
+    if (mode == COMPARE_MODE && colo_first)
+        goto skip_step2;
+
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]start step1\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
     /* Step1: pin non-dirty L1 pagetables: ~to_send & mL1 (= ~to_send & sL1) */
@@ -1729,6 +1744,7 @@ next_checkpoint:
         goto out;
     }
 
+skip_step1:
     /* Step2: unpin pagetables execpt non-dirty L1: sL2 + sL3 + sL4 + (to_send & sL1) */
     nr_pins = 0;
     for ( i = 0; i < dinfo->p2m_size; i++ )
@@ -1739,7 +1755,12 @@ next_checkpoint:
         switch ( pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
         {
         case XEN_DOMCTL_PFINFO_L1TAB:
-            if (!test_bit(i, to_send)) // it is in (~to_send & mL1), keep it
+            /*
+             * If we switch to buffering mode, we need to unpin all
+             * pagetables even if it is non-dirty L1
+             */
+            if (!test_bit(i, to_send) && !remus_first)
+                // it is in (~to_send & mL1), keep it
                 continue;
             // fallthrough
         case XEN_DOMCTL_PFINFO_L2TAB:
@@ -1777,6 +1798,7 @@ next_checkpoint:
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]finish step2 \n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
 
+skip_step2:
     /* Step 3: copy dirty page */
     //for (pfn = 0; pfn < dinfo->p2m_size; pfn++ ) {
     if (1) {
@@ -1884,6 +1906,9 @@ next_checkpoint:
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]start step4\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
 
+    if (mode == BUFFER_MODE)
+        goto skip_step5;
+
     /* Step 4: pin master pt */
     /*
      * Pin page tables. Do this after writing to them as otherwise Xen
@@ -1899,7 +1924,12 @@ next_checkpoint:
         switch ( pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
         {
         case XEN_DOMCTL_PFINFO_L1TAB:
-            if (!test_bit(i, to_send)) // it is in (~to_send & mL1)(=~to_send & sL1), already pined
+            /*
+             * If we switch to colo mode, we need to pin all
+             * pagetables even if it is non-dirty L1
+             */
+            if (!test_bit(i, to_send) && !colo_first)
+                // it is in (~to_send & mL1)(=~to_send & sL1), already pined
                 continue;
             pin[nr_pins].cmd = MMUEXT_PIN_L1_TABLE;
             break;
@@ -1941,6 +1971,9 @@ next_checkpoint:
         PERROR("Failed to pin batch of %d page tables", nr_pins);
         goto out;
     }
+
+    if (mode == COMPARE_MODE && colo_first)
+        goto skip_step5;
 
     /* Step5: unpin unneeded non-dirty L1 pagetables: ~to_send & mL1 (= ~to_send & sL1) */
     nr_pins = 0;
@@ -1989,11 +2022,15 @@ next_checkpoint:
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]finish step5\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
 
+skip_step5:
+    if (mode == BUFFER_MODE)
+        goto skip_update_vcpu;
+
     /*
      * copy memory from shared buffer into VM
      */
     memcpy(pfn_type_slaver, pfn_type, dinfo->p2m_size * sizeof(xen_pfn_t));
-    
+
     DPRINTF("Memory reloaded (%ld pages)\n", ctx->nr_pfns);
 
     /* Get the list of PFNs that are not in the psuedo-phys map */
@@ -2214,6 +2251,10 @@ next_checkpoint:
     /* leave wallclock time. set by hypervisor */
     munmap(new_shared_info, PAGE_SIZE);
 
+skip_update_vcpu:
+    if (mode == BUFFER_MODE)
+        goto skip_update_p2m_frame;
+
     /* Uncanonicalise the pfn-to-mfn table frame-number list. */
     //fprintf(fp, "P2M_FL_ENTRIES=%lu, dinfo->p2m_size=%lu:\n", P2M_FL_ENTRIES, dinfo->p2m_size);
     j = 0;
@@ -2227,7 +2268,11 @@ next_checkpoint:
             goto out;
         }
 
-        if (!test_bit(pfn, to_send))
+        /*
+         * If we switch to colo mode from buffering mode, we should update
+         * all p2m frame.
+         */
+        if (!test_bit(pfn, to_send) && !colo_first)
             continue;
 
         p2m_frame_list_temp[j++] = ctx->p2m[pfn];
@@ -2247,7 +2292,7 @@ next_checkpoint:
         for ( i = 0; i < P2M_FL_ENTRIES; i++ )
         {
             pfn = p2m_frame_list[i];
-            if (!test_bit(pfn, to_send))
+            if (!test_bit(pfn, to_send) && !colo_first)
                 continue;
 
             live_p2m = (xen_pfn_t *)((char *)ctx->live_p2m + PAGE_SIZE * j++);
@@ -2276,7 +2321,11 @@ next_checkpoint:
 
     DPRINTF("Domain ready to be built.\n");
 
+skip_update_p2m_frame:
     rc = 0;
+
+    if (mode == BUFFER_MODE)
+        goto skip_logdirty;
 
     // output the store-mfn & console-mfn
     printf("store-mfn %li\n", *store_mfn);
@@ -2311,6 +2360,7 @@ next_checkpoint:
             break;
     }
 
+skip_logdirty:
     if (first_time)
     {
         sleep(10);
@@ -2319,29 +2369,63 @@ next_checkpoint:
         local_port = xc_suspend_evtchn_init(xch, xce, dom, remote_port);
     }
 
-    printf("resume\n");
-    fflush(stdout);
+    if (mode == COMPARE_MODE) {
+        printf("resume\n");
+        fflush(stdout);
+    }
 
     gettimeofday(&time, NULL);
-    fprintf(fp, "[%lu.%06lu][count]waiting for suspend...\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
-    count++;
-    scanf("%s", str);
-    gettimeofday(&time, NULL);
-    fprintf(fp, "[%lu.%06lu]read suspend?=%s.\n",
-            (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, str);
+    fprintf(fp, "[%lu.%06lu][count]waiting for suspend...\n",
+            (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+    while (1) {
+        scanf("%s", str);
+        gettimeofday(&time, NULL);
+        fprintf(fp, "[%lu.%06lu]read suspend?=%s.\n",
+                (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, str);
 
-    if ( strcmp(str, "suspend") )
-        goto out;
+        if (!strcmp(str, "remus")) {
+            mode = BUFFER_MODE;
+            remus_first = true;
+            switching_mode = true;
+        } else if (!strcmp(str, "noremus")) {
+            mode = COMPARE_MODE;
+            colo_first = true;
+            switching_mode = true;
+        } else if (!strcmp(str, "suspend")) {
+            if (switching_mode) {
+                /* we have suspended the guest */
+                if (mode == COMPARE_MODE) {
+                    printf("suspend\n");
+                    fflush(stdout);
+                }
+                switching_mode = false;
+                break;
+            }
+            remus_first = false;
+            colo_first = false;
+        } else {
+            goto out;
+        }
 
-    // notify the suspend evtchn
-    frc = xc_evtchn_notify(xce, local_port);
+        if (!(mode == BUFFER_MODE && !switching_mode)) {
+            // notify the suspend evtchn
+            frc = xc_evtchn_notify(xce, local_port);
 
-    gettimeofday(&time, NULL);
-    fprintf(fp, "[%lu.%06lu]waiting suspend done.\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
-    frc = xc_await_suspend(xch, xce, local_port);
+            gettimeofday(&time, NULL);
+            fprintf(fp, "[%lu.%06lu]waiting suspend done.\n",
+                    (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+            frc = xc_await_suspend(xch, xce, local_port);
 
-    printf("suspend\n");
-    fflush(stdout);
+            printf("suspend\n");
+            fflush(stdout);
+        }
+
+        if (!switching_mode)
+            break;
+    }
+
+    if (mode == BUFFER_MODE)
+        goto skip_start;
 
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]waiting for start...\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
@@ -2364,11 +2448,16 @@ next_checkpoint:
     fprintf(fp, "[%lu.%06lu]receive3: %s\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, str);
     console_evtchn = atoi(str);
 
+skip_start:
+    memset(to_send, 0x0, BITMAP_SIZE);
+
+    if (!(mode == COMPARE_MODE || remus_first))
+        goto skip_get_dirty_pages;
+
     // get dirty pages
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]begin get dirty-log.\n", 
             (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
-    memset(to_send, 0x0, BITMAP_SIZE);
     if ( xc_shadow_control(xch, dom,
                            XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
                            dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
@@ -2393,6 +2482,11 @@ next_checkpoint:
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]end off dirty-log.\n",
             (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+
+    /*
+     * In colo mode, svm is runnging, so pfn_type_slaver may
+     * be out-of-date. Update it now.
+     */
     j = 0;
     for (i = 0; i < max_mem_pfn; i++)
     {
@@ -2424,6 +2518,7 @@ next_checkpoint:
     fprintf(fp, "[%lu.%06lu]end reset memory.\n",
         (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
 
+skip_get_dirty_pages:
     //goto loadpages;
     first_time = 0;
     goto next_checkpoint;
