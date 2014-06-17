@@ -1030,6 +1030,11 @@ static int colo_ro_map_and_cache(xc_interface *xch, uint32_t dom,
     return 0;
 }
 
+const char *mode_name[] = {
+    [BUFFER_MODE] = "buffering mode",
+    [COMPARE_MODE] = "colo mode",
+};
+
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
                    struct save_callbacks* callbacks, int hvm)
@@ -2234,6 +2239,10 @@ start_ck:
 
     /* check curr_mode now */
     if (mode != curr_mode) {
+        gettimeofday(&tv, NULL);
+        printf("[%lu.%06lu]switch mode %s ---> %s.\n",
+               (unsigned long)tv.tv_sec, (unsigned long)tv.tv_usec,
+               mode_name[mode], mode_name[curr_mode]);
         if (curr_mode == COMPARE_MODE) {
             /* buffering mode ---> colo mode */
             if (write_exact(io_fd, "noremus ", 8)) {
@@ -2274,6 +2283,10 @@ start_ck:
 
     if (mode == COMPARE_MODE)
         syscall(NR_vif_block, 1);
+
+    gettimeofday(&tv, NULL);
+    printf("[%lu.%06lu]write continue.\n", (unsigned long)tv.tv_sec,
+           (unsigned long)tv.tv_usec);
 
     /* notify to continue checkpoint */ 
     if ( write_exact(io_fd, "continue", 8) )
