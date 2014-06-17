@@ -453,35 +453,72 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
             nt = datetime.datetime.now()
             log.debug("yewei-log-time:[%s]finish!", nt)
 
-            iscontinue = read_exact(fd, 8, "failed to read continue flag")
-            if iscontinue != "continue":
-                log.debug("yewei-log-time: receive is not continue, %s", iscontinue)
-                running = False;
+            while 1:
+                # 0: remus,
+                # 1: colo
+                mode = 1
+                control = read_exact(fd, 8, "failed to read control flag")
+                log.debug("receive %s", control);
+                if control == "continue":
+                    nt = datetime.datetime.now()
+                    log.debug("[%s]suspend domain", nt)
+
+                    pipe_in.write("suspend")
+                    pipe_in.write("\n")
+                    pipe_in.flush()
+                    nt = datetime.datetime.now()
+                    log.debug("[%s]write suspend done", nt)
+
+                    if mode == 1:
+                        line = pipe_out.readline()
+                        nt = datetime.datetime.now()
+                        log.debug("[%s]receive %s from xc_restore", nt, line)
+
+                        # notify master side suspend done.
+                        write_exact(fd, "suspend\n", "failed to write suspend done")
+                        break
+                elif control == "  remus ":
+                    if mode == 0:
+                        # we are already in remus mode, ignore it.
+                        continue
+
+                    nt = datetime.datetime.now()
+                    log.debug("[%s]switch to remus mode", nt)
+                    pipe_in.write("remus\n")
+                    pipe_in.flush()
+
+                    line = pipe_out.readline()
+                    nt = datetime.datetime.now()
+                    log.debug("[%s]receive %s from xc_restore", nt, line)
+
+                    # notify master side that we have switched to remus mode.
+                    write_exact(fd, "remus\n", "failed to write remus")
+                    mode = 0
+                elif control == "noremus ":
+                    if mode == 1:
+                        # we are already in colo mode, ignore it.
+                        continue
+
+                    nt = datetime.datetime.now()
+                    log.debug("[%s]switch to colo mode", nt)
+                    pipe_in.write("noremus\n")
+                    pipe_in.flush()
+
+                    line = pipe_out.readline()
+                    nt = datetime.datetime.now()
+                    log.debug("[%s]receive %s from xc_restore", nt, line)
+
+                    # notify master side that we have switched to remus mode.
+                    write_exact(fd, "noremus\n", "failed to write remus")
+                    mode = 1
+                else:
+                    log.debug("receive unsupported control command")
+                    running = False;
+                    break
+
+
+            if not running:
                 break
-            log.debug("yewei-log-time: receive %s", iscontinue);
-
-            nt = datetime.datetime.now()
-            log.debug("yewei-log-time:[%s]==========start!============", nt)
-
-            nt = datetime.datetime.now()
-            log.debug("yewei-log-time:[%s]enter domain suspend", nt)
-
-            #dominfo.shutdown('suspend')
-            pipe_in.write("suspend")
-            pipe_in.write("\n")
-            pipe_in.flush()
-            nt = datetime.datetime.now()
-            log.debug("yewei-log-time:[%s]write suspend done", nt)
-            # consider move waitForSuspend() to a later point!!!
-            #dominfo.waitForSuspend()
-            line = pipe_out.readline()
-            log.debug("yewei-log-time: waitforsuspend return of %s", line)
-
-            nt = datetime.datetime.now()
-            log.debug("yewei-log-time:[%s]leave domain suspend", nt)
-
-            # notify master side suspend done.
-            write_exact(fd, "suspend\n", "failed to write suspend done")
 
             isstart = read_exact(fd, 5, "failed to read start flag")
             if isstart != "start":
