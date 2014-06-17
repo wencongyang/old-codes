@@ -107,6 +107,7 @@ function remus()
 	tc qdisc del dev ifb0 root handle 1: master
 
 	# add qdisc sch_plug for vnif
+	modprobe sch_plug
 	tc qdisc add dev ifb0 root handle 1: sch_plug
 }
 
@@ -124,7 +125,7 @@ function noremus()
 	tc filter add dev $1 parent 1: protocol arp prio 11 u32 match u32 0 0 flowid 1:2 action mirred egress mirror dev eth0
 }
 
-if [ $# -ne 2 ]; then
+if [ $# -ne 1 ]; then
 	echo "Usage: $0 (install|uninstall|remus|noremus) vnif"
 	exit 1
 fi
