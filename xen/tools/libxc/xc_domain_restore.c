@@ -1903,11 +1903,11 @@ skip_step2:
         fprintf(stat_fp, "%ld\n", dirty_all);
     }
 
-    gettimeofday(&time, NULL);
-    fprintf(fp, "[%lu.%06lu]start step4\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
-
     if (mode == BUFFER_MODE)
         goto skip_step5;
+
+    gettimeofday(&time, NULL);
+    fprintf(fp, "[%lu.%06lu]start step4\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
 
     /* Step 4: pin master pt */
     /*
@@ -2369,10 +2369,8 @@ skip_logdirty:
         local_port = xc_suspend_evtchn_init(xch, xce, dom, remote_port);
     }
 
-    if (mode == COMPARE_MODE) {
-        printf("resume\n");
-        fflush(stdout);
-    }
+    printf("resume\n");
+    fflush(stdout);
 
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu][count]waiting for suspend...\n",
@@ -2380,8 +2378,10 @@ skip_logdirty:
     while (1) {
         scanf("%s", str);
         gettimeofday(&time, NULL);
-        fprintf(fp, "[%lu.%06lu]read suspend?=%s.\n",
-                (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, str);
+        fprintf(fp, "[%lu.%06lu]read suspend?=%s. switching mode: %s\n",
+                (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, str,
+                switching_mode ? "true" : "false" );
+        fflush(fp);
 
         if (!strcmp(str, "remus")) {
             mode = BUFFER_MODE;
@@ -2407,15 +2407,19 @@ skip_logdirty:
             goto out;
         }
 
-        if (!(mode == BUFFER_MODE && !switching_mode)) {
+        if ((switching_mode && mode == BUFFER_MODE) ||
+            (!switching_mode && mode == COMPARE_MODE)) {
             // notify the suspend evtchn
             frc = xc_evtchn_notify(xce, local_port);
 
             gettimeofday(&time, NULL);
             fprintf(fp, "[%lu.%06lu]waiting suspend done.\n",
                     (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+            fflush(fp);
             frc = xc_await_suspend(xch, xce, local_port);
+        }
 
+        if (!(mode == BUFFER_MODE && !switching_mode)) {
             printf("suspend\n");
             fflush(stdout);
         }

@@ -428,13 +428,13 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
 
             # setup the network environment
             if firstTime == True:
-                util.runcmd('ifconfig colo_tap0 promisc')
-                util.runcmd('ip link set dev colo_tap0 qlen 40960')
-                util.runcmd('tc qdisc add dev colo_tap0 ingress')
-                util.runcmd('tc filter add dev colo_tap0 parent ffff: '
+                util.runcmd('ifconfig eth0 promisc')
+                util.runcmd('ip link set dev eth0 qlen 40960')
+                util.runcmd('tc qdisc add dev eth0 ingress')
+                util.runcmd('tc filter add dev eth0 parent ffff: '
                             'protocol ip prio 10 u32 match u32 0 0 flowid 1:2 '
                             'action mirred egress redirect dev %s' % vnif)
-                util.runcmd('tc filter add dev colo_tap0 parent ffff: '
+                util.runcmd('tc filter add dev eth0 parent ffff: '
                             'protocol arp prio 11 u32 match u32 0 0 flowid 1:2 '
                             'action mirred egress redirect dev %s' % vnif)
 
@@ -442,10 +442,10 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
                 util.runcmd('tc qdisc add dev %s ingress' % vnif)
                 util.runcmd('tc filter add dev %s parent ffff: '
                             'protocol ip prio 10 u32 match u32 0 0 flowid 1:2 '
-                            'action mirred egress redirect dev colo_tap0' % vnif)
+                            'action mirred egress redirect dev eth0' % vnif)
                 util.runcmd('tc filter add dev %s parent ffff: '
                             'protocol arp prio 11 u32 match u32 0 0 flowid 1:2 '
-                            'action mirred egress redirect dev colo_tap0' % vnif)
+                            'action mirred egress redirect dev eth0' % vnif)
 
             # notify master side VM resumed
             write_exact(fd, "resume\n", "failed to write resume done");
@@ -453,10 +453,10 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
             nt = datetime.datetime.now()
             log.debug("yewei-log-time:[%s]finish!", nt)
 
+            # 0: remus,
+            # 1: colo
+            mode = 1
             while 1:
-                # 0: remus,
-                # 1: colo
-                mode = 1
                 control = read_exact(fd, 8, "failed to read control flag")
                 log.debug("receive %s", control);
                 if control == "continue":
@@ -469,11 +469,11 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
                     nt = datetime.datetime.now()
                     log.debug("[%s]write suspend done", nt)
 
-                    if mode == 1:
-                        line = pipe_out.readline()
-                        nt = datetime.datetime.now()
-                        log.debug("[%s]receive %s from xc_restore", nt, line)
+                    line = pipe_out.readline()
+                    nt = datetime.datetime.now()
+                    log.debug("[%s]receive %s from xc_restore", nt, line)
 
+                    if mode == 1:
                         # notify master side suspend done.
                         write_exact(fd, "suspend\n", "failed to write suspend done")
                         break
@@ -545,7 +545,7 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
         #util.runcmd('tc filter del dev %s parent ffff: protocol arp prio 11 u32' % vnif)
         #util.runcmd('tc qdisc del dev %s ingress' % vnif)
 
-        #util.runcmd('brctl addif colo_tap0 %s' % vnif)
+        #util.runcmd('brctl addif eth0 %s' % vnif)
 
         pipe_in.write("EOF")
         pipe_in.write("\n")
