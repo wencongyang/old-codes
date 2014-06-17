@@ -1100,136 +1100,6 @@ static int apply_batch(xc_interface *xch, uint32_t dom, struct restore_ctx *ctx,
     return rc;
 }
 
-static void *map_frame_list_list(xc_interface *xch, uint32_t dom,
-				struct domain_info_context *dinfo,
-				shared_info_any_t *shinfo)
-{
-	int count = 100;
-	void *p;
-	uint64_t fll = GET_FIELD(shinfo, arch.pfn_to_mfn_frame_list_list);
-
-	while ( count-- && (fll == 0) )
-	{
-		usleep(10000);
-		fll = GET_FIELD(shinfo, arch.pfn_to_mfn_frame_list_list);
-	}
-
-	if ( fll == 0 )
-	{
-		ERROR("Time out waiting for frame list updated.");
-		return NULL;
-	}
-
-	p = xc_map_foreign_range(xch, dom, PAGE_SIZE, PROT_READ, fll);
-	if ( p == NULL )
-		PERROR("Counldn't map p2m_frame_list_list (errno %d)", errno);
-	
-	return p;
-}
-
-static xen_pfn_t *map_p2m_table(xc_interface *xch,
-				uint32_t dom,
-				struct domain_info_context *dinfo,
-				shared_info_any_t *live_shinfo)
-{
-	/* Double and single indirect references to the live P2M table */
-	void *live_p2m_frame_list_list = NULL;
-	void *live_p2m_frame_list = NULL;
-
-	/* Copies of the above */
-	xen_pfn_t *p2m_frame_list_list = NULL;
-	xen_pfn_t *p2m_frame_list = NULL;
-
-	/* The mapping of the live p2m table itself */
-	xen_pfn_t *p2m = NULL;
-
-	int i, success = 0;
-
-	live_p2m_frame_list_list = map_frame_list_list(xch, dom, dinfo,
-							 live_shinfo);
-
-	if ( !live_p2m_frame_list_list)
-		goto out;
-
-	/* Get a local copy of the live_P2M_frame_list_list*/
-	if ( !(p2m_frame_list_list = malloc(PAGE_SIZE)) )
-	{
-		PERROR("Counldn't allocate p2m_frame_list_list array");
-		goto out;
-	}
-	memcpy(p2m_frame_list_list, live_p2m_frame_list_list, PAGE_SIZE);
-	
-	/* Canonicalize guest's unsigned long vs ours */
-	if ( dinfo->guest_width > sizeof(unsigned long) )
-		for ( i = 0; i < PAGE_SIZE/sizeof(unsigned long); i++)
-			if ( i < PAGE_SIZE/dinfo->guest_width )
-				p2m_frame_list_list[i] = ((uint64_t *)p2m_frame_list_list)[i];
-			else
-				p2m_frame_list_list[i] = 0;
-	else if ( dinfo->guest_width < sizeof(unsigned long) )
-		for ( i = PAGE_SIZE/sizeof(unsigned long) - 1; i >= 0; i-- )
-			p2m_frame_list_list[i] = ((uint32_t *)p2m_frame_list_list)[i];
-
-	live_p2m_frame_list = 
-		xc_map_foreign_pages(xch, dom, PROT_READ | PROT_WRITE,
-					p2m_frame_list_list,
-					P2M_FLL_ENTRIES);
-	if ( !live_p2m_frame_list )
-	{
-		PERROR("Counldn't map p2m_frame_list");
-		goto out;
-	}
-
-	/* Get a local copy of the live_P2M_frame_list */
-	if ( !(p2m_frame_list = malloc(P2M_TOOLS_FL_SIZE)) )
-	{
-		ERROR("counldn't allocate p2m_frame_list array");
-		goto out;
-	}
-	memset(p2m_frame_list, 0, P2M_TOOLS_FL_SIZE);
-	memcpy(p2m_frame_list, live_p2m_frame_list, P2M_GUEST_FL_SIZE);
-
-	munmap(live_p2m_frame_list, P2M_FLL_ENTRIES * PAGE_SIZE);
-	live_p2m_frame_list = NULL;
-
-	/* Canonicalize guest's unsigned long vs ours */
-	if ( dinfo->guest_width > sizeof(unsigned long) )
-		for ( i = 0; i < P2M_FL_ENTRIES; i++ )
-			p2m_frame_list[i] = ((uint64_t *)p2m_frame_list)[i];
-	else if ( dinfo->guest_width < sizeof(unsigned long) )
-		for ( i = P2M_FL_ENTRIES - 1; i >= 0; i-- )
-			p2m_frame_list[i] = ((uint32_t *)p2m_frame_list)[i];
-
-	p2m = xc_map_foreign_pages(xch, dom, PROT_READ | PROT_WRITE,
-					p2m_frame_list,
-					P2M_FL_ENTRIES);
-	if ( !p2m )
-	{
-		PERROR("Couldn't map p2m table");
-		goto out;
-	}
-
-	success = 1;
-	
-out:
-	if ( !success && p2m )
-		munmap(p2m, P2M_FLL_ENTRIES * PAGE_SIZE);
-
-	if ( live_p2m_frame_list_list )
-		munmap(live_p2m_frame_list_list, PAGE_SIZE);
-	
-	if ( live_p2m_frame_list )
-		munmap(live_p2m_frame_list, P2M_FLL_ENTRIES * PAGE_SIZE);
-
-	if ( p2m_frame_list_list )
-		free(p2m_frame_list_list);
-
-	if ( p2m_frame_list )
-		free(p2m_frame_list);
-
-	return success ? p2m : NULL;
-}
-
 static int update_pfn_type(xc_interface *xch, uint32_t dom, int count, xen_pfn_t *pfn_batch,
 			   xen_pfn_t *pfn_type_batch, xen_pfn_t *pfn_type)
 {
@@ -1364,11 +1234,8 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     xce = xc_evtchn_open(NULL, 0);
     xsh = xs_daemon_open();
-    if (xce == NULL || xsh == NULL) {
-	// gettimeofday(&time, NULL)
-	// fprintf(fp, "[%d.%d]xc_evtchn_open error.\n", (int)time.tv_sec, (int)time.tv_usec);
-	//goto out;
-    }
+    if (xce == NULL || xsh == NULL)
+        return 1;
 
     if ( superpages )
         return 1;
@@ -1395,31 +1262,28 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         goto out;
     }
 
-    /* Reserve the domid information in Hypervisor */    
+    /* Reserve the domid information in Hypervisor */
     hypercall.op = __HYPERVISOR_which_side_op;
     hypercall.arg[0] = (unsigned long)dom;
 
     do_xen_hypercall(xch, &hypercall);
 
     syscall(NR_reset_suspend_count);
-    	
+
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]pre p2m point\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
     if ( RDEXACT(io_fd, &dinfo->p2m_size, sizeof(unsigned long)) )
     {
-       	PERROR("read: p2m_size");
-	goto out;
+        PERROR("read: p2m_size");
+        goto out;
     }
 
     size = dinfo->p2m_size * PAGE_SIZE;
     pagebase = (char*)malloc(size);
     pfn_type = calloc(dinfo->p2m_size, sizeof(unsigned long));
 
-    if (pagebase == NULL || pfn_type == NULL) {
-	// gettimeofday(&time, NULL);
-	// fprintf(fp, "[%d.%d]cannot map pagebase or pfn_type.\n", (int)time.tv_sec, (int)time.tv_usec);
-	goto out;
-    }
+    if (pagebase == NULL || pfn_type == NULL)
+        goto out;
 
     for (i = 0; i < dinfo->p2m_size; i++)
         pfn_type[i] = XEN_DOMCTL_PFINFO_XTAB;
@@ -1449,24 +1313,22 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         if ( !p2m_frame_list )
             goto out;
 
-    	if ( (p2m_frame_list_temp = malloc(P2M_TOOLS_FL_SIZE)) == NULL )
-	   	goto out;
+        if ( (p2m_frame_list_temp = malloc(P2M_TOOLS_FL_SIZE)) == NULL )
+            goto out;
 
-	if (first_time) {
-       		/* Now that we know the word size, tell Xen about it */
-        	memset(&domctl, 0, sizeof(domctl));
-        	domctl.domain = dom;
-        	domctl.cmd    = XEN_DOMCTL_set_address_size;
-        	domctl.u.address_size.size = dinfo->guest_width * 8;
-        	frc = do_domctl(xch, &domctl);
-        	if ( frc != 0 )
-       		{
-            		PERROR("Unable to set guest address size.");
-			// gettimeofday(&time, NULL);
-			// fprintf(fp, "[%d.%d]Unable to set guest address size,ret=%d\n", (int)time.tv_sec, (int)time.tv_usec, frc);
-            		goto out;
-        	}
-    	}
+        if (first_time) {
+            /* Now that we know the word size, tell Xen about it */
+            memset(&domctl, 0, sizeof(domctl));
+            domctl.domain = dom;
+            domctl.cmd    = XEN_DOMCTL_set_address_size;
+            domctl.u.address_size.size = dinfo->guest_width * 8;
+            frc = do_domctl(xch, &domctl);
+            if ( frc != 0 )
+            {
+                PERROR("Unable to set guest address size.");
+                goto out;
+            }
+        }
     }
 
     /* We want zeroed memory so use calloc rather than malloc. */
@@ -1479,7 +1341,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     if ( !pfn_batch_slaver || !pfn_type_batch_slaver)
     {
-	ERROR("memory alloc pfn_batch_slaver or pfn_type_batch_slaver failed");
+        ERROR("memory alloc pfn_batch_slaver or pfn_type_batch_slaver failed");
         errno = ENOMEM;
         goto out;
     }
@@ -1512,41 +1374,27 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     if ( !hvm )
     {
-	live_shinfo = xc_map_foreign_range(xch, dom, PAGE_SIZE,
-						PROT_READ, shared_info_frame);
-	if ( !live_shinfo )
-	{
-		PERROR("Counldn't map live_shinfo");
-		goto out;
-	}
+        live_shinfo = xc_map_foreign_range(xch, dom, PAGE_SIZE,
+                        PROT_READ, shared_info_frame);
+        if ( !live_shinfo )
+        {
+            PERROR("Counldn't map live_shinfo");
+            goto out;
+        }
     }
 
-    if (!first_time) {
-    	/* We should read the P2M table, because the VM once has run. */
-	if ( !(ctx->live_p2m = map_p2m_table(xch, dom, dinfo, live_shinfo)) )
-    	{
-       		PERROR("Couldn't map p2m table");
-		// gettimeofday(&time, NULL);
-       		// fprintf(fp, "[%d.%d]Couldn't map p2m table.\n", (int)time.tv_sec, (int)time.tv_usec);
-       		goto out;
-   	}
-    	memcpy(ctx->p2m, ctx->live_p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
-    	munmap(ctx->live_p2m, P2M_FL_ENTRIES * PAGE_SIZE);
-	
-    }else {
-   	 /* Mark all PFNs as invalid; we allocate on demand */
-    	 for ( pfn = 0; pfn < dinfo->p2m_size; pfn++ )
-		ctx->p2m[pfn] = INVALID_P2M_ENTRY;
-    }
+    /* Mark all PFNs as invalid; we allocate on demand */
+    for ( pfn = 0; pfn < dinfo->p2m_size; pfn++ )
+        ctx->p2m[pfn] = INVALID_P2M_ENTRY;
 
     if ( live_shinfo )
-	munmap(live_shinfo, PAGE_SIZE);
+        munmap(live_shinfo, PAGE_SIZE);
 
     mmu = xc_alloc_mmu_updates(xch, dom);
     if ( mmu == NULL )
     {
-       	PERROR("Could not initialise for MMU updates");
-       	goto out;
+        PERROR("Could not initialise for MMU updates");
+        goto out;
     }
 
     xc_report_progress_start(xch, "Reloading memory pages", dinfo->p2m_size);
@@ -1561,20 +1409,13 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     to_send = xc_hypercall_buffer_alloc_pages(xch, to_send, NRPAGES(BITMAP_SIZE));
     if ( !to_send )
-    {
-	// gettimeofday(&time, NULL);
-	// fprintf(fp, "[%d.%d]Couldn't allocate to_send array.\n", (int)time.tv_sec, (int)time.tv_usec);
-	goto out;
-    }
+        goto out;
     memset(to_send, 0xff, BITMAP_SIZE);
 
-    
-    if (ctx->completed)
-	goto next_checkpoint; 		
  loadpages:
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]Loadpages\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
-	
+
     for ( ; ; )
     {
         int j, curbatch;
@@ -1584,8 +1425,6 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         if ( !ctx->completed ) {
             pagebuf.nr_physpages = pagebuf.nr_pages = 0;
             if ( pagebuf_get_one(xch, ctx, &pagebuf, io_fd, dom) < 0 ) {
-		// gettimeofday(&time, NULL);
-		// fprintf(fp, "[%d.%d]Error when reading batch\n", (int)time.tv_sec, (int)time.tv_usec);
                 PERROR("Error when reading batch");
                 goto out;
             }
@@ -1611,17 +1450,13 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         }
 
         /* break pagebuf into batches */
-	// fprintf(fp, "applying pages.\n");
         curbatch = 0;
         while ( curbatch < j ) {
             int brc;
             brc = apply_batch(xch, dom, ctx, region_mfn, pfn_type,
                               pae_extended_cr3, hvm, mmu, &pagebuf, curbatch);
-            if ( brc < 0 ) {	
-		// gettimeofday(&time, NULL);
-		// fprintf(fp, "[%d.%d]error when apply_batch\n", (int)time.tv_sec, (int)time.tv_usec);
+            if ( brc < 0 )
                 goto out;
-	    }
             nraces += brc;
 
             curbatch += MAX_BATCH_SIZE;
@@ -1642,6 +1477,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
             m = 0;
         }
     }
+
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]Exit from infinite for\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
     /*
@@ -1658,8 +1494,8 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     if ( !ctx->completed ) {
 
-	gettimeofday(&time, NULL);
-	fprintf(fp, "[%lu.%06lu]!ctx->completed stands\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+        gettimeofday(&time, NULL);
+        fprintf(fp, "[%lu.%06lu]!ctx->completed stands\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
         if ( buffer_tail(xch, ctx, &tailbuf, io_fd, max_vcpu_id, vcpumap,
                          ext_vcpucontext, vcpuextstate, vcpuextstate_size) < 0 ) {
             ERROR ("error buffering image tail");
@@ -1688,9 +1524,9 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     if ( ctx->last_checkpoint )
     {
         // DPRINTF("Last checkpoint, finishing\n");
-	gettimeofday(&time, NULL);
-	fprintf(fp, "[%lu.%06lu]Last checkpoint\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
-	
+        gettimeofday(&time, NULL);
+        fprintf(fp, "[%lu.%06lu]Last checkpoint\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+
         goto finish;
     }
 
@@ -1700,43 +1536,39 @@ next_checkpoint:
 
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu][count]begin pagebuf_get.\n", 
-		(unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+            (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
 
     if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
         PERROR("error when buffering batch, finishing");
-	// gettimeofday(&time, NULL);
-	// fprintf(fp, "[%d.%d]error when buffering batch\n", (int)time.tv_sec, (int)time.tv_usec);
         goto finish;
     }
-    
+
     vcpumap = pagebuf.vcpumap;
     max_vcpu_id = pagebuf.max_vcpu_id;
-    
+
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]begin buffer_tail, with pages=%d\n",
-		(unsigned long)time.tv_sec, (unsigned long)time.tv_usec, (int)pagebuf.nr_pages);
-    
+            (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, (int)pagebuf.nr_pages);
+
     memset(&tmptail, 0, sizeof(tmptail));
     tmptail.ishvm = hvm;
     if ( buffer_tail(xch, ctx, &tmptail, io_fd, max_vcpu_id, vcpumap,
                      ext_vcpucontext, vcpuextstate, vcpuextstate_size) < 0 ) {
         ERROR ("error buffering image tail, finishing");
-	// gettimeofday(&time, NULL);
-	// fprintf(fp, "[%d.%d]error buffering image tail\n", (int)time.tv_sec, (int)time.tv_usec);
         goto finish;
     }
     tailbuf_free(&tailbuf);
     memcpy(&tailbuf, &tmptail, sizeof(tailbuf));
-    
+
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]end buffer_tail.\n", 
-		(unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+            (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
     goto loadpages;
 
   finish:
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]Finish, ctx->pt_levels=%d, pae_extended_cr3=%d\n", 
-		(unsigned long)time.tv_sec, (unsigned long)time.tv_usec, ctx->pt_levels, pae_extended_cr3);
+        (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, ctx->pt_levels, pae_extended_cr3);
     
     if ( hvm )
         goto finish_hvm;
@@ -1860,10 +1692,10 @@ next_checkpoint:
         {
         case XEN_DOMCTL_PFINFO_L1TAB:
             if (pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LPINTAB) // don't pin already pined
-		continue;
-	    if (test_bit(i, to_send)) // don't pin dirty
-		continue;
-	    // here, it must also be L1 in slaver, otherwise it is dirty.(add test code ?) */
+                continue;
+            if (test_bit(i, to_send)) // don't pin dirty
+                continue;
+            // here, it must also be L1 in slaver, otherwise it is dirty.(add test code ?) */
 
             pin[nr_pins].cmd = MMUEXT_PIN_L1_TABLE;
             break;
@@ -1877,7 +1709,7 @@ next_checkpoint:
 
         pin[nr_pins].arg1.mfn = ctx->p2m[i];
         nr_pins++;
- 
+
         /* Batch full? Then flush. */
         if ( nr_pins == MAX_PIN_BATCH )
         {
@@ -1901,19 +1733,15 @@ next_checkpoint:
     nr_pins = 0;
     for ( i = 0; i < dinfo->p2m_size; i++ )
     {
-        if ( (pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 ) {
-	    //pagetype = pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK;
-	    //if (pagetype >= XEN_DOMCTL_PFINFO_L1TAB && pagetype <= XEN_DOMCTL_PFINFO_L4TAB)
-	    //	fprintf(fp, "pfn = %d, page table but not pinned.\n", i);
+        if ( (pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 )
             continue;
-	}
 
         switch ( pfn_type_slaver[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
         {
         case XEN_DOMCTL_PFINFO_L1TAB:
-	    if (!test_bit(i, to_send)) // it is in (~to_send & mL1), keep it
-		continue;
-	    // fallthrough
+            if (!test_bit(i, to_send)) // it is in (~to_send & mL1), keep it
+                continue;
+            // fallthrough
         case XEN_DOMCTL_PFINFO_L2TAB:
         case XEN_DOMCTL_PFINFO_L3TAB:
         case XEN_DOMCTL_PFINFO_L4TAB:
@@ -1951,107 +1779,107 @@ next_checkpoint:
 
     /* Step 3: copy dirty page */
     //for (pfn = 0; pfn < dinfo->p2m_size; pfn++ ) {
-if (1){
-    long dirty_all = 0, dirty_l4 = 0, dirty_l3 = 3, dirty_l2 = 0, dirty_l1 = 0;
+    if (1) {
+        long dirty_all = 0, dirty_l4 = 0, dirty_l3 = 3, dirty_l2 = 0, dirty_l1 = 0;
 
-    for (j = pfn = 0; pfn < max_mem_pfn; pfn++) {
-	if ( !test_bit(pfn, to_send) )
-		continue;
-	
-	dirty_all++;
-	pagetype = pfn_type[pfn] & XEN_DOMCTL_PFINFO_LTAB_MASK;
-		
-	if (pagetype == XEN_DOMCTL_PFINFO_XTAB)
-		// a bogus/unmapped page: skip it
-		continue;
-
-        switch ( pagetype )
+        for (j = pfn = 0; pfn < max_mem_pfn; pfn++)
         {
-        case XEN_DOMCTL_PFINFO_L1TAB:
-		dirty_l1++;
-            break;
+            if ( !test_bit(pfn, to_send) )
+                continue;
 
-        case XEN_DOMCTL_PFINFO_L2TAB:
-		dirty_l2++;
-            break;
+            dirty_all++;
+            pagetype = pfn_type[pfn] & XEN_DOMCTL_PFINFO_LTAB_MASK;
 
-        case XEN_DOMCTL_PFINFO_L3TAB:
-		dirty_l3++;
-            break;
+            if (pagetype == XEN_DOMCTL_PFINFO_XTAB)
+                // a bogus/unmapped page: skip it
+                continue;
 
-        case XEN_DOMCTL_PFINFO_L4TAB:
-		dirty_l4++;
-            break;
+            switch ( pagetype )
+            {
+            case XEN_DOMCTL_PFINFO_L1TAB:
+                dirty_l1++;
+                break;
 
-        default:
-            break;
+            case XEN_DOMCTL_PFINFO_L2TAB:
+                dirty_l2++;
+                break;
+
+            case XEN_DOMCTL_PFINFO_L3TAB:
+                dirty_l3++;
+                break;
+
+            case XEN_DOMCTL_PFINFO_L4TAB:
+                dirty_l4++;
+                break;
+
+            default:
+                break;
+            }
+
+            mfn = ctx->p2m[pfn];
+            j++;
+            if (1) { /* mfncopy_op */
+                pagebuff = (char *)(pagebase + pfn * PAGE_SIZE);
+
+                //continue;
+                hypercall.op = __HYPERVISOR_mfncopy_op;
+                hypercall.arg[0] = (unsigned long)mfn;
+                hypercall.arg[1] = (unsigned long)pagebuff;
+
+                do_xen_hypercall(xch, &hypercall);
+            } else { /* foreign mmap */
+                int pfn_err = 0;
+                char *region_base_slaver;
+                xen_pfn_t region_mfn_slaver = mfn;
+
+                region_base_slaver = xc_map_foreign_bulk(xch, dom,
+                PROT_WRITE, &region_mfn_slaver, &pfn_err, 1);
+
+                if (!region_base_slaver || pfn_err) {
+                    ERROR("laijs xc_map_foreign_bulk failed");
+                    return -1;
+                }
+
+                pagebuff = (char *)(pagebase + pfn * PAGE_SIZE);
+                memcpy(region_base_slaver, pagebuff, PAGE_SIZE);
+                munmap(region_base_slaver, PAGE_SIZE);
+            }
+
+            if ( !hvm &&
+                 xc_add_mmu_update(xch, mmu,
+                                   (((unsigned long long)mfn) << PAGE_SHIFT)
+                                   | MMU_MACHPHYS_UPDATE, pfn) )
+            {
+                goto out;
+            }
         }
 
-	mfn = ctx->p2m[pfn];
-	j++;
-	if (1) { /* mfncopy_op */
-		pagebuff = (char *)(pagebase + pfn * PAGE_SIZE);
-
-		//continue;
-		hypercall.op = __HYPERVISOR_mfncopy_op;
-		hypercall.arg[0] = (unsigned long)mfn;
-		hypercall.arg[1] = (unsigned long)pagebuff;
-
-		do_xen_hypercall(xch, &hypercall);
-	} else { /* foreign mmap */
-		int pfn_err = 0;
-		char *region_base_slaver;
-		xen_pfn_t region_mfn_slaver = mfn;
-
-		region_base_slaver = xc_map_foreign_bulk(xch, dom,
-			PROT_WRITE, &region_mfn_slaver, &pfn_err, 1);
-
-		if (!region_base_slaver || pfn_err) {
-			ERROR("laijs xc_map_foreign_bulk failed");
-			return -1;
-		}
-
-		pagebuff = (char *)(pagebase + pfn * PAGE_SIZE);
-		memcpy(region_base_slaver, pagebuff, PAGE_SIZE);
-		munmap(region_base_slaver, PAGE_SIZE);
-	}
-
-	if ( !hvm &&
-		xc_add_mmu_update(xch, mmu,
-				(((unsigned long long)mfn) << PAGE_SHIFT)
-				| MMU_MACHPHYS_UPDATE, pfn) )
-	{
-		// gettimeofday(&time, NULL);
-		// fprintf(fp, "[%d.%d]coping back memory error!\n", (int)time.tv_sec, (int)time.tv_usec);
-		goto out;
-	}
+        /*
+         * Ensure we flush all machphys updates before potential PAE-specific
+         * reallocations below.
+         */
+        if ( !hvm && xc_flush_mmu_updates(xch, mmu) )
+        {
+            PERROR("Error doing flush_mmu_updates()");
+            goto out;
+        }
+        fprintf(fp,	"[%lu.%06lu]"
+                "dirty_all=%ld, "
+                "dirty_all_pt=%ld\n",
+                // "dirty_l4=%ld\n"
+                // "dirty_l3=%ld\n"
+                // "dirty_l2=%ld\n"
+                // "dirty_l1=%ld\n",
+                (unsigned long)time.tv_sec, (unsigned long)time.tv_usec,
+                dirty_all,
+                dirty_l4 + dirty_l3 + dirty_l2 + dirty_l1
+                // dirty_l4,
+                // dirty_l3,
+                // dirty_l2,
+                // dirty_l1);
+                );
+        fprintf(stat_fp, "%ld\n", dirty_all);
     }
-    /*
-     * Ensure we flush all machphys updates before potential PAE-specific
-     * reallocations below.
-     */
-    if ( !hvm && xc_flush_mmu_updates(xch, mmu) )
-    {
-        PERROR("Error doing flush_mmu_updates()");
-        goto out;
-    }
-	fprintf(fp,	"[%lu.%06lu]"
-			"dirty_all=%ld, "
-			"dirty_all_pt=%ld\n",
-			// "dirty_l4=%ld\n"
-			// "dirty_l3=%ld\n"
-			// "dirty_l2=%ld\n"
-			// "dirty_l1=%ld\n",
-			(unsigned long)time.tv_sec, (unsigned long)time.tv_usec,
-			dirty_all,
-			dirty_l4 + dirty_l3 + dirty_l2 + dirty_l1
-			// dirty_l4,
-			// dirty_l3,
-			// dirty_l2,
-			// dirty_l1);
-			);
-	fprintf(stat_fp, "%ld\n", dirty_all);
-}
 
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]start step4\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
@@ -2065,18 +1893,14 @@ if (1){
     nr_pins = 0;
     for ( i = 0; i < dinfo->p2m_size; i++ )
     {
-        if ( (pfn_type[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 ) {
-	    //pagetype = pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK;
-	    //if (pagetype >= XEN_DOMCTL_PFINFO_L1TAB && pagetype <= XEN_DOMCTL_PFINFO_L4TAB)
-	    //	fprintf(fp, "pfn = %d, page table but not pinned.\n", i);
+        if ( (pfn_type[i] & XEN_DOMCTL_PFINFO_LPINTAB) == 0 )
             continue;
-	}
 
         switch ( pfn_type[i] & XEN_DOMCTL_PFINFO_LTABTYPE_MASK )
         {
         case XEN_DOMCTL_PFINFO_L1TAB:
-	    if (!test_bit(i, to_send)) // it is in (~to_send & mL1)(=~to_send & sL1), already pined
-		continue;
+            if (!test_bit(i, to_send)) // it is in (~to_send & mL1)(=~to_send & sL1), already pined
+                continue;
             pin[nr_pins].cmd = MMUEXT_PIN_L1_TABLE;
             break;
 
@@ -2098,7 +1922,7 @@ if (1){
 
         pin[nr_pins].arg1.mfn = ctx->p2m[i];
         nr_pins++;
- 
+
         /* Batch full? Then flush. */
         if ( nr_pins == MAX_PIN_BATCH )
         {
@@ -2126,9 +1950,9 @@ if (1){
         {
         case XEN_DOMCTL_PFINFO_L1TAB:
             if (pfn_type[i] & XEN_DOMCTL_PFINFO_LPINTAB) // still needed
-		continue;
-	    if (test_bit(i, to_send)) // not pined by step 1
-		continue;
+                continue;
+            if (test_bit(i, to_send)) // not pined by step 1
+                continue;
 
             pin[nr_pins].cmd = MMUEXT_UNPIN_TABLE;
             break;
@@ -2142,7 +1966,7 @@ if (1){
 
         pin[nr_pins].arg1.mfn = ctx->p2m[i];
         nr_pins++;
- 
+
         /* Batch full? Then flush. */
         if ( nr_pins == MAX_PIN_BATCH )
         {
@@ -2215,8 +2039,9 @@ if (1){
         vcpup += (dinfo->guest_width == 8) ? sizeof(ctxt->x64) : sizeof(ctxt->x32);
 
         DPRINTF("read VCPU %d\n", i);
-	gettimeofday(&time, NULL);
-	fprintf(fp, "[%lu.%06lu]read VCPU %d\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, i);
+
+        gettimeofday(&time, NULL);
+        fprintf(fp, "[%lu.%06lu]read VCPU %d\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, i);
 
         if ( !new_ctxt_format )
             SET_FIELD(ctxt, flags, GET_FIELD(ctxt, flags) | VGCF_online);
@@ -2381,7 +2206,7 @@ if (1){
     /* clear any pending events and the selector */
     MEMSET_ARRAY_FIELD(new_shared_info, evtchn_pending, 0);
     for ( i = 0; i < XEN_LEGACY_MAX_VCPUS; i++ )
-	    SET_FIELD(new_shared_info, vcpu_info[i].evtchn_pending_sel, 0);
+        SET_FIELD(new_shared_info, vcpu_info[i].evtchn_pending_sel, 0);
 
     /* mask event channels */
     MEMSET_ARRAY_FIELD(new_shared_info, evtchn_mask, 0xff);
@@ -2395,7 +2220,7 @@ if (1){
     for ( i = 0; i < P2M_FL_ENTRIES; i++ )
     {
         pfn = p2m_frame_list[i];
-	//fprintf(fp, "%ld ", pfn);
+        //fprintf(fp, "%ld ", pfn);
         if ( (pfn >= dinfo->p2m_size) || (pfn_type[pfn] != XEN_DOMCTL_PFINFO_NOTAB) )
         {
             ERROR("PFN-to-MFN frame number %i (%#lx) is bad", i, pfn);
@@ -2453,58 +2278,45 @@ if (1){
 
     rc = 0;
 
-    // output the store-mfn & console-mfn	 	
+    // output the store-mfn & console-mfn
     printf("store-mfn %li\n", *store_mfn);
     printf("console-mfn %li\n", *console_mfn);
-    	
-	/* Enable dirty-log */
-  	if ( xc_shadow_control(xch, dom,
-			XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY,
-			NULL, 0, NULL, 0, NULL) < 0 )
-    	{
-		frc = xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_OFF,
-			NULL, 0, NULL, 0, NULL);
-		if ( frc >= 0 )
-		{
-			frc = xc_shadow_control(xch, dom,
-					XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY,
-					NULL, 0, NULL, 0, NULL);
-		}
-		if ( frc < 0 )
-		{
-			// gettimeofday(&time, NULL);
-			// fprintf(fp, "[%d.%d]Couldn't enable shadow mode (rc %d) (err %s)\n", (int)time.tv_sec, (int)time.tv_usec,
-			//	 frc, strerror(errno) );
-			goto out;
-		}
-	}
+
+    /* Enable dirty-log */
+    if ( xc_shadow_control(xch, dom,
+                           XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY,
+                           NULL, 0, NULL, 0, NULL) < 0 )
+    {
+        frc = xc_shadow_control(xch, dom, XEN_DOMCTL_SHADOW_OP_OFF,
+                                NULL, 0, NULL, 0, NULL);
+        if ( frc >= 0 )
+        {
+            frc = xc_shadow_control(xch, dom,
+                                    XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY,
+                                    NULL, 0, NULL, 0, NULL);
+        }
+        if ( frc < 0 )
+            goto out;
+    }
+
     // notify python code checkpoint finish
     printf("finish\n");
     fflush(stdout);
-    
+
     // wait domain resume, then connect the suspend evtchn
     scanf("%s", str);
     while (1) {
-    	frc = syscall(NR_wait_resume);
-	if (frc == 0)break;
+        frc = syscall(NR_wait_resume);
+        if (frc == 0)
+            break;
     }
 
-    if (first_time) {
-	sleep(10);
-    	remote_port = xs_suspend_evtchn_port(dom);
-    	if (remote_port < 0) {
-		// gettimeofday(&time, NULL);
-		// fprintf(fp, "[%d.%d]get evtchn port error.\n", (int)time.tv_sec, (int)time.tv_usec);
-    	}
+    if (first_time)
+    {
+        sleep(10);
+        remote_port = xs_suspend_evtchn_port(dom);
 
-	// gettimeofday(&time, NULL);
-	// fprintf(fp, "[%d.%d]dom=%d, remote_port=%d.\n", (int)time.tv_sec, (int)time.tv_usec, dom, remote_port);
-
-    	local_port = xc_suspend_evtchn_init(xch, xce, dom, remote_port);
-   	 if (local_port < 0) {
-		// gettimeofday(&time, NULL);
-		// fprintf(fp, "[%d.%d]evtchn init error.\n", (int)time.tv_sec, (int)time.tv_usec);
-   	 }
+        local_port = xc_suspend_evtchn_init(xch, xce, dom, remote_port);
     }
 
     printf("resume\n");
@@ -2515,29 +2327,21 @@ if (1){
     count++;
     scanf("%s", str);
     gettimeofday(&time, NULL);
-    fprintf(fp, "[%lu.%06lu]read suspend?=%s.\n", 
-		(unsigned long)time.tv_sec, (unsigned long)time.tv_usec, str);
+    fprintf(fp, "[%lu.%06lu]read suspend?=%s.\n",
+            (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, str);
 
-    if ( strcmp(str, "suspend") ) goto out;
-    //if ( !strcmp(str, "EOF") )goto out;
-    //if ( !strcmp(str, "exception") )goto out;
-   
+    if ( strcmp(str, "suspend") )
+        goto out;
+
     // notify the suspend evtchn
     frc = xc_evtchn_notify(xce, local_port);
-    if (frc < 0) {
-	// gettimeofday(&time, NULL);
-	// fprintf(fp, "[%d.%d]failed to notify suspend request channel.\n", (int)time.tv_sec, (int)time.tv_usec);
-    }
 
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]waiting suspend done.\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
     frc = xc_await_suspend(xch, xce, local_port);
-    if (frc < 0) {
-	// fprintf(fp, "[%d.%d]suspend failed", (int)time.tv_sec, (int)time.tv_usec);
-    }
 
     printf("suspend\n");
-    fflush(stdout); 
+    fflush(stdout);
 
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]waiting for start...\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
@@ -2546,8 +2350,10 @@ if (1){
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]receive1: %s\n", (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, str);
 
-    if ( !strcmp(str, "EOF") )goto out;
-    if ( !strcmp(str, "exception") )goto out;
+    if ( !strcmp(str, "EOF") )
+        goto out;
+    if ( !strcmp(str, "exception") )
+        goto out;
     // start
     scanf("%s", str);
     gettimeofday(&time, NULL);
@@ -2561,64 +2367,63 @@ if (1){
     // get dirty pages
     gettimeofday(&time, NULL);
     fprintf(fp, "[%lu.%06lu]begin get dirty-log.\n", 
-		(unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+            (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
     memset(to_send, 0x0, BITMAP_SIZE);
     if ( xc_shadow_control(xch, dom,
-			XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
-			dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
+                           XEN_DOMCTL_SHADOW_OP_CLEAN, HYPERCALL_BUFFER(to_send),
+                           dinfo->p2m_size, NULL, 0, &stats) != dinfo->p2m_size )
+        goto out;
+
+    for (i = j = 0; i < max_mem_pfn; i++)
     {
-	// fprintf(fp, "Error flushing shadow PT\n");
-	goto out;
+        if ( !test_bit(i, to_send) )
+            continue;
+        j++;
     }
-    for (i = j = 0; i < max_mem_pfn; i++) {
-	if ( !test_bit(i, to_send) )
-		continue;
-	j++;
-    }
-	
+
     gettimeofday(&time, NULL);
-    fprintf(fp, "[%lu.%06lu]end get dirty-log, with dirty pages=%d.\n", 
-		(unsigned long)time.tv_sec, (unsigned long)time.tv_usec, j);
+    fprintf(fp, "[%lu.%06lu]end get dirty-log, with dirty pages=%d.\n",
+            (unsigned long)time.tv_sec, (unsigned long)time.tv_usec, j);
 
     if ( xc_shadow_control(xch, dom,
-			XEN_DOMCTL_SHADOW_OP_OFF,
-			NULL, 0, NULL, 0, NULL) < 0 )
-    {
-	// fprintf(fp, "Warning - couldn't disable shadow mode\n");
-	goto out;
-    }
+                           XEN_DOMCTL_SHADOW_OP_OFF,
+                           NULL, 0, NULL, 0, NULL) < 0 )
+        goto out;
+
     gettimeofday(&time, NULL);
-    fprintf(fp, "[%lu.%06lu]end off dirty-log.\n", 
-		(unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+    fprintf(fp, "[%lu.%06lu]end off dirty-log.\n",
+            (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
     j = 0;
-    for (i = 0; i < max_mem_pfn; i++) {
-	if ( !test_bit(i, to_send) )
-		continue;
+    for (i = 0; i < max_mem_pfn; i++)
+    {
+        if ( !test_bit(i, to_send) )
+            continue;
         pfn_batch_slaver[j] = i;
-	pfn_type_batch_slaver[j++] = ctx->p2m[i];
-	if (j == MAX_BATCH_SIZE)
-	{
-	    if (update_pfn_type(xch, dom, j, pfn_batch_slaver, pfn_type_batch_slaver, pfn_type_slaver))
-		goto out;
-	    j = 0;
-	}
+        pfn_type_batch_slaver[j++] = ctx->p2m[i];
+        if (j == MAX_BATCH_SIZE)
+        {
+            if (update_pfn_type(xch, dom, j, pfn_batch_slaver, pfn_type_batch_slaver, pfn_type_slaver))
+                goto out;
+            j = 0;
+        }
     }
 
     if (j)
     {
-	if (update_pfn_type(xch, dom, j, pfn_batch_slaver, pfn_type_batch_slaver, pfn_type_slaver))
-	    goto out;
+        if (update_pfn_type(xch, dom, j, pfn_batch_slaver, pfn_type_batch_slaver, pfn_type_slaver))
+            goto out;
     }
-	
+
     // reset memory
     hypercall.op = __HYPERVISOR_reset_memory_op;
     hypercall.arg[0] = (unsigned long)dom;
 
     do_xen_hypercall(xch, &hypercall);
-    
+
     gettimeofday(&time, NULL);
-    fprintf(fp, "[%lu.%06lu]end reset memory.\n", 
-		(unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+    fprintf(fp, "[%lu.%06lu]end reset memory.\n",
+        (unsigned long)time.tv_sec, (unsigned long)time.tv_usec);
+
     //goto loadpages;
     first_time = 0;
     goto next_checkpoint;
