@@ -32,6 +32,14 @@
 #include <sys/wait.h>
 #include <asm/ioctl.h>
 
+#include <netlink/cache.h>
+#include <netlink/socket.h>
+#include <netlink/attr.h>
+#include <netlink/route/link.h>
+#include <netlink/route/route.h>
+#include <netlink/route/qdisc.h>
+#include <netlink/route/qdisc/plug.h>
+
 #include "xc_private.h"
 #include "xc_dom.h"
 #include "xg_private.h"
@@ -1035,6 +1043,85 @@ const char *mode_name[] = {
     [COMPARE_MODE] = "colo mode",
 };
 
+static struct rtnl_qdisc *init_qdisc(struct nl_sock *nlsock,
+                                     struct nl_cache *qdisc_cache)
+{
+    int ret, ifindex;
+    struct rtnl_link *ifb = NULL;
+    struct rtnl_qdisc *qdisc = NULL;
+    const char *tc_kind = NULL;
+
+    /* Now that we have brought up IFB device with plug qdisc for
+     * this vif, so we need to refill the qdisc cache.
+     */
+    ret = nl_cache_refill(nlsock, qdisc_cache);
+    if (ret < 0)
+        return NULL;
+
+    /* get a handle to the IFB interface */
+    ifb = NULL;
+    ret = rtnl_link_get_kernel(nlsock, 0, "ifb0", &ifb);
+    if (ret)
+        return NULL;
+
+    ifindex = rtnl_link_get_ifindex(ifb);
+    if (!ifindex) {
+        rtnl_link_put(ifb);
+        return NULL;
+    }
+
+    /* Get a reference to the root qdisc installed on the IFB, by
+     * querying the qdisc list we obtained earlier. The netbufscript
+     * sets up the plug qdisc as the root qdisc, so we don't have to
+     * search the entire qdisc tree on the IFB dev.
+
+     * There is no need to explicitly free this qdisc as its just a
+     * reference from the qdisc cache we allocated earlier.
+     */
+    qdisc = rtnl_qdisc_get_by_parent(qdisc_cache, ifindex,
+                                     TC_H_ROOT);
+    if (!qdisc) {
+        rtnl_link_put(ifb);
+        return NULL;
+    }
+
+    tc_kind = rtnl_tc_get_kind(TC_CAST(qdisc));
+    /* Sanity check: Ensure that the root qdisc is a plug qdisc. */
+    if (!tc_kind || strcmp(tc_kind, "plug")) {
+        nl_object_put((struct nl_object *)qdisc);
+        rtnl_link_put(ifb);
+        return NULL;
+    }
+
+    rtnl_link_put(ifb);
+    return qdisc;
+}
+
+/* The buffer_op's value, not the value passed to kernel */
+enum {
+    tc_buffer_start,
+    tc_buffer_release
+};
+
+static int remus_netbuf_op(struct nl_sock *nlsock, struct rtnl_qdisc *qdisc,
+                           int buffer_op)
+{
+    int ret;
+
+    if (buffer_op == tc_buffer_start)
+        ret = rtnl_qdisc_plug_buffer(qdisc);
+    else
+        ret = rtnl_qdisc_plug_release_one(qdisc);
+
+    if (ret)
+        return 1;
+
+    if (rtnl_qdisc_add(nlsock, qdisc, NLM_F_REQUEST))
+        return 2;
+
+    return 0;
+}
+
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
                    struct save_callbacks* callbacks, int hvm)
@@ -1121,12 +1208,38 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
      */
     int mode = COMPARE_MODE;
 
+    struct nl_sock *nlsock = NULL;
+    struct nl_cache *qdisc_cache = NULL;
+    struct rtnl_qdisc *qdisc = NULL;
+
     stat_fp = fopen("/root/yewei/master.txt", "at");
     setbuf(stat_fp, NULL);
     setlinebuf(stdout);
 
     syscall(NR_reset_suspend_count);
     syscall(NR_vif_block, 0);
+
+    nlsock = nl_socket_alloc();
+    if (!nlsock) {
+        ERROR("cannot allocate nl socket");
+        return 1;
+    }
+
+    frc = nl_connect(nlsock, NETLINK_ROUTE);
+    if (frc) {
+        ERROR("failed to open netlink socket");
+        nl_close(nlsock);
+        nl_socket_free(nlsock);
+        return 1;
+    }
+
+    frc = rtnl_qdisc_alloc_cache(nlsock, &qdisc_cache);
+    if (frc) {
+        ERROR("failed to allocate qdisc cache");
+        nl_close(nlsock);
+        nl_socket_free(nlsock);
+        return 1;
+    }
 
     if ( hvm && !callbacks->switch_qemu_logdirty )
     {
@@ -2179,6 +2292,13 @@ skip_wait_slave_resumed:
 #endif
 
     callbacks->checkpoint(callbacks->data);
+    if (mode == BUFFER_MODE) {
+        frc = remus_netbuf_op(nlsock, qdisc, tc_buffer_release);
+        if (frc) {
+            ERROR("netbuf op returns %d", frc);
+            goto out;
+        }
+    }
 
     // COMMENTS: For manually raise ck.
 #ifdef NET_FW
@@ -2258,6 +2378,16 @@ start_ck:
         }
 
         switch_fw_network(curr_mode);
+        if (curr_mode == BUFFER_MODE) {
+            qdisc = init_qdisc(nlsock, qdisc_cache);
+            if (!qdisc) {
+                ERROR("init qdisc fails");
+                goto out;
+            }
+        } else {
+            nl_object_put((struct nl_object *)qdisc);
+            qdisc = NULL;
+        }
 
         if (curr_mode == COMPARE_MODE) {
             if (read_exact(io_fd, sig_buf, 8)) {
@@ -2313,8 +2443,15 @@ start_ck:
             PERROR("Error flushing shadow PT");
         }
 
-    if (mode == BUFFER_MODE)
+    if (mode == BUFFER_MODE) {
+        frc = remus_netbuf_op(nlsock, qdisc, tc_buffer_start);
+        if (frc) {
+            ERROR("netbuf op returns %d", frc);
+            goto out;
+        }
+
         goto skip_wait_slave_suspended;
+    }
 
     /* wait slaver side suspend done */
     while (1) {

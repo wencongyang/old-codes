@@ -68,7 +68,7 @@ OSDEP_SRCS-y                 += xenctrl_osdep_ENOSYS.c
 -include $(XEN_TARGET_ARCH)/Makefile
 
 CFLAGS   += -Werror -Wmissing-prototypes
-CFLAGS   += $(INCLUDES) -I. -I../xenstore -I../include
+CFLAGS   += $(INCLUDES) -I. -I../xenstore -I../include -I/usr/include/libnl3
 
 # Needed for posix_fadvise64() in xc_linux.c
 CFLAGS-$(CONFIG_Linux) += -D_GNU_SOURCE
@@ -195,7 +195,7 @@ xc_dom_bzimageloader.opic: CFLAGS += $(call zlib-options,D)
 
 libxenguest.so.$(MAJOR).$(MINOR): COMPRESSION_LIBS = $(call zlib-options,l)
 libxenguest.so.$(MAJOR).$(MINOR): $(GUEST_PIC_OBJS) libxenctrl.so
-	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenguest.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(GUEST_PIC_OBJS) $(COMPRESSION_LIBS) -lz -lxenctrl $(PTHREAD_LIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenguest.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(GUEST_PIC_OBJS) $(COMPRESSION_LIBS) -lz -lxenctrl -lnl-3 -lnl-route-3 $(PTHREAD_LIBS)
 
 xenctrl_osdep_ENOSYS.so: $(OSDEP_PIC_OBJS) libxenctrl.so
 	$(CC) -g $(CFLAGS) $(LDFLAGS) $(SHLIB_LDFLAGS) -o $@ $(OSDEP_PIC_OBJS) -lxenctrl
