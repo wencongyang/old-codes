@@ -925,20 +925,6 @@ static int save_tsc_info(xc_interface *xch, uint32_t dom, int io_fd)
     return 0;
 }
 
-#ifdef NET_FW
-static void start_input_network(void)
-{
-	pid_t pid;
-
-	pid = vfork();
-	if (pid > 0) { // father wait child exit
-		wait(NULL);
-		return;
-	}
-
-	execl("/etc/xen/scripts/HA_fw_runtime.sh", "HA_fw_runtime.sh", "input", NULL);
-}
-#endif
 #ifdef FAILOVER
 static void failover(void)
 {
@@ -1055,14 +1041,18 @@ static struct rtnl_qdisc *init_qdisc(struct nl_sock *nlsock,
      * this vif, so we need to refill the qdisc cache.
      */
     ret = nl_cache_refill(nlsock, qdisc_cache);
-    if (ret < 0)
+    if (ret < 0) {
+        fprintf(stderr, "nl_cache_refill() fails\n");
         return NULL;
+    }
 
     /* get a handle to the IFB interface */
     ifb = NULL;
     ret = rtnl_link_get_kernel(nlsock, 0, "ifb0", &ifb);
-    if (ret)
+    if (ret) {
+        fprintf(stderr, "rtnl_link_get_kernel() fails\n");
         return NULL;
+    }
 
     ifindex = rtnl_link_get_ifindex(ifb);
     if (!ifindex) {
@@ -1081,6 +1071,7 @@ static struct rtnl_qdisc *init_qdisc(struct nl_sock *nlsock,
     qdisc = rtnl_qdisc_get_by_parent(qdisc_cache, ifindex,
                                      TC_H_ROOT);
     if (!qdisc) {
+        fprintf(stderr, "getting qdisc fails\n");
         rtnl_link_put(ifb);
         return NULL;
     }
@@ -1088,6 +1079,7 @@ static struct rtnl_qdisc *init_qdisc(struct nl_sock *nlsock,
     tc_kind = rtnl_tc_get_kind(TC_CAST(qdisc));
     /* Sanity check: Ensure that the root qdisc is a plug qdisc. */
     if (!tc_kind || strcmp(tc_kind, "plug")) {
+        fprintf(stderr, "ifb0 does not use sch_plug\n");
         nl_object_put((struct nl_object *)qdisc);
         rtnl_link_put(ifb);
         return NULL;
@@ -2271,7 +2263,6 @@ skip_wait_slave_resumed:
 #ifdef NET_FW
     if(first_time) {
         install_fw_network();
-        start_input_network();
     } else if (mode == COMPARE_MODE) {
         syscall(NR_vif_block, 0);
     }

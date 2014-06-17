@@ -108,13 +108,13 @@ function remus()
 
 	# add qdisc sch_plug for vnif
 	modprobe sch_plug
-	tc qdisc add dev ifb0 root handle 1: sch_plug
+	tc qdisc add dev ifb0 root handle 1: plug
 }
 
 function noremus()
 {
 	# remove qdisc sch_plug from vnif
-	tc qdisc del dev ifb0 root handle 1: sch_plug
+	tc qdisc del dev ifb0 root handle 1: plug
 
 	# add qdisc sch_plug for vnif
 	tc qdisc add dev ifb0 root handle 1: master
