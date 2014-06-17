@@ -960,6 +960,25 @@ static void install_fw_network(void)
 	execl("/etc/xen/scripts/HA_fw_runtime.sh", "HA_fw_runtime.sh", "install", NULL);
 }
 #endif
+
+static void switch_fw_network(int new_mode)
+{
+    pid_t pid;
+
+    pid = vfork();
+    if (pid > 0) { // father wait child exit
+        wait(NULL);
+        return;
+    }
+
+    if (new_mode == COMPARE_MODE)
+        execl("/etc/xen/scripts/HA_fw_runtime.sh",
+              "HA_fw_runtime.sh", "noremus", NULL);
+    else
+        execl("/etc/xen/scripts/HA_fw_runtime.sh",
+              "HA_fw_runtime.sh", "remus", NULL);
+}
+
 /*static void uninstall_fw_network(void)
 {
 	pid_t pid;
@@ -1090,6 +1109,12 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     int want_exit = 0;
 
     FILE *stat_fp;
+
+    /*
+     * update_colo_mode() can be called at any time, but
+     * we only update mode after a checkpoint finishes.
+     */
+    int mode = COMPARE_MODE;
 
     stat_fp = fopen("/root/yewei/master.txt", "at");
     setbuf(stat_fp, NULL);
@@ -2081,6 +2106,10 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
      * "resume"         ---->
      * resume vm                    resume vm
      */
+
+    if (mode == BUFFER_MODE)
+        goto skip_write_resume;
+
     read(io_fd, sig_buf, 6);
 
     if (!first_time)
@@ -2093,6 +2122,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         goto out;
     }
 
+skip_write_resume:
     if ( !rc && callbacks->postcopy )
         callbacks->postcopy(callbacks->data);
 
@@ -2104,6 +2134,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     gettimeofday(&tv, NULL);
     frc = syscall(NR_wait_resume);
 
+    if (mode == BUFFER_MODE)
+        goto skip_wait_slave_resumed;
+
     /* wait slaver finish resume */
     read(io_fd, sig_buf, 7);
     sig_buf[7] = 0;
@@ -2113,20 +2146,22 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec,
             (unsigned long)tv.tv_usec);
+
+skip_wait_slave_resumed:
     /* forward network */
     // COMMENTS: For manually raise ck.
 #ifdef NET_FW
     if(first_time) {
         install_fw_network();
         start_input_network();
-    } else {
+    } else if (mode == COMPARE_MODE) {
         syscall(NR_vif_block, 0);
     }
 #endif
 
     // COMMENTS: For manually raise ck.
 #ifdef NET_FW
-    if (!first_time) {
+    if (!first_time && mode == COMPARE_MODE) {
         // notify compare module checkpoint finish
         gettimeofday(&tv, NULL);
         printf("[%lu.%06lu]Notify checkpoint finish.\n",
@@ -2151,6 +2186,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         }
     }
 #endif
+
     /* wait for a new chekcpoint */
 
 start_ck:
@@ -2161,7 +2197,7 @@ start_ck:
     fprintf(stat_fp, "%lu.%06lu\n", (unsigned long)tv.tv_sec,
             (unsigned long)tv.tv_usec);
 #ifdef NET_FW
-    if (curr_mode == COMPARE_MODE) {
+    if (mode == COMPARE_MODE) {
         while (1) {
             err = ioctl(dev_fd, COMP_IOCTWAIT);
             if (err == 0 || err == -1)
@@ -2174,18 +2210,7 @@ start_ck:
         }
     } else {
         /* buffer mode */
-        err = ioctl(dev_fd, COMP_IOCTWAIT, interval_us/1000);
-        if (err == 0) {
-            /* checkpoint */
-            usleep(interval_us);
-        } else {
-            if (errno != ETIME) {
-                /* not timeout */
-                usleep(interval_us);
-            } else {
-                printf("timeout\n");
-            }
-        }
+        usleep(interval_us);
         err = 0;
     }
 #else
@@ -2207,14 +2232,48 @@ start_ck:
     printf("[%lu.%06lu]checkpoint start.\n", (unsigned long)tv.tv_sec,
            (unsigned long)tv.tv_usec);
 
+    /* check curr_mode now */
+    if (mode != curr_mode) {
+        if (curr_mode == COMPARE_MODE) {
+            /* buffering mode ---> colo mode */
+            if (write_exact(io_fd, "noremus ", 8)) {
+                PERROR("write: noremus ");
+                goto out;
+            }
+        } else {
+            /* colo mode ---> buffering mode */
+            if (write_exact(io_fd, "  remus ", 8)) {
+                PERROR("write:   remus ");
+                goto out;
+            }
+        }
+
+        switch_fw_network(curr_mode);
+
+        if (curr_mode == COMPARE_MODE) {
+            if (read_exact(io_fd, sig_buf, 8)) {
+                PERROR("read: noremus");
+                goto out;
+            }
+        } else {
+            if (read_exact(io_fd, sig_buf, 6)) {
+                PERROR("read: remus");
+                goto out;
+            }
+        }
+
+        /* slave's guest is suspended now */
+        mode = curr_mode;
+    }
+
     fprintf(stat_fp, "%lu.%06lu\t", (unsigned long)tv.tv_sec,
             (unsigned long)tv.tv_usec);
 
     /* reset stats timer */
     print_stats(xch, dom, 0, &stats, 0);
 
-    //stop_input_network();
-    syscall(NR_vif_block, 1);
+    if (mode == COMPARE_MODE)
+        syscall(NR_vif_block, 1);
 
     /* notify to continue checkpoint */ 
     if ( write_exact(io_fd, "continue", 8) )
@@ -2240,6 +2299,9 @@ start_ck:
         {
             PERROR("Error flushing shadow PT");
         }
+
+    if (mode == BUFFER_MODE)
+        goto skip_wait_slave_suspended;
 
     /* wait slaver side suspend done */
     while (1) {
@@ -2273,6 +2335,7 @@ start_ck:
     if (sig_buf[0] == 'r')
         goto start_ck;
 
+skip_wait_slave_suspended:
     // Notify the slaver to flush the disk.
     gettimeofday(&tv, NULL);
     printf("[%lu.%06lu]Begin to flush disk.\n", (unsigned long)tv.tv_sec,
@@ -2284,8 +2347,12 @@ start_ck:
     printf("[%lu.%06lu]Flush disk end.\n", (unsigned long)tv.tv_sec,
            (unsigned long)tv.tv_usec);
 
+    if (mode == BUFFER_MODE)
+        goto skip_write_start;
+
     write_exact(io_fd, "start", 5);
 
+skip_write_start:
     /* Tell the xc_domain_restore routine this is not the first checkpoint */
     first_time = 0;
     goto copypages;
@@ -2335,8 +2402,6 @@ sigintr:
 
 int update_colo_mode(int new_mode, int interval_ms)
 {
-    int rc;
-
     switch(new_mode)
     {
     case BUFFER_MODE:
@@ -2347,13 +2412,6 @@ int update_colo_mode(int new_mode, int interval_ms)
     default:
         return -EINVAL;
     }
-
-    if (dev_fd < 0)
-        return -EBUSY;
-
-    rc = ioctl(dev_fd, COMP_IOCT_SWITCH, new_mode);
-    if (rc < 0)
-        return -errno;
 
     return 0;
 }
