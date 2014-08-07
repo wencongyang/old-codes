@@ -550,16 +550,6 @@ void vmx_cpu_down(void)
     local_irq_restore(flags);
 }
 
-void vmx_sync_mmu(struct domain *d)
-{
-    p2m_lock(p2m_get_hostp2m(d));
-    ept_sync_domain(d);
-    p2m_unlock(p2m_get_hostp2m(d));
-
-    /* flush tlb */
-    flush_all(FLUSH_TLB_GLOBAL);
-}
-
 struct foreign_vmcs {
     struct vcpu *v;
     unsigned int count;

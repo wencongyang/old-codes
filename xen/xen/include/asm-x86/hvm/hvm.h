@@ -131,7 +131,6 @@ struct hvm_function_table {
 
     int  (*cpu_up)(void);
     void (*cpu_down)(void);
-    void (*sync_mmu)(struct domain *d);
 
     /* Instruction intercepts: non-void return values are X86EMUL codes. */
     void (*cpuid_intercept)(
