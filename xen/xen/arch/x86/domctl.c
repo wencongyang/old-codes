@@ -1586,21 +1586,6 @@ long arch_do_domctl(
     }
     break;
 
-    case XEN_DOMCTL_hvm_sync_mmu:
-    {
-        struct domain *d;
-
-        ret = -ESRCH;
-        d = rcu_lock_domain_by_id(domctl->domain);
-        if ( d != NULL )
-        {
-            arch_hvm_sync_mmu(d);
-            rcu_unlock_domain(d);
-            ret = 0;
-        }
-    }
-    break;
-
     default:
         ret = -ENOSYS;
         break;

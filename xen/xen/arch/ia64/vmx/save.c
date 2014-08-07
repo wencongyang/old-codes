@@ -58,11 +58,6 @@ int arch_hvm_load(struct domain *d, struct hvm_save_header *hdr)
     return 0;
 }
 
-void arch_hvm_sync_mmu(struct domain *d)
-{
-    /* TODO */
-}
-
 /*
  * Local variables:
  * mode: C
