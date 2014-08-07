@@ -1454,15 +1454,6 @@ int xc_domain_set_access_required(xc_interface *xch,
     return do_domctl(xch, &domctl);
 }
 
-int xc_domain_hvm_sync_mmu(xc_interface *xch, uint32_t domid)
-{
-    DECLARE_DOMCTL;
-
-    domctl.cmd = XEN_DOMCTL_hvm_sync_mmu;
-    domctl.domain = domid;
-    return do_domctl(xch, &domctl);
-}
-
 /*
  * Local variables:
  * mode: C
