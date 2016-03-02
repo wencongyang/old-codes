@@ -101,6 +101,45 @@ static void xen_update_blkif_status(struct xen_blkif *blkif)
 	}
 }
 
+static void xen_update_blkif_status_COLO(struct xen_blkif *blkif)
+{
+	int err;
+	char name[TASK_COMM_LEN];
+
+	/* Not ready to connect? */
+	if (!blkif->irq || !blkif->vbd.bdev)
+		return;
+
+	/* Already connected? */
+	if (blkif->be->dev->state == XenbusStateConnected)
+		return;
+
+	/* Attempt to connect: exit if we fail to. */
+	//connect(blkif->be);
+	//if (blkif->be->dev->state != XenbusStateConnected)
+	//	return;
+
+	err = blkback_name(blkif, name);
+	if (err) {
+		xenbus_dev_error(blkif->be->dev, err, "get blkback dev name");
+		return;
+	}
+
+	err = filemap_write_and_wait(blkif->vbd.bdev->bd_inode->i_mapping);
+	if (err) {
+		xenbus_dev_error(blkif->be->dev, err, "block flush");
+		return;
+	}
+	invalidate_inode_pages2(blkif->vbd.bdev->bd_inode->i_mapping);
+
+	blkif->xenblkd = kthread_run(xen_blkif_schedule, blkif, name);
+	if (IS_ERR(blkif->xenblkd)) {
+		err = PTR_ERR(blkif->xenblkd);
+		blkif->xenblkd = NULL;
+		xenbus_dev_error(blkif->be->dev, err, "start xenblkd");
+	}
+}
+
 static struct xen_blkif *xen_blkif_alloc(domid_t domid)
 {
 	struct xen_blkif *blkif;
@@ -599,6 +638,7 @@ static void frontend_changed(struct xenbus_device *dev,
 	int err;
 
 	DPRINTK("%s", xenbus_strstate(frontend_state));
+	printk("COLO: blk frontedn changed to %s\n", xenbus_strstate(frontend_state));
 
 	switch (frontend_state) {
 	case XenbusStateInitialising:
@@ -607,6 +647,24 @@ static void frontend_changed(struct xenbus_device *dev,
 				dev->nodename);
 			xenbus_switch_state(dev, XenbusStateInitWait);
 		}
+		break;
+
+	case XenbusStateSuspended:
+		if (dev->state != XenbusStateConnected)
+			break;
+		xen_blkif_disconnect(be->blkif);
+		xenbus_switch_state(dev, XenbusStateSuspended);
+		break;
+
+	case XenbusStateSuspendCanceled:
+		err = connect_ring(be);
+		if (err) {
+			printk("COLO: error when connect_ring\n");
+			break;
+		}
+		xen_update_blkif_status_COLO(be->blkif);
+		xenbus_switch_state(dev, XenbusStateSuspendCanceled);
+		dev->state = XenbusStateConnected;
 		break;
 
 	case XenbusStateInitialised:
@@ -745,6 +803,7 @@ static int connect_ring(struct backend_info *be)
 		xenbus_dev_fatal(dev, err,
 				 "reading %s/ring-ref and event-channel",
 				 dev->otherend);
+		printk("COLO: reading ring-ref and event-channel error\n");
 		return err;
 	}
 
@@ -771,6 +830,7 @@ static int connect_ring(struct backend_info *be)
 	if (err) {
 		xenbus_dev_fatal(dev, err, "mapping ring-ref %lu port %u",
 				 ring_ref, evtchn);
+		printk("COLO: mapping ring-ref %lu port %u\n", ring_ref, evtchn);
 		return err;
 	}
 

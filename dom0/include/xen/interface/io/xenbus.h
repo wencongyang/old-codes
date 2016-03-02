@@ -34,7 +34,13 @@ enum xenbus_state
 	*/
 	XenbusStateReconfiguring = 7,
 
-	XenbusStateReconfigured  = 8
+	XenbusStateReconfigured  = 8,
+
+	XenbusStateSuspended = 9,
+	
+	XenbusStateSuspendCanceled = 10,
+
+	XenbusStateSuspendDone = 11
 };
 
 #endif /* _XEN_PUBLIC_IO_XENBUS_H */

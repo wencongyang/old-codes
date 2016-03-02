@@ -54,6 +54,9 @@ const char *xenbus_strstate(enum xenbus_state state)
 		[ XenbusStateClosed	  ] = "Closed",
 		[XenbusStateReconfiguring] = "Reconfiguring",
 		[XenbusStateReconfigured] = "Reconfigured",
+		[XenbusStateSuspended] = "Suspend",
+		[XenbusStateSuspendCanceled] = "SuspendCanceled",
+		[XenbusStateSuspendDone] = "SuspendDone",
 	};
 	return (state < ARRAY_SIZE(name)) ? name[state] : "INVALID";
 }
