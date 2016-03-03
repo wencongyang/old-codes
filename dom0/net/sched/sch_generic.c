@@ -184,7 +184,9 @@ static inline int qdisc_restart(struct Qdisc *q)
 	dev = qdisc_dev(q);
 	txq = netdev_get_tx_queue(dev, skb_get_queue_mapping(skb));
 
-	return sch_direct_xmit(skb, q, dev, txq, root_lock);
+	//return sch_direct_xmit(skb, q, dev, txq, root_lock);
+	sch_direct_xmit(skb, q, dev, txq, root_lock);
+	return 1;
 }
 
 void __qdisc_run(struct Qdisc *q)
