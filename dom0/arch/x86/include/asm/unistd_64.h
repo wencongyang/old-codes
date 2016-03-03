@@ -690,6 +690,9 @@ __SYSCALL(__NR_process_vm_writev, sys_process_vm_writev)
 __SYSCALL(__NR_wait_resume, sys_wait_resume)
 #define __NR_vif_block				313
 __SYSCALL(__NR_vif_block, sys_vif_block)
+#define __NR_reset_suspend_count		314
+__SYSCALL(__NR_reset_suspend_count, sys_reset_suspend_count)
+
 
 #ifndef __NO_STUBS
 #define __ARCH_WANT_OLD_READDIR

@@ -306,3 +306,9 @@ SYSCALL_DEFINE1(vif_block, int, block)
 }
 EXPORT_SYMBOL(vif_port_dev);
 EXPORT_SYMBOL(is_block);
+
+SYSCALL_DEFINE0(reset_suspend_count)
+{
+	suspended_count = 0;
+}
+EXPORT_SYMBOL(suspended_count);
