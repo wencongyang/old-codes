@@ -59,6 +59,7 @@ struct xenvif {
 
 	/* Physical parameters of the comms window. */
 	unsigned int     irq;
+	unsigned int 	 fast;
 
 	/* List of frontends to notify after a batch of frames sent. */
 	struct list_head notify_list;
@@ -115,6 +116,7 @@ struct xenvif *xenvif_alloc(struct device *parent,
 int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 		   unsigned long rx_ring_ref, unsigned int evtchn);
 void xenvif_disconnect(struct xenvif *vif);
+void xenvif_disconnect_suspend(struct xenvif *vif);
 
 void xenvif_get(struct xenvif *vif);
 void xenvif_put(struct xenvif *vif);

@@ -20,6 +20,8 @@
 */
 
 #include "common.h"
+#include <linux/wait.h>
+#include <xen/events.h>
 
 extern wait_queue_head_t resume_queue;
 extern int is_resumed;
@@ -36,6 +38,13 @@ static int connect_rings(struct backend_info *);
 static void connect(struct backend_info *);
 static void backend_create_xenvif(struct backend_info *be);
 static void unregister_hotplug_status_watch(struct backend_info *be);
+
+static void __otherend_changed_handler(struct work_struct*);
+struct otherend_changed_work_t {
+	struct xenbus_device *dev;
+	struct work_struct work;
+} changed_work;
+static irqreturn_t netif_otherend_changed(int irq, void *dev_id, struct pt_regs *ptregs);
 
 static int netback_remove(struct xenbus_device *dev)
 {
@@ -132,6 +141,9 @@ static int netback_probe(struct xenbus_device *dev,
 	/* This kicks hotplug scripts, so do it immediately. */
 	backend_create_xenvif(be);
 
+	changed_work.dev = dev;
+	INIT_WORK(&changed_work.work, __otherend_changed_handler);
+
 	return 0;
 
 abort_transaction:
@@ -213,9 +225,24 @@ static void disconnect_backend(struct xenbus_device *dev)
 	}
 }
 
+static void disconnect_backend_suspend(struct xenbus_device *dev)
+{
+	struct backend_info *be = dev_get_drvdata(&dev->dev);
+
+	if (be->vif) {
+		xenbus_rm(XBT_NIL, dev->nodename, "hotplug-status");
+		xenvif_disconnect_suspend(be->vif);
+	}
+}
+
 /**
  * Callback received when the frontend's state changes.
  */
+
+struct device *uevent_dev = NULL;
+EXPORT_SYMBOL(uevent_dev);
+int suspended_count = 0;
+
 static void frontend_changed(struct xenbus_device *dev,
 			     enum xenbus_state frontend_state)
 {
@@ -227,7 +254,8 @@ static void frontend_changed(struct xenbus_device *dev,
 
 	switch (frontend_state) {
 	case XenbusStateInitialising:
-		if (dev->state == XenbusStateClosed) {
+		if (dev->state == XenbusStateClosed ||
+			dev->state == XenbusStateSuspended) {
 			printk(KERN_INFO "%s: %s: prepare for reconnect\n",
 			       __func__, dev->nodename);
 			xenbus_switch_state(dev, XenbusStateInitWait);
@@ -241,11 +269,22 @@ static void frontend_changed(struct xenbus_device *dev,
 		if (dev->state == XenbusStateConnected)
 			break;
 		backend_create_xenvif(be);
+		uevent_dev = &dev->dev;
 		if (be->vif)
 			connect(be);
+		is_resumed = 1;
+		wake_up_interruptible(&resume_queue);
+		break;
+
+	case XenbusStateSuspended:
+		suspended_count++;
+		is_resumed = 0;
+		disconnect_backend_suspend(dev);
+		xenbus_switch_state(dev, XenbusStateClosing);
 		break;
 
 	case XenbusStateClosing:
+		suspended_count = 0;
 		if (be->vif)
 			kobject_uevent(&dev->dev.kobj, KOBJ_OFFLINE);
 		disconnect_backend(dev);
@@ -363,8 +402,10 @@ static void connect(struct backend_info *be)
 	struct xenbus_device *dev = be->dev;
 
 	err = connect_rings(be);
-	if (err)
+	if (err) {
+		printk("COLO: error in connect rings.\n");
 		return;
+	}
 
 	err = xen_net_read_mac(dev, be->vif->fe_dev_addr);
 	if (err) {
@@ -387,6 +428,10 @@ static void connect(struct backend_info *be)
 		be->have_hotplug_status_watch = 1;
 	}
 
+	if (suspended_count) {
+		dev->state = XenbusStateConnected;
+	}
+
 	netif_wake_queue(be->vif->dev);
 }
 
@@ -396,7 +441,7 @@ static int connect_rings(struct backend_info *be)
 	struct xenvif *vif = be->vif;
 	struct xenbus_device *dev = be->dev;
 	unsigned long tx_ring_ref, rx_ring_ref;
-	unsigned int evtchn, rx_copy;
+	unsigned int evtchn, rx_copy, fast;
 	int err;
 	int val;
 
@@ -464,7 +509,54 @@ static int connect_rings(struct backend_info *be)
 				 tx_ring_ref, rx_ring_ref, evtchn);
 		return err;
 	}
+
+	if (suspended_count = 1) {
+		printk("COLO: bind fast channel...\n");
+		err = xenbus_scanf(XBT_NIL, dev->otherend, "fast-channel", "%u", &fast);
+		if (err < 0) {
+			printk("COLO: read fast-channel error.\n");
+			return err;
+		}
+
+		err = bind_interdomain_evtchn_to_irqhandler(
+			vif->domid, fast, netif_otherend_changed, 0,
+			dev->nodename, dev);
+		if (err < 0) {
+			printk("COLO: error in bind_interdomain_evtchn_to_irqhandler.\n");
+			return err;
+		}
+		vif->fast = fast;
+	}
+
 	return 0;
+}
+
+static irqreturn_t netif_otherend_changed(int irq, void *dev_id, struct pt_regs *ptregs)
+{
+	schedule_work(&changed_work.work);
+	return IRQ_HANDLED;
+}
+
+static void __otherend_changed_handler(struct work_struct *work)
+{
+	struct otherend_changed_work_t *wc = container_of(work,
+			struct otherend_changed_work_t, work);
+	struct xenbus_device *dev = wc->dev;
+	struct backend_info *be = dev_get_drvdata(&dev->dev);
+	printk("COLO: in fast changed.\n");
+
+	switch (dev->state) {
+	case XenbusStateClosing:
+		notify_remote_via_irq(be->vif->fast);
+		break;
+
+	case XenbusStateInitWait:
+		break;
+
+	case XenbusStateConnected:
+		notify_remote_via_irq(be->vif->fast);
+		break;
+	}
 }
 
 

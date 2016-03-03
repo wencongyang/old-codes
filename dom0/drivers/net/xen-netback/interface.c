@@ -313,14 +313,19 @@ int xenvif_connect(struct xenvif *vif, unsigned long tx_ring_ref,
 		return 0;
 
 	err = xen_netbk_map_frontend_rings(vif, tx_ring_ref, rx_ring_ref);
-	if (err < 0)
+	if (err < 0) {
+		printk("COLO: error in map front rings.\n");
 		goto err;
+	}
 
 	err = bind_interdomain_evtchn_to_irqhandler(
 		vif->domid, evtchn, xenvif_interrupt, 0,
 		vif->dev->name, vif);
-	if (err < 0)
+	if (err < 0) {
+		printk("COLO: error in bind evtchns.\n");
 		goto err_unmap;
+	}
+
 	vif->irq = err;
 	disable_irq(vif->irq);
 
@@ -367,4 +372,23 @@ void xenvif_disconnect(struct xenvif *vif)
 	xen_netbk_unmap_frontend_rings(vif);
 
 	free_netdev(vif->dev);
+}
+
+void xenvif_disconnect_suspend(struct xenvif *vif)
+{
+	struct net_device *dev = vif->dev;
+	if (netif_carrier_ok(dev)) {
+		rtnl_lock();
+		//netif_carrier_off(dev); /* discard queued packets */
+		if (netif_running(dev))
+			xenvif_down(vif);
+		rtnl_unlock();
+		xenvif_put(vif);
+	}
+
+	if (vif->irq) {
+		unbind_from_irqhandler(vif->irq, vif);
+		vif->irq = 0;
+	}
+	xen_netbk_unmap_frontend_rings(vif);
 }
