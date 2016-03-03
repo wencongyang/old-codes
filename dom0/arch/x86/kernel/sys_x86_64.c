@@ -292,3 +292,17 @@ SYSCALL_DEFINE0(wait_resume)
 }
 EXPORT_SYSBOL(resume_queue);
 EXPORT_SYSBOL(is_resumed);
+
+extern void push_vnif_skb();
+struct net_dev *vif_port_dev = NULL;
+int is_block = 0;
+int suspended_count = 0;
+SYSCALL_DEFINE1(vif_block, int, block)
+{
+	is_block = block;
+	if (is_block == 0)
+		push_vnif_skb();
+	return 0;
+}
+EXPORT_SYMBOL(vif_port_dev);
+EXPORT_SYMBOL(is_block);

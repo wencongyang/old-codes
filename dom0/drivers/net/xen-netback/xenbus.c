@@ -25,6 +25,7 @@
 
 extern wait_queue_head_t resume_queue;
 extern int is_resumed;
+extern struct net_device *vif_port_dev;
 
 struct backend_info {
 	struct xenbus_device *dev;
@@ -241,7 +242,7 @@ static void disconnect_backend_suspend(struct xenbus_device *dev)
 
 struct device *uevent_dev = NULL;
 EXPORT_SYMBOL(uevent_dev);
-int suspended_count = 0;
+extern int suspended_count;
 
 static void frontend_changed(struct xenbus_device *dev,
 			     enum xenbus_state frontend_state)
@@ -272,6 +273,7 @@ static void frontend_changed(struct xenbus_device *dev,
 		uevent_dev = &dev->dev;
 		if (be->vif)
 			connect(be);
+		vif_port_dev = be->vif->dev;
 		is_resumed = 1;
 		wake_up_interruptible(&resume_queue);
 		break;
@@ -288,6 +290,7 @@ static void frontend_changed(struct xenbus_device *dev,
 		if (be->vif)
 			kobject_uevent(&dev->dev.kobj, KOBJ_OFFLINE);
 		disconnect_backend(dev);
+		vif_port_dev = NULL;
 		xenbus_switch_state(dev, XenbusStateClosing);
 		break;
 

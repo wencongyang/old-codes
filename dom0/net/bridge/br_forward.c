@@ -21,6 +21,16 @@
 #include <linux/netfilter_bridge.h>
 #include "br_private.h"
 
+#define MAX_BLOCK_SKB 100
+struct vnif_br {
+	struct sk_buff_head queue;
+	spinlock_t qlock;
+	int block;
+} vnif_br_q;
+
+extern struct net_device *vif_port_dev;
+extern int is_block; 
+
 static int deliver_clone(const struct net_bridge_port *prev,
 			 struct sk_buff *skb,
 			 void (*__packet_hook)(const struct net_bridge_port *p,
@@ -78,10 +88,82 @@ static void __br_deliver(const struct net_bridge_port *to, struct sk_buff *skb)
 		br_forward_finish);
 }
 
+static void enqueue(struct sk_buff *skb)
+{
+	spin_lock(&vnif_br_q.qlock);
+	
+	if (vnif_br_q.block >= MAX_BLOCK_SKB) {
+		kfree_skb(skb);
+		goto out;
+	}
+	__skb_queue_tail(&vnif_br_q.queue, skb);
+	vnif_br_q.block++;
+
+out:
+	spin_unlock(&vnif_br_q.qlock);
+}
+
+static struct sk_buff *dequeue()
+{
+	struct sk_buff *skb;
+	
+	spin_lock(&vnif_br_q.qlock);
+	skb = __skb_dequeue(&vnif_br_q.queue);
+	if (likely(skb == NULL))
+		goto out;
+	vnif_br_q.block--;
+
+out:
+	spin_unlock(&vnif_br_q.qlock);
+	return skb;
+}
+
 static void __br_forward(const struct net_bridge_port *to, struct sk_buff *skb)
 {
-	struct net_device *indev;
+	struct net_device *indev, *outdev;
+	struct sk_buff *skb_block;
+	static int init = 1;
 
+	if (init) {
+		skb_queue_head_init(&vnif_br_q.queue);
+		spin_lock_init(&vnif_br_q.qlock);
+		vnif_br_q.block = 0;
+		init = 0;
+	}
+
+	if (skb == NULL) // push_vnif_skb
+		outdev = (struct net_device*)to;
+	else
+		outdev = to->dev;
+
+	if (outdev != vif_port_dev)
+		goto pass;
+
+	// package to vnif
+	if (skb != NULL) enqueue(skb);
+	if (is_block)
+		return;
+
+	while ( (skb_block == dequeue()) ) {
+		if (skb_warn_if_lro(skb_block)) {
+			kfree_skb(skb_block);
+			continue;
+		}
+
+		indev = skb_block->dev;
+		skb_block->dev = vif_port_dev;
+		skb_forward_csum(skb_block);
+
+		
+		NF_HOOK(NFPROTO_BRIDGE, NF_BR_FORWARD, skb_block, indev, skb_block->dev,
+			br_forward_finish);
+		if (is_block)
+			break;
+	}
+
+	return;
+	
+pass:
 	if (skb_warn_if_lro(skb)) {
 		kfree_skb(skb);
 		return;
@@ -93,6 +175,12 @@ static void __br_forward(const struct net_bridge_port *to, struct sk_buff *skb)
 
 	NF_HOOK(NFPROTO_BRIDGE, NF_BR_FORWARD, skb, indev, skb->dev,
 		br_forward_finish);
+}
+
+void push_vnif_skb()
+{
+	//if (vif_port_dev != NULL)
+	//	__br_forward(vif_port_dev, NULL);
 }
 
 /* called with rcu_read_lock */

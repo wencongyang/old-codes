@@ -688,6 +688,8 @@ __SYSCALL(__NR_process_vm_readv, sys_process_vm_readv)
 __SYSCALL(__NR_process_vm_writev, sys_process_vm_writev)
 #define __NR_wait_resume			312
 __SYSCALL(__NR_wait_resume, sys_wait_resume)
+#define __NR_vif_block				313
+__SYSCALL(__NR_vif_block, sys_vif_block)
 
 #ifndef __NO_STUBS
 #define __ARCH_WANT_OLD_READDIR
