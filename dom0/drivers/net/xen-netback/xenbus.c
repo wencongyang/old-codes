@@ -21,6 +21,9 @@
 
 #include "common.h"
 
+extern wait_queue_head_t resume_queue;
+extern int is_resumed;
+
 struct backend_info {
 	struct xenbus_device *dev;
 	struct xenvif *vif;
@@ -486,5 +489,6 @@ static struct xenbus_driver netback = {
 
 int xenvif_xenbus_init(void)
 {
+	init_waitqueue_head(&resume_queue);
 	return xenbus_register_backend(&netback);
 }

@@ -281,3 +281,14 @@ bottomup:
 
 	return addr;
 }
+
+wait_queue_head_t resume_queue;
+int is_resumed = 1;
+SYSCALL_DEFINE0(wait_resume)
+{
+	if (wait_event_interruptible(resume_queue, is_resumed))
+		return -ERESTARTSYS;
+	return 0;
+}
+EXPORT_SYSBOL(resume_queue);
+EXPORT_SYSBOL(is_resumed);
