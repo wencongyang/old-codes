@@ -464,6 +464,12 @@ HYPERVISOR_tmem_op(
 	return _hypercall1(int, tmem_op, op);
 }
 
+static inline unsigned long __must_check
+HYPERVISOR_which_side_op(unsigned long op)
+{
+	return _hypercall1(unsigned long, which_side_op, op);
+}
+
 static inline void
 MULTI_fpu_taskswitch(struct multicall_entry *mcl, int set)
 {
