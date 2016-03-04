@@ -322,6 +322,8 @@ struct rdwt_data {
 	int rx_ref;
 	int tx_ref;
 	int vnif_evtchn;
+	int vbd_ref;
+	int vbd_evtchn;
 };
 typedef struct rdwt_data rdwt_data_t;
 DEFINE_XEN_GUEST_HANDLE(rdwt_data_t);

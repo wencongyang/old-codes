@@ -166,6 +166,7 @@ struct xen_blkif {
 	unsigned int		handle;
 	/* Physical parameters of the comms window. */
 	unsigned int		irq;
+	unsigned int 		fast;
 	/* Comms information. */
 	enum blkif_protocol	blk_protocol;
 	enum blkif_backend_type blk_backend_type;

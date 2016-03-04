@@ -18,8 +18,21 @@
 #include <linux/module.h>
 #include <linux/kthread.h>
 #include <xen/events.h>
+#include <asm/xen/hypervisor.h>
 #include <xen/grant_table.h>
 #include "common.h"
+
+extern wait_queue_head_t resume_queue;
+extern int suspended_count;
+static int irqcount = 0;
+static irqreturn_t blkif_otherend_changed(int irq, void *dev_id, struct pt_regs *ptregs);
+static void __otherend_changed_handler(struct work_struct*);
+
+struct otherend_changed_work_t {
+	struct xenbus_device *dev;
+	struct work_struct work;
+};
+static struct otherend_changed_work_t changed_work;
 
 struct backend_info {
 	struct xenbus_device	*dev;
@@ -214,6 +227,33 @@ static int xen_blkif_map(struct xen_blkif *blkif, unsigned long shared_page,
 }
 
 static void xen_blkif_disconnect(struct xen_blkif *blkif)
+{
+	if (blkif->xenblkd) {
+		kthread_stop(blkif->xenblkd);
+		blkif->xenblkd = NULL;
+	}
+
+	atomic_dec(&blkif->refcnt);
+	wait_event(blkif->waiting_to_free, atomic_read(&blkif->refcnt) == 0);
+	atomic_inc(&blkif->refcnt);
+
+	if (blkif->irq) {
+		unbind_from_irqhandler(blkif->irq, blkif);
+		blkif->irq = 0;
+	}
+
+	if (blkif->fast) {
+		unbind_from_irqhandler(blkif->fast, blkif);
+		blkif->fast = 0;
+	}
+
+	if (blkif->blk_rings.common.sring) {
+		xenbus_unmap_ring_vfree(blkif->be->dev, blkif->blk_ring);
+		blkif->blk_rings.common.sring = NULL;
+	}
+}
+
+static void xen_blkif_disconnect_suspend(struct xen_blkif *blkif)
 {
 	if (blkif->xenblkd) {
 		kthread_stop(blkif->xenblkd);
@@ -528,6 +568,9 @@ static int xen_blkbk_probe(struct xenbus_device *dev,
 	if (err)
 		goto fail;
 
+	changed_work.dev = dev;
+	INIT_WORK(&changed_work.work, __otherend_changed_handler);
+
 	return 0;
 
 fail:
@@ -786,44 +829,68 @@ again:
 	xenbus_transaction_end(xbt, 1);
 }
 
+static int read_ringref_from_xen(int *ref, int *evtchn)
+{
+	struct rdwt_data arg;
+	arg.flag = 0;
+	HYPERVISOR_rdwt_data_op(&arg);
+	(*ref) = arg.vbd_ref;
+	(*evtchn) = arg.vbd_evtchn;
+}
 
 static int connect_ring(struct backend_info *be)
 {
 	struct xenbus_device *dev = be->dev;
+	struct xen_blkif *blkif = be->blkif;
 	unsigned long ring_ref;
-	unsigned int evtchn;
+	unsigned int evtchn, fast;
 	char protocol[64] = "";
 	int err;
+	static int which_side = 0;
+
+	if (which_side == 0) {
+		which_side = HYPERVISOR_which_side_op(0);
+		printk("COLO: which_side = %d\n", which_side);
+	}
 
 	DPRINTK("%s", dev->otherend);
 
-	err = xenbus_gather(XBT_NIL, dev->otherend, "ring-ref", "%lu",
-			    &ring_ref, "event-channel", "%u", &evtchn, NULL);
-	if (err) {
-		xenbus_dev_fatal(dev, err,
-				 "reading %s/ring-ref and event-channel",
-				 dev->otherend);
-		printk("COLO: reading ring-ref and event-channel error\n");
-		return err;
+	if ( (which_side == -1 && suspended_count ==0)		//master
+		|| (which_side > 0 && suspended_count==0) )	//slaver
+	{
+		err = xenbus_gather(XBT_NIL, dev->otherend, "ring-ref", "%lu",
+				    &ring_ref, "event-channel", "%u", &evtchn, NULL);
+		if (err) {
+			xenbus_dev_fatal(dev, err,
+					 "reading %s/ring-ref and event-channel",
+					 dev->otherend);
+			printk("COLO: reading ring-ref and event-channel error\n");
+			return err;
+		}
+
+		be->blkif->blk_protocol = BLKIF_PROTOCOL_NATIVE;
+		err = xenbus_gather(XBT_NIL, dev->otherend, "protocol",
+				    "%63s", protocol, NULL);
+		if (err)
+			strcpy(protocol, "unspecified, assuming native");
+		else if (0 == strcmp(protocol, XEN_IO_PROTO_ABI_NATIVE))
+			be->blkif->blk_protocol = BLKIF_PROTOCOL_NATIVE;
+		else if (0 == strcmp(protocol, XEN_IO_PROTO_ABI_X86_32))
+			be->blkif->blk_protocol = BLKIF_PROTOCOL_X86_32;
+		else if (0 == strcmp(protocol, XEN_IO_PROTO_ABI_X86_64))
+			be->blkif->blk_protocol = BLKIF_PROTOCOL_X86_64;
+		else {
+			xenbus_dev_fatal(dev, err, "unknown fe protocol %s", protocol);
+			return -1;
+		}
+		pr_info(DRV_PFX "ring-ref %ld, event-channel %d, protocol %d (%s)\n",
+		ring_ref, evtchn, be->blkif->blk_protocol, protocol);
 	}
 
-	be->blkif->blk_protocol = BLKIF_PROTOCOL_NATIVE;
-	err = xenbus_gather(XBT_NIL, dev->otherend, "protocol",
-			    "%63s", protocol, NULL);
-	if (err)
-		strcpy(protocol, "unspecified, assuming native");
-	else if (0 == strcmp(protocol, XEN_IO_PROTO_ABI_NATIVE))
-		be->blkif->blk_protocol = BLKIF_PROTOCOL_NATIVE;
-	else if (0 == strcmp(protocol, XEN_IO_PROTO_ABI_X86_32))
-		be->blkif->blk_protocol = BLKIF_PROTOCOL_X86_32;
-	else if (0 == strcmp(protocol, XEN_IO_PROTO_ABI_X86_64))
-		be->blkif->blk_protocol = BLKIF_PROTOCOL_X86_64;
-	else {
-		xenbus_dev_fatal(dev, err, "unknown fe protocol %s", protocol);
-		return -1;
+	if (suspended_count) {
+		read_ringref_from_xen(&ring_ref, &evtchn);
+		printk("COLO: Read ringref from xen: ref=%d, evtchn=%d.\n", ring_ref, evtchn);
 	}
-	pr_info(DRV_PFX "ring-ref %ld, event-channel %d, protocol %d (%s)\n",
-		ring_ref, evtchn, be->blkif->blk_protocol, protocol);
 
 	/* Map the shared frame, irq etc. */
 	err = xen_blkif_map(be->blkif, ring_ref, evtchn);
@@ -834,9 +901,75 @@ static int connect_ring(struct backend_info *be)
 		return err;
 	}
 
+	if ( (which_side == -1 && suspended_count==1)		//master
+		|| (which_side > 0 && suspended_count==0) )	//slaver
+	{
+		printk("COLO: bind fast channel.\n");
+		err = xenbus_scanf(XBT_NIL, dev->otherend, "fast-channel", "%u", &fast);
+
+		if (err < 0) {
+			printk("COLO: read fast-channel error.\n");
+			return err;
+		}
+
+		printk("COLO: remote id=%d, channel=%d.\n", blkif->domid, fast);
+		irqcount = 0;
+		err = bind_interdomain_evtchn_to_irqhandler(
+			blkif->domid, fast, blkif_otherend_changed, 0,
+			"vbd_fast", blkif);
+		if (err < 0) {
+			printk("COLO: error in bind fast evtchn.\n");
+			return err;
+		}
+		blkif->fast = err;
+	}
+
 	return 0;
 }
 
+static irqreturn_t blkif_otherend_changed(int irq, void *dev, struct pt_regs *ptregs)
+{
+	irqcount++;
+	if (irqcount == 1) {
+		return IRQ_HANDLED;
+	}
+
+	printk("COLO: fast changed interrupt.\n");
+	schedule_work(&changed_work.work);
+	return IRQ_HANDLED;
+}
+
+static void __otherend_changed_handler(struct work_struct *work)
+{
+	struct otherend_changed_work_t *wc = container_of(work,
+		struct otherend_changed_work_t, work);
+	struct xenbus_device *dev = wc->dev;
+	struct backend_info *be = dev_get_drvdata(&dev->dev);
+	int err;
+
+	printk("COLO: vbd in fast changed, state=%d.\n", dev->state);
+	switch (dev->state) {
+	case XenbusStateConnected:
+		xen_blkif_disconnect_suspend(be->blkif);
+		dev->state = XenbusStateSuspended;
+		notify_remote_via_irq(be->blkif->fast);
+		break;
+	case XenbusStateSuspended:
+		err = connect_ring(be);
+		if (err) {
+			printk("COLO: error when connect ring.\n");
+			break;
+		}
+		xen_update_blkif_status_COLO(be->blkif);
+		dev->state = XenbusStateConnected;
+		printk("COLO: notify remote via irq(%d) in suspended.\n", be->blkif->fast);
+		notify_remote_via_irq(be->blkif->fast);
+
+		wake_up_interruptible(&resume_queue);
+		printk("COLO: wake up resume.\n");
+		break;
+	}
+}
 
 /* ** Driver Registration ** */
 

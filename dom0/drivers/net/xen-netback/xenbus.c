@@ -47,7 +47,8 @@ static void __otherend_changed_handler(struct work_struct*);
 struct otherend_changed_work_t {
 	struct xenbus_device *dev;
 	struct work_struct work;
-} changed_work;
+};
+static struct otherend_changed_work_t changed_work;
 static irqreturn_t netif_otherend_changed(int irq, void *dev_id, struct pt_regs *ptregs);
 
 static int netback_remove(struct xenbus_device *dev)
@@ -588,6 +589,7 @@ static void __otherend_changed_handler(struct work_struct *work)
 
 	switch (dev->state) {
 	case XenbusStateClosing:
+	case XenbusStateClosed:
 		dev->state = XenbusStateInitWait;
 		printk("COLO: notify remote_via irq in closing.\n");
 		notify_remote_via_irq(be->vif->fast);
@@ -597,7 +599,7 @@ static void __otherend_changed_handler(struct work_struct *work)
 		if (be->vif)
 			connect(be);
 		is_resumed = 1;
-		wake_up_interruptible(&resume_queue);
+		//wake_up_interruptible(&resume_queue);
 		break;
 
 	case XenbusStateConnected:
