@@ -227,6 +227,7 @@ static void disconnect_backend(struct xenbus_device *dev)
 		xenvif_disconnect(be->vif);
 		be->vif = NULL;
 	}
+	irq_count = 0;
 }
 
 static void disconnect_backend_suspend(struct xenbus_device *dev)
@@ -437,6 +438,7 @@ static void connect(struct backend_info *be)
 
 	if (suspended_count) {
 		dev->state = XenbusStateConnected;
+		suspended_count++;
 	}
 
 	netif_wake_queue(be->vif->dev);

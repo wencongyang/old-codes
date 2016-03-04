@@ -347,6 +347,7 @@ err:
 	return err;
 }
 
+extern int suspended_count;
 void xenvif_disconnect(struct xenvif *vif)
 {
 	struct net_device *dev = vif->dev;
@@ -368,6 +369,8 @@ void xenvif_disconnect(struct xenvif *vif)
 		unbind_from_irqhandler(vif->irq, vif);
 	if (vif->fast)
 		unbind_from_irqhandler(vif->fast, vif);
+
+	suspended_count = 0;
 
 	unregister_netdev(vif->dev);
 

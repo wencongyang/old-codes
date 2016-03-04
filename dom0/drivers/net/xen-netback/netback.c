@@ -1595,6 +1595,8 @@ void xen_netbk_unmap_frontend_rings(struct xenvif *vif)
 	if (vif->rx.sring)
 		xenbus_unmap_ring_vfree(xenvif_to_xenbus_device(vif),
 					vif->rx.sring);
+	vif->tx.sring = NULL;
+	vif->rx.sring = NULL;
 }
 
 int xen_netbk_map_frontend_rings(struct xenvif *vif,
