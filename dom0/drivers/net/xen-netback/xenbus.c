@@ -89,7 +89,7 @@ static int netback_probe(struct xenbus_device *dev,
 	be->dev = dev;
 	dev_set_drvdata(&dev->dev, be);
 
-	sg = 1;
+	sg = 0;
 
 	do {
 		err = xenbus_transaction_start(&xbt);
