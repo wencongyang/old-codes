@@ -297,6 +297,8 @@ extern void push_vnif_skb();
 struct net_dev *vif_port_dev = NULL;
 int is_block = 0;
 int suspended_count = 0;
+int dev_opencnt = 0;
+
 SYSCALL_DEFINE1(vif_block, int, block)
 {
 	is_block = block;

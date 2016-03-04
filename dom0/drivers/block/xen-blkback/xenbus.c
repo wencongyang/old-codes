@@ -24,6 +24,7 @@
 
 extern wait_queue_head_t resume_queue;
 extern int suspended_count;
+extern int dev_opencnt;
 static int irqcount = 0;
 static irqreturn_t blkif_otherend_changed(int irq, void *dev_id, struct pt_regs *ptregs);
 static void __otherend_changed_handler(struct work_struct*);
@@ -952,6 +953,7 @@ static void __otherend_changed_handler(struct work_struct *work)
 	case XenbusStateConnected:
 		xen_blkif_disconnect_suspend(be->blkif);
 		dev->state = XenbusStateSuspended;
+		dev_opencnt = 0;
 		notify_remote_via_irq(be->blkif->fast);
 		break;
 	case XenbusStateSuspended:
@@ -961,12 +963,17 @@ static void __otherend_changed_handler(struct work_struct *work)
 			break;
 		}
 		xen_update_blkif_status_COLO(be->blkif);
-		dev->state = XenbusStateConnected;
+		dev->state = XenbusStatePreConnected;
 		printk("COLO: notify remote via irq(%d) in suspended.\n", be->blkif->fast);
 		notify_remote_via_irq(be->blkif->fast);
-
-		wake_up_interruptible(&resume_queue);
-		printk("COLO: wake up resume.\n");
+		break;
+	case XenbusStatePreConnected:
+		dev->state = XenbusStateConnected;
+		dev_opencnt++;
+		if (dev_opencnt == 2) {
+			wake_up_interruptible(&resume_queue);
+			printk("COLO: wake up resume.\n");
+		}
 		break;
 	}
 }

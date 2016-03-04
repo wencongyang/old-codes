@@ -40,7 +40,9 @@ enum xenbus_state
 	
 	XenbusStateSuspendCanceled = 10,
 
-	XenbusStateSuspendDone = 11
+	XenbusStateSuspendDone = 11,
+
+	XenbusStatePreConnected = 12
 };
 
 #endif /* _XEN_PUBLIC_IO_XENBUS_H */
