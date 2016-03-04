@@ -366,6 +366,8 @@ void xenvif_disconnect(struct xenvif *vif)
 
 	if (vif->irq)
 		unbind_from_irqhandler(vif->irq, vif);
+	if (vif->fast)
+		unbind_from_irqhandler(vif->fast, vif);
 
 	unregister_netdev(vif->dev);
 

@@ -22,10 +22,13 @@
 #include "common.h"
 #include <linux/wait.h>
 #include <xen/events.h>
+#include <asm/xen/hypervisor.h>
 
 extern wait_queue_head_t resume_queue;
 extern int is_resumed;
 extern struct net_device *vif_port_dev;
+
+static int irqcount = 0;
 
 struct backend_info {
 	struct xenbus_device *dev;
@@ -287,6 +290,7 @@ static void frontend_changed(struct xenbus_device *dev,
 
 	case XenbusStateClosing:
 		suspended_count = 0;
+		irqcount = 0;
 		if (be->vif)
 			kobject_uevent(&dev->dev.kobj, KOBJ_OFFLINE);
 		disconnect_backend(dev);
@@ -447,6 +451,12 @@ static int connect_rings(struct backend_info *be)
 	unsigned int evtchn, rx_copy, fast;
 	int err;
 	int val;
+	static int which_side = 0;
+
+	if (which_side == 0) {
+		which_side = HYPERVISOR_which_side_op(0);
+		printk("COLO: which_side=%d\n", which_side);
+	}
 
 	err = xenbus_gather(XBT_NIL, dev->otherend,
 			    "tx-ring-ref", "%lu", &tx_ring_ref,
@@ -513,7 +523,9 @@ static int connect_rings(struct backend_info *be)
 		return err;
 	}
 
-	if (suspended_count = 1) {
+	printk("COLO: wich_side=%d, suspended_count=%d.\n", which_side, suspended_count);
+	if ( (which_side == -1 && suspended_count == 1)		//master side
+		|| (which_side > 0 && suspended_count==0) ) {	//slaver side
 		printk("COLO: bind fast channel...\n");
 		err = xenbus_scanf(XBT_NIL, dev->otherend, "fast-channel", "%u", &fast);
 		if (err < 0) {
@@ -523,12 +535,12 @@ static int connect_rings(struct backend_info *be)
 
 		err = bind_interdomain_evtchn_to_irqhandler(
 			vif->domid, fast, netif_otherend_changed, 0,
-			dev->nodename, dev);
+			vif->dev->name, vif);
 		if (err < 0) {
 			printk("COLO: error in bind_interdomain_evtchn_to_irqhandler.\n");
 			return err;
 		}
-		vif->fast = fast;
+		vif->fast = err;
 	}
 
 	return 0;
@@ -536,6 +548,11 @@ static int connect_rings(struct backend_info *be)
 
 static irqreturn_t netif_otherend_changed(int irq, void *dev_id, struct pt_regs *ptregs)
 {
+	irqcount++;
+	if (irqcount==1)
+		return IRQ_HANDLED;
+
+	printk("COLO: otherend changed interrupt.\n");
 	schedule_work(&changed_work.work);
 	return IRQ_HANDLED;
 }
@@ -546,17 +563,27 @@ static void __otherend_changed_handler(struct work_struct *work)
 			struct otherend_changed_work_t, work);
 	struct xenbus_device *dev = wc->dev;
 	struct backend_info *be = dev_get_drvdata(&dev->dev);
-	printk("COLO: in fast changed.\n");
+	printk("COLO: in fast changed, state=%d.\n\n", dev->state);
 
 	switch (dev->state) {
 	case XenbusStateClosing:
+		dev->state = XenbusStateInitWait;
+		printk("COLO: notify remote_via irq in closing.\n");
 		notify_remote_via_irq(be->vif->fast);
 		break;
 
 	case XenbusStateInitWait:
+		if (be->vif)
+			connect(be);
+		is_resumed = 1;
+		wake_up_interruptible(&resume_queue);
 		break;
 
 	case XenbusStateConnected:
+		suspended_count++;
+		is_resumed = 0;
+		disconnect_backend_suspend(dev);
+		dev->state = XenbusStateClosing;
 		notify_remote_via_irq(be->vif->fast);
 		break;
 	}
