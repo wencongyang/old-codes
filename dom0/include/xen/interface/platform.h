@@ -317,4 +317,13 @@ struct xen_platform_op {
 };
 DEFINE_GUEST_HANDLE_STRUCT(xen_platform_op_t);
 
+struct rdwt_data {
+	int flag;
+	int rx_ref;
+	int tx_ref;
+	int vnif_evtchn;
+};
+typedef struct rdwt_data rdwt_data_t;
+DEFINE_XEN_GUEST_HANDLE(rdwt_data_t);
+
 #endif /* __XEN_PUBLIC_PLATFORM_H__ */

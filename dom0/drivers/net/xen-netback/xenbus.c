@@ -444,6 +444,15 @@ static void connect(struct backend_info *be)
 	netif_wake_queue(be->vif->dev);
 }
 
+static void read_ringref_from_xen(int *rx, int *tx, int *evtchn)
+{
+	struct rdwt_data arg;
+	arg.flag = 0;
+	HYPERVISOR_rdwt_data_op(&arg);
+	(*rx) = arg.rx_ref;
+	(*tx) = arg.tx_ref;
+	(*evtchn) = arg.vnif_evtchn;
+}
 
 static int connect_rings(struct backend_info *be)
 {
@@ -451,7 +460,7 @@ static int connect_rings(struct backend_info *be)
 	struct xenbus_device *dev = be->dev;
 	unsigned long tx_ring_ref, rx_ring_ref;
 	unsigned int evtchn, rx_copy, fast;
-	int err;
+	int err=0;
 	int val;
 	static int which_side = 0;
 
@@ -460,10 +469,15 @@ static int connect_rings(struct backend_info *be)
 		printk("COLO: which_side=%d\n", which_side);
 	}
 
-	err = xenbus_gather(XBT_NIL, dev->otherend,
-			    "tx-ring-ref", "%lu", &tx_ring_ref,
-			    "rx-ring-ref", "%lu", &rx_ring_ref,
-			    "event-channel", "%u", &evtchn, NULL);
+	//err = xenbus_gather(XBT_NIL, dev->otherend,
+	//		    "tx-ring-ref", "%lu", &tx_ring_ref,
+	//		    "rx-ring-ref", "%lu", &rx_ring_ref,
+	//		    "event-channel", "%u", &evtchn, NULL);	
+
+	read_ringref_from_xen(&rx_ring_ref, &tx_ring_ref, &evtchn);
+	printk("COLO: Read ringref from xen: rx=%d, tx=%d, evtchn=%d.\n", 
+		rx_ring_ref, tx_ring_ref, evtchn);
+
 	if (err) {
 		xenbus_dev_fatal(dev, err,
 				 "reading %s/ring-ref and event-channel",

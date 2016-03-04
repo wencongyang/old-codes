@@ -470,6 +470,12 @@ HYPERVISOR_which_side_op(unsigned long op)
 	return _hypercall1(unsigned long, which_side_op, op);
 }
 
+static inline unsigned long __must_check
+HYPERVISOR_rdwt_data_op(struct rdwt_data *arg)
+{
+	return _hypercall1(unsigned long, rdwt_data_op, arg);
+}
+
 static inline void
 MULTI_fpu_taskswitch(struct multicall_entry *mcl, int set)
 {
