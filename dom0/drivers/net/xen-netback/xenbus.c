@@ -227,7 +227,6 @@ static void disconnect_backend(struct xenbus_device *dev)
 		xenvif_disconnect(be->vif);
 		be->vif = NULL;
 	}
-	irq_count = 0;
 }
 
 static void disconnect_backend_suspend(struct xenbus_device *dev)
@@ -478,57 +477,62 @@ static int connect_rings(struct backend_info *be)
 	printk("COLO: Read ringref from xen: rx=%d, tx=%d, evtchn=%d.\n", 
 		rx_ring_ref, tx_ring_ref, evtchn);
 
-	if (err) {
-		xenbus_dev_fatal(dev, err,
-				 "reading %s/ring-ref and event-channel",
-				 dev->otherend);
-		return err;
-	}
+	if ( (which_side == -1 && suspended_count==1)		//master side
+		|| (which_side > 0 && suspended_count==0) )	//slaver side
+	{
 
-	err = xenbus_scanf(XBT_NIL, dev->otherend, "request-rx-copy", "%u",
-			   &rx_copy);
-	if (err == -ENOENT) {
-		err = 0;
-		rx_copy = 0;
-	}
-	if (err < 0) {
-		xenbus_dev_fatal(dev, err, "reading %s/request-rx-copy",
-				 dev->otherend);
-		return err;
-	}
-	if (!rx_copy)
-		return -EOPNOTSUPP;
+		if (err) {
+			xenbus_dev_fatal(dev, err,
+					 "reading %s/ring-ref and event-channel",
+					 dev->otherend);
+			return err;
+		}
 
-	if (vif->dev->tx_queue_len != 0) {
-		if (xenbus_scanf(XBT_NIL, dev->otherend,
-				 "feature-rx-notify", "%d", &val) < 0)
+		err = xenbus_scanf(XBT_NIL, dev->otherend, "request-rx-copy", "%u",
+				   &rx_copy);
+		if (err == -ENOENT) {
+			err = 0;
+			rx_copy = 0;
+		}
+		if (err < 0) {
+			xenbus_dev_fatal(dev, err, "reading %s/request-rx-copy",
+					 dev->otherend);
+			return err;
+		}
+		if (!rx_copy)
+			return -EOPNOTSUPP;
+
+		if (vif->dev->tx_queue_len != 0) {
+			if (xenbus_scanf(XBT_NIL, dev->otherend,
+					 "feature-rx-notify", "%d", &val) < 0)
+				val = 0;
+			if (val)
+				vif->can_queue = 1;
+			else
+				/* Must be non-zero for pfifo_fast to work. */
+				vif->dev->tx_queue_len = 1;
+		}
+
+		if (xenbus_scanf(XBT_NIL, dev->otherend, "feature-sg",
+				 "%d", &val) < 0)
 			val = 0;
-		if (val)
-			vif->can_queue = 1;
-		else
-			/* Must be non-zero for pfifo_fast to work. */
-			vif->dev->tx_queue_len = 1;
+		vif->can_sg = !!val;
+
+		if (xenbus_scanf(XBT_NIL, dev->otherend, "feature-gso-tcpv4",
+				 "%d", &val) < 0)
+			val = 0;
+		vif->gso = !!val;
+
+		if (xenbus_scanf(XBT_NIL, dev->otherend, "feature-gso-tcpv4-prefix",
+				 "%d", &val) < 0)
+			val = 0;
+		vif->gso_prefix = !!val;
+
+		if (xenbus_scanf(XBT_NIL, dev->otherend, "feature-no-csum-offload",
+				 "%d", &val) < 0)
+			val = 0;
+		vif->csum = !val;
 	}
-
-	if (xenbus_scanf(XBT_NIL, dev->otherend, "feature-sg",
-			 "%d", &val) < 0)
-		val = 0;
-	vif->can_sg = !!val;
-
-	if (xenbus_scanf(XBT_NIL, dev->otherend, "feature-gso-tcpv4",
-			 "%d", &val) < 0)
-		val = 0;
-	vif->gso = !!val;
-
-	if (xenbus_scanf(XBT_NIL, dev->otherend, "feature-gso-tcpv4-prefix",
-			 "%d", &val) < 0)
-		val = 0;
-	vif->gso_prefix = !!val;
-
-	if (xenbus_scanf(XBT_NIL, dev->otherend, "feature-no-csum-offload",
-			 "%d", &val) < 0)
-		val = 0;
-	vif->csum = !val;
 
 	/* Map the shared frame, irq etc. */
 	err = xenvif_connect(vif, tx_ring_ref, rx_ring_ref, evtchn);
@@ -549,6 +553,7 @@ static int connect_rings(struct backend_info *be)
 			return err;
 		}
 
+		irqcount = 0;
 		err = bind_interdomain_evtchn_to_irqhandler(
 			vif->domid, fast, netif_otherend_changed, 0,
 			vif->dev->name, vif);
